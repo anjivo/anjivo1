@@ -1,639 +1,154 @@
 import {
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+  updateProfile,
+  type User,
+} from "firebase/auth";
+
+import {
   doc,
-  getDoc,
-  setDoc,
-  updateDoc,
   serverTimestamp,
+  setDoc,
 } from "firebase/firestore";
 
-import { db } from "@/lib/firebase";
-
-export type WholesaleTier = {
-  minQuantity: number;
-  maxQuantity?: number;
-  price: number;
-};
-
-export type CartItem = {
-  productId: string;
-  name: string;
-  slug: string;
-
-  sellerId: string;
-  sellerName?: string;
-
-  image?: string;
-
-  mrp: number;
-  retailPrice: number;
-  wholesalePrice: number;
-
-  wholesaleTiers: WholesaleTier[];
-
-  quantity: number;
-  moq: number;
-
-  selectedPrice: number;
-  pricingType:
-    | "retail"
-    | "wholesale";
-
-  stock: number;
-};
-
-export type Cart = {
-  userId: string;
-  items: CartItem[];
-  updatedAt?: unknown;
-};
+import {
+  auth,
+  db,
+} from "@/lib/firebase";
 
 /* =========================================================
-   PRICE CALCULATION
+   REGISTER CUSTOMER
 ========================================================= */
 
-export function getWholesalePrice(
-  item: CartItem,
-  quantity: number
-): number {
-  if (
-    !item.wholesaleTiers ||
-    item.wholesaleTiers.length === 0
-  ) {
-    return item.wholesalePrice;
-  }
+export async function registerCustomer(
+  name: string,
+  email: string,
+  password: string,
+  customerType:
+    | "RETAIL_CUSTOMER"
+    | "WHOLESALE_CUSTOMER" = "RETAIL_CUSTOMER"
+): Promise<User> {
+  const cleanName =
+    name.trim();
 
-  const sortedTiers =
-    [...item.wholesaleTiers].sort(
-      (a, b) =>
-        b.minQuantity -
-        a.minQuantity
-    );
+  const cleanEmail =
+    email.trim().toLowerCase();
 
-  const matchingTier =
-    sortedTiers.find(
-      (tier) =>
-        quantity >=
-        tier.minQuantity &&
-        (
-          tier.maxQuantity ===
-            undefined ||
-          quantity <=
-            tier.maxQuantity
-        )
-    );
-
-  return matchingTier
-    ? matchingTier.price
-    : item.wholesalePrice;
-}
-
-/* =========================================================
-   SELECT PRICE
-========================================================= */
-
-export function getSelectedPrice(
-  item: CartItem,
-  quantity: number
-): number {
-  if (
-    item.pricingType ===
-    "wholesale"
-  ) {
-    return getWholesalePrice(
-      item,
-      quantity
-    );
-  }
-
-  return item.retailPrice;
-}
-
-/* =========================================================
-   GET CART
-========================================================= */
-
-export async function getCart(
-  userId: string
-): Promise<Cart> {
-  if (!userId) {
+  if (!cleanName) {
     throw new Error(
-      "User ID is required."
+      "Name is required."
     );
   }
 
-  const cartRef = doc(
-    db,
-    "carts",
-    userId
-  );
-
-  const snapshot =
-    await getDoc(cartRef);
-
-  if (!snapshot.exists()) {
-    return {
-      userId,
-      items: [],
-    };
+  if (!cleanEmail) {
+    throw new Error(
+      "Email is required."
+    );
   }
 
-  const data =
-    snapshot.data();
+  if (password.length < 6) {
+    throw new Error(
+      "Password must be at least 6 characters."
+    );
+  }
 
-  const rawItems =
-    Array.isArray(data.items)
-      ? data.items
-      : [];
-
-  const items: CartItem[] =
-    rawItems.map(
-      (item) => {
-        const value =
-          item as Record<
-            string,
-            unknown
-          >;
-
-        const quantity =
-          Math.max(
-            1,
-            Number(
-              value.quantity ?? 1
-            )
-          );
-
-        const wholesaleTiers =
-          Array.isArray(
-            value.wholesaleTiers
-          )
-            ? value.wholesaleTiers.map(
-                (tier) => {
-                  const t =
-                    tier as Record<
-                      string,
-                      unknown
-                    >;
-
-                  return {
-                    minQuantity:
-                      Number(
-                        t.minQuantity ??
-                          0
-                      ),
-
-                    maxQuantity:
-                      t.maxQuantity !==
-                      undefined
-                        ? Number(
-                            t.maxQuantity
-                          )
-                        : undefined,
-
-                    price: Number(
-                      t.price ?? 0
-                    ),
-                  };
-                }
-              )
-            : [];
-
-        const cartItem: CartItem =
-          {
-            productId: String(
-              value.productId ??
-                ""
-            ),
-
-            name: String(
-              value.name ?? ""
-            ),
-
-            slug: String(
-              value.slug ?? ""
-            ),
-
-            sellerId: String(
-              value.sellerId ??
-                ""
-            ),
-
-            sellerName:
-              typeof value.sellerName ===
-              "string"
-                ? value.sellerName
-                : undefined,
-
-            image:
-              typeof value.image ===
-              "string"
-                ? value.image
-                : undefined,
-
-            mrp: Number(
-              value.mrp ?? 0
-            ),
-
-            retailPrice: Number(
-              value.retailPrice ?? 0
-            ),
-
-            wholesalePrice:
-              Number(
-                value.wholesalePrice ??
-                  0
-              ),
-
-            wholesaleTiers,
-
-            quantity,
-
-            moq: Math.max(
-              1,
-              Number(
-                value.moq ?? 1
-              )
-            ),
-
-            selectedPrice:
-              Number(
-                value.selectedPrice ??
-                  value.retailPrice ??
-                  0
-              ),
-
-            pricingType:
-              value.pricingType ===
-              "wholesale"
-                ? "wholesale"
-                : "retail",
-
-            stock: Math.max(
-              0,
-              Number(
-                value.stock ?? 0
-              )
-            ),
-          };
-
-        return {
-          ...cartItem,
-          selectedPrice:
-            getSelectedPrice(
-              cartItem,
-              quantity
-            ),
-        };
-      }
+  const credential =
+    await createUserWithEmailAndPassword(
+      auth,
+      cleanEmail,
+      password
     );
 
-  return {
-    userId,
-    items,
-    updatedAt:
-      data.updatedAt,
-  };
-}
+  const user =
+    credential.user;
 
-/* =========================================================
-   SAVE CART
-========================================================= */
+  /*
+   * Firebase Auth profile
+   */
 
-async function saveCart(
-  userId: string,
-  items: CartItem[]
-) {
-  const cartRef = doc(
-    db,
-    "carts",
-    userId
+  await updateProfile(
+    user,
+    {
+      displayName:
+        cleanName,
+    }
   );
+
+  /*
+   * Firestore user profile
+   */
 
   await setDoc(
-    cartRef,
+    doc(
+      db,
+      "users",
+      user.uid
+    ),
     {
-      userId,
-      items,
-      updatedAt:
+      uid: user.uid,
+
+      name:
+        cleanName,
+
+      email:
+        cleanEmail,
+
+      role:
+        customerType,
+
+      phone: "",
+
+      photoURL: "",
+
+      createdAt:
         serverTimestamp(),
-    },
-    {
-      merge: true,
-    }
-  );
-}
 
-/* =========================================================
-   ADD TO CART
-========================================================= */
-
-export async function addToCart(
-  userId: string,
-  item: CartItem
-): Promise<Cart> {
-  if (!userId) {
-    throw new Error(
-      "Please login to add products to cart."
-    );
-  }
-
-  if (!item.productId) {
-    throw new Error(
-      "Product ID is required."
-    );
-  }
-
-  if (!item.sellerId) {
-    throw new Error(
-      "Seller information is missing."
-    );
-  }
-
-  const cart =
-    await getCart(userId);
-
-  const existingIndex =
-    cart.items.findIndex(
-      (cartItem) =>
-        cartItem.productId ===
-          item.productId &&
-        cartItem.sellerId ===
-          item.sellerId &&
-        cartItem.pricingType ===
-          item.pricingType
-    );
-
-  let items = [
-    ...cart.items,
-  ];
-
-  if (existingIndex >= 0) {
-    const existing =
-      items[existingIndex];
-
-    const newQuantity =
-      existing.quantity +
-      Math.max(
-        1,
-        item.quantity
-      );
-
-    if (
-      existing.stock > 0 &&
-      newQuantity >
-        existing.stock
-    ) {
-      throw new Error(
-        `Only ${existing.stock} units are available.`
-      );
-    }
-
-    items[existingIndex] = {
-      ...existing,
-      quantity:
-        newQuantity,
-      selectedPrice:
-        getSelectedPrice(
-          existing,
-          newQuantity
-        ),
-    };
-  } else {
-    const quantity =
-      Math.max(
-        1,
-        item.quantity
-      );
-
-    if (
-      item.stock > 0 &&
-      quantity >
-        item.stock
-    ) {
-      throw new Error(
-        `Only ${item.stock} units are available.`
-      );
-    }
-
-    items.push({
-      ...item,
-      quantity,
-      selectedPrice:
-        getSelectedPrice(
-          item,
-          quantity
-        ),
-    });
-  }
-
-  await saveCart(
-    userId,
-    items
-  );
-
-  return {
-    userId,
-    items,
-  };
-}
-
-/* =========================================================
-   UPDATE QUANTITY
-========================================================= */
-
-export async function updateCartQuantity(
-  userId: string,
-  productId: string,
-  sellerId: string,
-  quantity: number
-): Promise<Cart> {
-  if (!userId) {
-    throw new Error(
-      "User ID is required."
-    );
-  }
-
-  const cart =
-    await getCart(userId);
-
-  const items =
-    cart.items.map(
-      (item) => {
-        if (
-          item.productId !==
-            productId ||
-          item.sellerId !==
-            sellerId
-        ) {
-          return item;
-        }
-
-        const newQuantity =
-          Math.max(
-            1,
-            Math.floor(quantity)
-          );
-
-        if (
-          item.stock > 0 &&
-          newQuantity >
-            item.stock
-        ) {
-          throw new Error(
-            `Only ${item.stock} units are available.`
-          );
-        }
-
-        return {
-          ...item,
-          quantity:
-            newQuantity,
-          selectedPrice:
-            getSelectedPrice(
-              item,
-              newQuantity
-            ),
-        };
-      }
-    );
-
-  await saveCart(
-    userId,
-    items
-  );
-
-  return {
-    userId,
-    items,
-  };
-}
-
-/* =========================================================
-   REMOVE ITEM
-========================================================= */
-
-export async function removeFromCart(
-  userId: string,
-  productId: string,
-  sellerId: string
-): Promise<Cart> {
-  const cart =
-    await getCart(userId);
-
-  const items =
-    cart.items.filter(
-      (item) =>
-        !(
-          item.productId ===
-            productId &&
-          item.sellerId ===
-            sellerId
-        )
-    );
-
-  await saveCart(
-    userId,
-    items
-  );
-
-  return {
-    userId,
-    items,
-  };
-}
-
-/* =========================================================
-   CLEAR CART
-========================================================= */
-
-export async function clearCart(
-  userId: string
-): Promise<void> {
-  const cartRef = doc(
-    db,
-    "carts",
-    userId
-  );
-
-  await updateDoc(
-    cartRef,
-    {
-      items: [],
       updatedAt:
         serverTimestamp(),
     }
   );
+
+  return user;
 }
 
 /* =========================================================
-   GROUP BY SELLER
+   LOGIN USER
 ========================================================= */
 
-export function groupCartBySeller(
-  items: CartItem[]
-) {
-  const groups =
-    new Map<
-      string,
-      {
-        sellerId: string;
-        sellerName: string;
-        items: CartItem[];
-      }
-    >();
+export async function loginUser(
+  email: string,
+  password: string
+): Promise<User> {
+  const cleanEmail =
+    email.trim().toLowerCase();
 
-  items.forEach(
-    (item) => {
-      if (!groups.has(item.sellerId)) {
-        groups.set(
-          item.sellerId,
-          {
-            sellerId:
-              item.sellerId,
+  if (!cleanEmail) {
+    throw new Error(
+      "Email is required."
+    );
+  }
 
-            sellerName:
-              item.sellerName ||
-              "Seller",
+  if (!password) {
+    throw new Error(
+      "Password is required."
+    );
+  }
 
-            items: [],
-          }
-        );
-      }
+  const credential =
+    await signInWithEmailAndPassword(
+      auth,
+      cleanEmail,
+      password
+    );
 
-      groups
-        .get(item.sellerId)!
-        .items.push(item);
-    }
-  );
-
-  return Array.from(
-    groups.values()
-  );
+  return credential.user;
 }
 
 /* =========================================================
-   CART TOTAL
+   LOGOUT USER
 ========================================================= */
 
-export function getCartSubtotal(
-  items: CartItem[]
-): number {
-  return items.reduce(
-    (sum, item) =>
-      sum +
-      item.selectedPrice *
-        item.quantity,
-    0
-  );
-}
-
-/* =========================================================
-   SELLER SUBTOTAL
-========================================================= */
-
-export function getSellerSubtotal(
-  items: CartItem[]
-): number {
-  return getCartSubtotal(
-    items
-  );
+export async function logoutUser(): Promise<void> {
+  await signOut(auth);
 }
