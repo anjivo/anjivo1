@@ -1,7 +1,7 @@
 import {
-  addDoc,
-  collection,
+  doc,
   serverTimestamp,
+  setDoc,
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
@@ -41,18 +41,35 @@ export type SellerApplication = {
 export async function createSellerApplication(
   application: SellerApplication
 ): Promise<string> {
-  const sellerRef = await addDoc(
-    collection(db, "sellers"),
-    {
-      ...application,
+  if (!application.userId) {
+    throw new Error(
+      "User ID is required."
+    );
+  }
 
-      createdAt:
-        serverTimestamp(),
-
-      updatedAt:
-        serverTimestamp(),
-    }
+  // IMPORTANT:
+  // Seller document ID = Firebase Auth UID
+  const sellerRef = doc(
+    db,
+    "sellers",
+    application.userId
   );
+
+  await setDoc(sellerRef, {
+    ...application,
+
+    userId: application.userId,
+
+    status: "pending",
+
+    sellerVerified: false,
+
+    createdAt:
+      serverTimestamp(),
+
+    updatedAt:
+      serverTimestamp(),
+  });
 
   return sellerRef.id;
 }
