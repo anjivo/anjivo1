@@ -2,13 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import {
-  onAuthStateChanged,
-} from "firebase/auth";
-import {
-  useParams,
-  useRouter,
-} from "next/navigation";
+import { onAuthStateChanged } from "firebase/auth";
+import { useParams, useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
@@ -18,9 +13,7 @@ import {
   type Order,
 } from "@/lib/orders";
 
-function statusLabel(
-  status: Order["status"]
-) {
+function statusLabel(status: Order["status"]) {
   switch (status) {
     case "confirmed":
       return "Confirmed";
@@ -42,6 +35,27 @@ function statusLabel(
 
     default:
       return "Pending";
+  }
+}
+
+function statusClass(status: Order["status"]) {
+  switch (status) {
+    case "delivered":
+      return "bg-green-100 text-green-700";
+
+    case "cancelled":
+      return "bg-red-100 text-red-700";
+
+    case "shipped":
+    case "out_for_delivery":
+      return "bg-blue-100 text-blue-700";
+
+    case "confirmed":
+    case "processing":
+      return "bg-yellow-100 text-yellow-700";
+
+    default:
+      return "bg-gray-100 text-gray-700";
   }
 }
 
@@ -77,24 +91,19 @@ export default function OrderDetailsPage() {
 
           try {
             const result =
-              await getOrderById(
-                orderId
-              );
+              await getOrderById(orderId);
 
             if (
               !result ||
               result.userId !== user.uid
             ) {
-              setError(
-                "Order not found."
-              );
+              setError("Order not found.");
               return;
             }
 
             setOrder(result);
           } catch (err) {
             console.error(err);
-
             setError(
               "Unable to load order."
             );
@@ -114,7 +123,13 @@ export default function OrderDetailsPage() {
 
         <main className="mx-auto max-w-5xl px-4 py-16">
           <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-            ⏳ Loading order...
+            <div className="text-4xl">
+              ⏳
+            </div>
+
+            <p className="mt-4 text-sm font-bold text-gray-600">
+              Loading order...
+            </p>
           </div>
         </main>
 
@@ -129,9 +144,7 @@ export default function OrderDetailsPage() {
         <Header />
 
         <main className="mx-auto max-w-5xl px-4 py-16">
-
           <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-
             <div className="text-5xl">
               📦
             </div>
@@ -142,13 +155,11 @@ export default function OrderDetailsPage() {
 
             <Link
               href="/account/orders"
-              className="mt-6 inline-flex rounded-xl bg-black px-6 py-3 text-sm font-bold text-white"
+              className="mt-6 inline-flex rounded-xl bg-black px-6 py-3 text-sm font-bold text-white transition hover:bg-gray-800"
             >
               My Orders
             </Link>
-
           </div>
-
         </main>
 
         <Footer />
@@ -161,20 +172,19 @@ export default function OrderDetailsPage() {
 
   return (
     <div className="min-h-screen bg-[#f7f8fa]">
-
       <Header />
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:py-10">
-
+        {/* BACK */}
         <Link
           href="/account/orders"
-          className="text-xs font-bold text-gray-500 hover:text-black"
+          className="text-xs font-bold text-gray-500 transition hover:text-black"
         >
           ← Back to My Orders
         </Link>
 
+        {/* HEADER */}
         <div className="mt-5 flex flex-wrap items-start justify-between gap-4">
-
           <div>
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
               Order Details
@@ -185,34 +195,32 @@ export default function OrderDetailsPage() {
             </h1>
           </div>
 
-          <span className="rounded-full bg-black px-4 py-2 text-xs font-bold text-white">
-            {statusLabel(
+          <span
+            className={`rounded-full px-4 py-2 text-xs font-bold ${statusClass(
               order.status
-            )}
+            )}`}
+          >
+            {statusLabel(order.status)}
           </span>
-
         </div>
 
+        {/* MAIN GRID */}
         <div className="mt-6 grid gap-5 lg:grid-cols-[1fr_360px]">
-
           {/* ITEMS */}
           <section className="rounded-3xl border border-gray-200 bg-white p-5">
-
             <h2 className="text-lg font-black">
               Order Items
             </h2>
 
             <div className="mt-5 space-y-3">
-
               {order.items.map(
                 (item) => (
                   <div
                     key={`${item.productId}-${item.pricingType}`}
                     className="flex gap-3 rounded-2xl border border-gray-100 p-3"
                   >
-
+                    {/* IMAGE */}
                     <div className="h-20 w-20 shrink-0 overflow-hidden rounded-xl bg-gray-100">
-
                       {item.image ? (
                         <img
                           src={item.image}
@@ -220,31 +228,29 @@ export default function OrderDetailsPage() {
                           className="h-full w-full object-cover"
                         />
                       ) : (
-                        <div className="flex h-full items-center justify-center">
+                        <div className="flex h-full items-center justify-center text-2xl">
                           📦
                         </div>
                       )}
-
                     </div>
 
+                    {/* PRODUCT INFO */}
                     <div className="min-w-0 flex-1">
-
-                      <p className="text-sm font-black">
+                      <p className="text-sm font-black text-gray-900">
                         {item.name}
                       </p>
 
-                      <p className="mt-1 text-[10px] uppercase text-gray-400">
+                      <p className="mt-1 text-[10px] uppercase tracking-wide text-gray-400">
                         {item.pricingType}
                       </p>
 
                       <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs">
-
                         <span className="text-gray-500">
                           Qty:{" "}
                           {item.quantity}
                         </span>
 
-                        <span className="font-black">
+                        <span className="font-black text-gray-900">
                           ₹
                           {(
                             item.selectedPrice *
@@ -253,35 +259,50 @@ export default function OrderDetailsPage() {
                             "en-IN"
                           )}
                         </span>
-
                       </div>
 
+                      <p className="mt-1 text-[10px] text-gray-400">
+                        ₹
+                        {item.selectedPrice.toLocaleString(
+                          "en-IN"
+                        )}{" "}
+                        / unit
+                      </p>
                     </div>
-
                   </div>
                 )
               )}
-
             </div>
-
           </section>
 
-          {/* SUMMARY */}
+          {/* RIGHT SIDE */}
           <div className="space-y-5">
-
             {/* STATUS */}
             <section className="rounded-3xl border border-gray-200 bg-white p-5">
-
               <h2 className="text-lg font-black">
                 Order Status
               </h2>
 
               <div className="mt-5">
-
                 <div className="flex items-center gap-3">
-
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black text-white">
-                    ✓
+                  <div
+                    className={`flex h-10 w-10 items-center justify-center rounded-full text-white ${
+                      order.status ===
+                      "cancelled"
+                        ? "bg-red-500"
+                        : order.status ===
+                            "delivered"
+                          ? "bg-green-500"
+                          : "bg-black"
+                    }`}
+                  >
+                    {order.status ===
+                    "cancelled"
+                      ? "×"
+                      : order.status ===
+                          "delivered"
+                        ? "✓"
+                        : "•"}
                   </div>
 
                   <div>
@@ -295,7 +316,6 @@ export default function OrderDetailsPage() {
                       Your order status
                     </p>
                   </div>
-
                 </div>
 
                 <div className="mt-4 rounded-xl bg-gray-50 p-3 text-xs text-gray-500">
@@ -303,28 +323,26 @@ export default function OrderDetailsPage() {
                   <strong className="text-gray-900">
                     {order.paymentMethod}
                   </strong>
+
                   <br />
+
                   Payment status:{" "}
                   <strong className="text-gray-900">
                     {order.paymentStatus}
                   </strong>
                 </div>
-
               </div>
-
             </section>
 
             {/* ADDRESS */}
             <section className="rounded-3xl border border-gray-200 bg-white p-5">
-
               <h2 className="text-lg font-black">
                 Delivery Address
               </h2>
 
               <div className="mt-4 text-sm leading-6 text-gray-600">
-
                 <p className="font-black text-gray-900">
-                  {address.name}
+                  {address.fullName}
                 </p>
 
                 <p>
@@ -346,20 +364,17 @@ export default function OrderDetailsPage() {
                   {address.state} -{" "}
                   {address.pincode}
                 </p>
-
               </div>
-
             </section>
 
             {/* PRICE */}
             <section className="rounded-3xl border border-gray-200 bg-white p-5">
-
               <h2 className="text-lg font-black">
                 Price Details
               </h2>
 
               <div className="mt-4 space-y-3 text-sm">
-
+                {/* SUBTOTAL */}
                 <div className="flex justify-between">
                   <span className="text-gray-500">
                     Subtotal
@@ -373,6 +388,7 @@ export default function OrderDetailsPage() {
                   </span>
                 </div>
 
+                {/* DELIVERY */}
                 <div className="flex justify-between">
                   <span className="text-gray-500">
                     Delivery
@@ -382,10 +398,13 @@ export default function OrderDetailsPage() {
                     {order.shippingCharge ===
                     0
                       ? "FREE"
-                      : `₹${order.shippingCharge}`}
+                      : `₹${order.shippingCharge.toLocaleString(
+                          "en-IN"
+                        )}`}
                   </span>
                 </div>
 
+                {/* DISCOUNT */}
                 <div className="flex justify-between">
                   <span className="text-gray-500">
                     Discount
@@ -399,10 +418,9 @@ export default function OrderDetailsPage() {
                   </span>
                 </div>
 
+                {/* TOTAL */}
                 <div className="border-t border-gray-100 pt-3">
-
                   <div className="flex justify-between">
-
                     <span className="font-black">
                       Total
                     </span>
@@ -413,23 +431,15 @@ export default function OrderDetailsPage() {
                         "en-IN"
                       )}
                     </span>
-
                   </div>
-
                 </div>
-
               </div>
-
             </section>
-
           </div>
-
         </div>
-
       </main>
 
       <Footer />
-
     </div>
   );
 }
