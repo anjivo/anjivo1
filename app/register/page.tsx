@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { FormEvent, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import { registerCustomer } from "@/lib/auth";
 
@@ -17,36 +17,21 @@ type RegistrationType =
 
 export default function RegisterPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const initialType =
-    searchParams.get("type") === "seller"
-      ? "SELLER"
-      : "BUYER";
 
   const [registrationType, setRegistrationType] =
-    useState<RegistrationType>(initialType);
+    useState<RegistrationType>("BUYER");
 
   const [buyerType, setBuyerType] =
     useState<BuyerType>("RETAIL_CUSTOMER");
 
-  const [name, setName] =
-    useState("");
-
-  const [email, setEmail] =
-    useState("");
-
-  const [password, setPassword] =
-    useState("");
-
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] =
     useState("");
 
-  const [loading, setLoading] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>
@@ -56,16 +41,12 @@ export default function RegisterPage() {
     setError("");
 
     if (!name.trim()) {
-      setError(
-        "Please enter your full name."
-      );
+      setError("Please enter your full name.");
       return;
     }
 
     if (!email.trim()) {
-      setError(
-        "Please enter your email address."
-      );
+      setError("Please enter your email address.");
       return;
     }
 
@@ -76,27 +57,17 @@ export default function RegisterPage() {
       return;
     }
 
-    if (
-      password !== confirmPassword
-    ) {
-      setError(
-        "Passwords do not match."
-      );
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
       return;
     }
 
     /*
-     * Seller registration is handled
-     * separately because sellers need
-     * business/KYC information.
+     * Seller registration is handled separately.
+     * Sellers need business and verification details.
      */
-
-    if (
-      registrationType === "SELLER"
-    ) {
-      router.push(
-        "/seller/register"
-      );
+    if (registrationType === "SELLER") {
+      router.push("/seller/register");
       return;
     }
 
@@ -111,44 +82,36 @@ export default function RegisterPage() {
       );
 
       router.push("/account");
-
     } catch (err: unknown) {
-      console.error(
-        "Registration error:",
-        err
-      );
+      console.error("Registration error:", err);
 
       if (
         err &&
         typeof err === "object" &&
         "code" in err
       ) {
-        const code =
-          String(
-            (
-              err as {
-                code?: string;
-              }
-            ).code
-          );
+        const code = String(
+          (
+            err as {
+              code?: string;
+            }
+          ).code
+        );
 
         if (
-          code ===
-          "auth/email-already-in-use"
+          code === "auth/email-already-in-use"
         ) {
           setError(
             "This email is already registered. Please login instead."
           );
         } else if (
-          code ===
-          "auth/invalid-email"
+          code === "auth/invalid-email"
         ) {
           setError(
             "Please enter a valid email address."
           );
         } else if (
-          code ===
-          "auth/weak-password"
+          code === "auth/weak-password"
         ) {
           setError(
             "Password is too weak. Please use a stronger password."
@@ -171,12 +134,8 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen bg-[#f7f8fa] text-gray-950">
 
-      {/* =========================================
-          HEADER
-      ========================================= */}
-
+      {/* HEADER */}
       <header className="border-b border-gray-200 bg-white">
-
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
 
           <Link
@@ -202,22 +161,13 @@ export default function RegisterPage() {
           </Link>
 
         </div>
-
       </header>
 
-
-      {/* =========================================
-          MAIN
-      ========================================= */}
-
+      {/* MAIN */}
       <main className="px-4 py-8 sm:py-12">
-
         <div className="mx-auto max-w-lg">
 
-          {/* =====================================
-              TITLE
-          ===================================== */}
-
+          {/* TITLE */}
           <div className="text-center">
 
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-black text-2xl">
@@ -234,11 +184,7 @@ export default function RegisterPage() {
 
           </div>
 
-
-          {/* =====================================
-              BUY / SELL SELECTOR
-          ===================================== */}
-
+          {/* BUY / SELL SELECTOR */}
           <div className="mt-7">
 
             <p className="mb-3 text-xs font-black uppercase tracking-wider text-gray-500">
@@ -247,19 +193,15 @@ export default function RegisterPage() {
 
             <div className="grid gap-3 sm:grid-cols-2">
 
-              {/* ================= BUY ================= */}
-
+              {/* BUY */}
               <button
                 type="button"
                 onClick={() => {
-                  setRegistrationType(
-                    "BUYER"
-                  );
+                  setRegistrationType("BUYER");
                   setError("");
                 }}
                 className={`rounded-2xl border p-5 text-left transition ${
-                  registrationType ===
-                  "BUYER"
+                  registrationType === "BUYER"
                     ? "border-black bg-black text-white shadow-lg"
                     : "border-gray-200 bg-white hover:border-gray-400"
                 }`}
@@ -267,12 +209,17 @@ export default function RegisterPage() {
 
                 <div className="flex items-start justify-between">
 
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gray-100 text-xl">
+                  <div
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl text-xl ${
+                      registrationType === "BUYER"
+                        ? "bg-white text-black"
+                        : "bg-gray-100"
+                    }`}
+                  >
                     🛒
                   </div>
 
-                  {registrationType ===
-                    "BUYER" && (
+                  {registrationType === "BUYER" && (
                     <span className="rounded-full bg-white px-2 py-1 text-[9px] font-black text-black">
                       SELECTED
                     </span>
@@ -286,21 +233,18 @@ export default function RegisterPage() {
 
                 <p
                   className={`mt-2 text-[11px] leading-5 ${
-                    registrationType ===
-                    "BUYER"
+                    registrationType === "BUYER"
                       ? "text-gray-300"
                       : "text-gray-500"
                   }`}
                 >
-                  Shop products for yourself
-                  or buy products in bulk for
-                  your business.
+                  Shop products for yourself or buy
+                  products in bulk for your business.
                 </p>
 
                 <div
                   className={`mt-4 space-y-1 text-[10px] ${
-                    registrationType ===
-                    "BUYER"
+                    registrationType === "BUYER"
                       ? "text-gray-300"
                       : "text-gray-500"
                   }`}
@@ -312,20 +256,15 @@ export default function RegisterPage() {
 
               </button>
 
-
-              {/* ================= SELL ================= */}
-
+              {/* SELL */}
               <button
                 type="button"
                 onClick={() => {
-                  setRegistrationType(
-                    "SELLER"
-                  );
+                  setRegistrationType("SELLER");
                   setError("");
                 }}
                 className={`rounded-2xl border p-5 text-left transition ${
-                  registrationType ===
-                  "SELLER"
+                  registrationType === "SELLER"
                     ? "border-black bg-black text-white shadow-lg"
                     : "border-gray-200 bg-white hover:border-gray-400"
                 }`}
@@ -333,12 +272,17 @@ export default function RegisterPage() {
 
                 <div className="flex items-start justify-between">
 
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gray-100 text-xl">
+                  <div
+                    className={`flex h-11 w-11 items-center justify-center rounded-xl text-xl ${
+                      registrationType === "SELLER"
+                        ? "bg-white text-black"
+                        : "bg-gray-100"
+                    }`}
+                  >
                     🏪
                   </div>
 
-                  {registrationType ===
-                    "SELLER" && (
+                  {registrationType === "SELLER" && (
                     <span className="rounded-full bg-white px-2 py-1 text-[9px] font-black text-black">
                       SELECTED
                     </span>
@@ -352,21 +296,18 @@ export default function RegisterPage() {
 
                 <p
                   className={`mt-2 text-[11px] leading-5 ${
-                    registrationType ===
-                    "SELLER"
+                    registrationType === "SELLER"
                       ? "text-gray-300"
                       : "text-gray-500"
                   }`}
                 >
-                  List your products on
-                  ANJIVO and sell to retail
-                  and wholesale buyers.
+                  List your products on ANJIVO and
+                  sell to retail and wholesale buyers.
                 </p>
 
                 <div
                   className={`mt-4 space-y-1 text-[10px] ${
-                    registrationType ===
-                    "SELLER"
+                    registrationType === "SELLER"
                       ? "text-gray-300"
                       : "text-gray-500"
                   }`}
@@ -379,16 +320,10 @@ export default function RegisterPage() {
               </button>
 
             </div>
-
           </div>
 
-
-          {/* =====================================
-              SELLER SELECTED
-          ===================================== */}
-
-          {registrationType ===
-            "SELLER" ? (
+          {/* SELLER */}
+          {registrationType === "SELLER" ? (
 
             <div className="mt-5 rounded-3xl border border-gray-200 bg-white p-5 shadow-sm sm:p-7">
 
@@ -411,9 +346,9 @@ export default function RegisterPage() {
                     </h2>
 
                     <p className="mt-2 text-xs leading-5 text-gray-500">
-                      Seller registration requires
-                      your business, contact and
-                      verification details.
+                      Seller registration requires your
+                      business, contact and verification
+                      details.
                     </p>
 
                   </div>
@@ -421,7 +356,6 @@ export default function RegisterPage() {
                 </div>
 
               </div>
-
 
               <div className="mt-5 space-y-3">
 
@@ -451,33 +385,26 @@ export default function RegisterPage() {
 
               </div>
 
-
               {error && (
                 <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold leading-5 text-red-700">
                   ⚠️ {error}
                 </div>
               )}
 
-
               <button
                 type="button"
                 onClick={() =>
-                  router.push(
-                    "/seller/register"
-                  )
+                  router.push("/seller/register")
                 }
                 className="mt-6 w-full rounded-xl bg-black py-3.5 text-sm font-black text-white transition hover:bg-gray-800"
               >
                 Continue to Seller Registration →
               </button>
 
-
               <button
                 type="button"
                 onClick={() => {
-                  setRegistrationType(
-                    "BUYER"
-                  );
+                  setRegistrationType("BUYER");
                   setError("");
                 }}
                 className="mt-3 w-full rounded-xl border border-gray-200 py-3 text-xs font-bold text-gray-700 transition hover:border-black hover:text-black"
@@ -489,9 +416,7 @@ export default function RegisterPage() {
 
           ) : (
 
-            /* =====================================
-               BUYER REGISTRATION
-            ===================================== */
+            /* BUYER REGISTRATION */
 
             <div className="mt-5 rounded-3xl border border-gray-200 bg-white p-5 shadow-sm sm:p-7">
 
@@ -514,8 +439,8 @@ export default function RegisterPage() {
                     </h2>
 
                     <p className="mt-1 text-[11px] leading-5 text-gray-500">
-                      Choose whether you mainly want
-                      retail shopping or wholesale buying.
+                      Choose whether you mainly want to
+                      retail shop or buy wholesale.
                     </p>
 
                   </div>
@@ -524,11 +449,7 @@ export default function RegisterPage() {
 
               </div>
 
-
-              {/* =================================
-                  BUYER TYPE
-              ================================= */}
-
+              {/* BUYER TYPE */}
               <div className="mt-6">
 
                 <p className="mb-2 text-xs font-bold text-gray-700">
@@ -538,17 +459,13 @@ export default function RegisterPage() {
                 <div className="grid grid-cols-2 gap-2">
 
                   {/* RETAIL */}
-
                   <button
                     type="button"
                     onClick={() =>
-                      setBuyerType(
-                        "RETAIL_CUSTOMER"
-                      )
+                      setBuyerType("RETAIL_CUSTOMER")
                     }
                     className={`rounded-xl border p-3 text-left transition ${
-                      buyerType ===
-                      "RETAIL_CUSTOMER"
+                      buyerType === "RETAIL_CUSTOMER"
                         ? "border-black bg-black text-white"
                         : "border-gray-200 bg-white text-gray-700 hover:border-black"
                     }`}
@@ -564,8 +481,7 @@ export default function RegisterPage() {
 
                     <p
                       className={`mt-1 text-[9px] ${
-                        buyerType ===
-                        "RETAIL_CUSTOMER"
+                        buyerType === "RETAIL_CUSTOMER"
                           ? "text-gray-300"
                           : "text-gray-400"
                       }`}
@@ -575,19 +491,14 @@ export default function RegisterPage() {
 
                   </button>
 
-
                   {/* WHOLESALE */}
-
                   <button
                     type="button"
                     onClick={() =>
-                      setBuyerType(
-                        "WHOLESALE_CUSTOMER"
-                      )
+                      setBuyerType("WHOLESALE_CUSTOMER")
                     }
                     className={`rounded-xl border p-3 text-left transition ${
-                      buyerType ===
-                      "WHOLESALE_CUSTOMER"
+                      buyerType === "WHOLESALE_CUSTOMER"
                         ? "border-black bg-black text-white"
                         : "border-gray-200 bg-white text-gray-700 hover:border-black"
                     }`}
@@ -603,8 +514,7 @@ export default function RegisterPage() {
 
                     <p
                       className={`mt-1 text-[9px] ${
-                        buyerType ===
-                        "WHOLESALE_CUSTOMER"
+                        buyerType === "WHOLESALE_CUSTOMER"
                           ? "text-gray-300"
                           : "text-gray-400"
                       }`}
@@ -615,32 +525,22 @@ export default function RegisterPage() {
                   </button>
 
                 </div>
-
               </div>
 
-
-              {/* =================================
-                  ERROR
-              ================================= */}
-
+              {/* ERROR */}
               {error && (
                 <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold leading-5 text-red-700">
                   ⚠️ {error}
                 </div>
               )}
 
-
-              {/* =================================
-                  FORM
-              ================================= */}
-
+              {/* FORM */}
               <form
                 onSubmit={handleSubmit}
                 className="mt-6 space-y-4"
               >
 
                 {/* NAME */}
-
                 <div>
 
                   <label
@@ -655,20 +555,17 @@ export default function RegisterPage() {
                     type="text"
                     value={name}
                     onChange={(event) =>
-                      setName(
-                        event.target.value
-                      )
+                      setName(event.target.value)
                     }
                     placeholder="Enter your full name"
                     autoComplete="name"
-                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                 </div>
 
-
                 {/* EMAIL */}
-
                 <div>
 
                   <label
@@ -683,20 +580,17 @@ export default function RegisterPage() {
                     type="email"
                     value={email}
                     onChange={(event) =>
-                      setEmail(
-                        event.target.value
-                      )
+                      setEmail(event.target.value)
                     }
                     placeholder="you@example.com"
                     autoComplete="email"
-                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                 </div>
 
-
                 {/* PASSWORD */}
-
                 <div>
 
                   <label
@@ -711,20 +605,17 @@ export default function RegisterPage() {
                     type="password"
                     value={password}
                     onChange={(event) =>
-                      setPassword(
-                        event.target.value
-                      )
+                      setPassword(event.target.value)
                     }
                     placeholder="Minimum 6 characters"
                     autoComplete="new-password"
-                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                 </div>
 
-
                 {/* CONFIRM PASSWORD */}
-
                 <div>
 
                   <label
@@ -745,14 +636,13 @@ export default function RegisterPage() {
                     }
                     placeholder="Re-enter your password"
                     autoComplete="new-password"
-                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white"
+                    disabled={loading}
+                    className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
 
                 </div>
 
-
                 {/* SUBMIT */}
-
                 <button
                   type="submit"
                   disabled={loading}
@@ -765,22 +655,15 @@ export default function RegisterPage() {
 
               </form>
 
-
               <p className="mt-4 text-center text-[10px] leading-5 text-gray-400">
-                You can use your Buyer account
-                for retail shopping or wholesale
-                purchases.
+                You can use your Buyer account for retail
+                shopping or wholesale purchases.
               </p>
 
             </div>
-
           )}
 
-
-          {/* =====================================
-              LOGIN
-          ===================================== */}
-
+          {/* LOGIN */}
           <div className="mt-6 text-center">
 
             <p className="text-xs text-gray-500">
@@ -796,56 +679,33 @@ export default function RegisterPage() {
 
           </div>
 
-
-          {/* =====================================
-              TRUST
-          ===================================== */}
-
+          {/* TRUST */}
           <div className="mt-6 grid grid-cols-3 gap-2">
 
             <div className="rounded-xl border border-gray-200 bg-white p-3 text-center">
-
-              <div className="text-sm">
-                🔒
-              </div>
-
+              <div className="text-sm">🔒</div>
               <p className="mt-1 text-[9px] font-bold text-gray-500">
                 Secure
               </p>
-
             </div>
 
             <div className="rounded-xl border border-gray-200 bg-white p-3 text-center">
-
-              <div className="text-sm">
-                ✓
-              </div>
-
+              <div className="text-sm">✓</div>
               <p className="mt-1 text-[9px] font-bold text-gray-500">
                 Verified
               </p>
-
             </div>
 
             <div className="rounded-xl border border-gray-200 bg-white p-3 text-center">
-
-              <div className="text-sm">
-                🛡️
-              </div>
-
+              <div className="text-sm">🛡️</div>
               <p className="mt-1 text-[9px] font-bold text-gray-500">
                 Protected
               </p>
-
             </div>
 
           </div>
 
-
-          {/* =====================================
-              TERMS
-          ===================================== */}
-
+          {/* TERMS */}
           <p className="mt-5 text-center text-[10px] leading-5 text-gray-400">
             By creating an account, you agree to
             ANJIVO&apos;s Terms & Conditions and
@@ -853,18 +713,12 @@ export default function RegisterPage() {
           </p>
 
         </div>
-
       </main>
-
     </div>
   );
 }
 
-
-/* =============================================
-   SELLER FEATURE
-============================================= */
-
+/* SELLER FEATURE */
 function SellerFeature({
   icon,
   title,
