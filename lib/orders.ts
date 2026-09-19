@@ -3,11 +3,17 @@ import {
   collection,
   doc,
   getDoc,
+  getDocs,
+  query,
+  where,
   serverTimestamp,
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
-import { getCart, getWholesalePrice } from "@/lib/cart";
+import {
+  getCart,
+  getWholesalePrice,
+} from "@/lib/cart";
 
 export type ShippingAddress = {
   fullName: string;
@@ -23,14 +29,20 @@ export type OrderItem = {
   productId: string;
   sellerId: string;
   sellerName?: string;
+
   name: string;
   slug: string;
   image?: string;
+
   quantity: number;
+
   mrp: number;
   selectedPrice: number;
+
   pricingType: "retail" | "wholesale";
+
   moq: number;
+
   subtotal: number;
 };
 
@@ -45,6 +57,7 @@ export type OrderStatus =
 
 export type Order = {
   id: string;
+
   userId: string;
 
   customerName?: string;
@@ -72,17 +85,27 @@ export type Order = {
 
 export type CreateOrderInput = {
   userId: string;
+
   shippingAddress: ShippingAddress;
+
   paymentMethod: "COD";
 };
 
 export type CreatedOrder = {
   orderId: string;
+
   totalAmount: number;
+
   subtotal: number;
+
   shippingCharge: number;
+
   discount: number;
 };
+
+/* ----------------------------------------
+   Helpers
+---------------------------------------- */
 
 function clean(value: unknown): string {
   return typeof value === "string"
@@ -97,7 +120,8 @@ function mapOrder(
   return {
     id,
 
-    userId: data.userId || "",
+    userId:
+      data.userId || "",
 
     customerName:
       data.customerName || "",
@@ -105,65 +129,77 @@ function mapOrder(
     customerEmail:
       data.customerEmail || "",
 
-    sellerIds: Array.isArray(
-      data.sellerIds
-    )
-      ? data.sellerIds
-      : [],
+    sellerIds:
+      Array.isArray(data.sellerIds)
+        ? data.sellerIds
+        : [],
 
-    items: Array.isArray(data.items)
-      ? data.items.map((item: any) => ({
-          productId:
-            item.productId || "",
+    items:
+      Array.isArray(data.items)
+        ? data.items.map(
+            (item: any) => ({
+              productId:
+                item.productId || "",
 
-          sellerId:
-            item.sellerId || "",
+              sellerId:
+                item.sellerId || "",
 
-          sellerName:
-            item.sellerName || "",
+              sellerName:
+                item.sellerName || "",
 
-          name:
-            item.name || "Product",
+              name:
+                item.name ||
+                "Product",
 
-          slug:
-            item.slug || "",
+              slug:
+                item.slug || "",
 
-          image:
-            item.image || "",
+              image:
+                item.image || "",
 
-          quantity:
-            Number(item.quantity || 0),
+              quantity:
+                Number(
+                  item.quantity || 0
+                ),
 
-          mrp:
-            Number(item.mrp || 0),
+              mrp:
+                Number(
+                  item.mrp || 0
+                ),
 
-          selectedPrice:
-            Number(
-              item.selectedPrice || 0
-            ),
+              selectedPrice:
+                Number(
+                  item.selectedPrice ||
+                    0
+                ),
 
-          pricingType:
-            item.pricingType ===
-            "wholesale"
-              ? "wholesale"
-              : "retail",
+              pricingType:
+                item.pricingType ===
+                "wholesale"
+                  ? "wholesale"
+                  : "retail",
 
-          moq:
-            Number(item.moq || 1),
+              moq:
+                Number(
+                  item.moq || 1
+                ),
 
-          subtotal:
-            Number(item.subtotal || 0),
-        }))
-      : [],
+              subtotal:
+                Number(
+                  item.subtotal || 0
+                ),
+            })
+          )
+        : [],
 
     shippingAddress: {
       fullName:
-        data.shippingAddress?.fullName ||
-        "",
+        data.shippingAddress
+          ?.fullName || "",
 
       phone:
-        data.shippingAddress?.phone ||
-        "",
+        data.shippingAddress
+          ?.phone || "",
 
       addressLine1:
         data.shippingAddress
@@ -174,35 +210,45 @@ function mapOrder(
           ?.addressLine2 || "",
 
       city:
-        data.shippingAddress?.city ||
-        "",
+        data.shippingAddress
+          ?.city || "",
 
       state:
-        data.shippingAddress?.state ||
-        "",
+        data.shippingAddress
+          ?.state || "",
 
       pincode:
-        data.shippingAddress?.pincode ||
-        "",
+        data.shippingAddress
+          ?.pincode || "",
     },
 
     paymentMethod:
-      data.paymentMethod || "COD",
+      data.paymentMethod ||
+      "COD",
 
     paymentStatus:
-      data.paymentStatus || "pending",
+      data.paymentStatus ||
+      "pending",
 
     subtotal:
-      Number(data.subtotal || 0),
+      Number(
+        data.subtotal || 0
+      ),
 
     shippingCharge:
-      Number(data.shippingCharge || 0),
+      Number(
+        data.shippingCharge || 0
+      ),
 
     discount:
-      Number(data.discount || 0),
+      Number(
+        data.discount || 0
+      ),
 
     totalAmount:
-      Number(data.totalAmount || 0),
+      Number(
+        data.totalAmount || 0
+      ),
 
     status:
       data.status || "pending",
@@ -215,12 +261,10 @@ function mapOrder(
   };
 }
 
-/**
- * Get a single order.
- *
- * Customer can only receive the order if
- * it belongs to the currently authenticated user.
- */
+/* ----------------------------------------
+   Get Single Customer Order
+---------------------------------------- */
+
 export async function getOrderById(
   orderId: string,
   userId: string
@@ -242,9 +286,18 @@ export async function getOrderById(
     return null;
   }
 
-  const data = orderSnap.data();
+  const data =
+    orderSnap.data();
 
-  if (data.userId !== userId) {
+  /*
+   * Security check:
+   * Customer can only access
+   * their own order.
+   */
+
+  if (
+    data.userId !== userId
+  ) {
     return null;
   }
 
@@ -254,18 +307,154 @@ export async function getOrderById(
   );
 }
 
+/* ----------------------------------------
+   Get All Orders Of Customer
+---------------------------------------- */
+
+export async function getUserOrders(
+  userId: string
+): Promise<Order[]> {
+  if (!userId) {
+    return [];
+  }
+
+  const ordersRef =
+    collection(
+      db,
+      "orders"
+    );
+
+  const ordersQuery =
+    query(
+      ordersRef,
+      where(
+        "userId",
+        "==",
+        userId
+      )
+    );
+
+  const snapshot =
+    await getDocs(
+      ordersQuery
+    );
+
+  const orders =
+    snapshot.docs.map(
+      (orderDoc) =>
+        mapOrder(
+          orderDoc.id,
+          orderDoc.data()
+        )
+    );
+
+  /*
+   * Sort newest first.
+   *
+   * We are sorting in JavaScript
+   * so this function does not require
+   * a composite Firestore index.
+   */
+
+  orders.sort(
+    (a, b) => {
+      const aTime =
+        getTimestampValue(
+          a.createdAt
+        );
+
+      const bTime =
+        getTimestampValue(
+          b.createdAt
+        );
+
+      return bTime - aTime;
+    }
+  );
+
+  return orders;
+}
+
+/* ----------------------------------------
+   Timestamp Helper
+---------------------------------------- */
+
+function getTimestampValue(
+  value: unknown
+): number {
+  if (
+    value &&
+    typeof value === "object" &&
+    "toMillis" in value &&
+    typeof (
+      value as {
+        toMillis?: unknown;
+      }
+    ).toMillis === "function"
+  ) {
+    return (
+      value as {
+        toMillis: () => number;
+      }
+    ).toMillis();
+  }
+
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number"
+  ) {
+    const time =
+      new Date(value).getTime();
+
+    return Number.isNaN(time)
+      ? 0
+      : time;
+  }
+
+  return 0;
+}
+
+/* ----------------------------------------
+   Address Validation
+---------------------------------------- */
+
 function isValidAddress(
   address: ShippingAddress
 ): boolean {
   return (
-    clean(address.fullName).length >= 2 &&
-    clean(address.phone).length >= 10 &&
-    clean(address.addressLine1).length >= 5 &&
-    clean(address.city).length >= 2 &&
-    clean(address.state).length >= 2 &&
-    clean(address.pincode).length === 6
+    clean(
+      address.fullName
+    ).length >= 2 &&
+
+    clean(
+      address.phone
+    ).length >= 10 &&
+
+    clean(
+      address.addressLine1
+    ).length >= 5 &&
+
+    clean(
+      address.city
+    ).length >= 2 &&
+
+    clean(
+      address.state
+    ).length >= 2 &&
+
+    clean(
+      address.pincode
+    ).length === 6
   );
 }
+
+/* ----------------------------------------
+   Create Customer Order
+---------------------------------------- */
 
 export async function createCustomerOrder(
   input: CreateOrderInput
@@ -287,16 +476,22 @@ export async function createCustomerOrder(
   }
 
   if (
-    input.paymentMethod !== "COD"
+    input.paymentMethod !==
+    "COD"
   ) {
     throw new Error(
       "Only Cash on Delivery is currently available."
     );
   }
 
-  const cart = await getCart(
-    input.userId
-  );
+  /* --------------------------------------
+     Load Cart
+  -------------------------------------- */
+
+  const cart =
+    await getCart(
+      input.userId
+    );
 
   if (
     !cart ||
@@ -307,6 +502,10 @@ export async function createCustomerOrder(
     );
   }
 
+  /* --------------------------------------
+     Load Customer
+  -------------------------------------- */
+
   const userRef = doc(
     db,
     "users",
@@ -314,7 +513,9 @@ export async function createCustomerOrder(
   );
 
   const userSnap =
-    await getDoc(userRef);
+    await getDoc(
+      userRef
+    );
 
   if (!userSnap.exists()) {
     throw new Error(
@@ -325,22 +526,40 @@ export async function createCustomerOrder(
   const userData =
     userSnap.data();
 
-  const orderItems: OrderItem[] = [];
-  const sellerIds: string[] = [];
+  /* --------------------------------------
+     Prepare Order
+  -------------------------------------- */
+
+  const orderItems: OrderItem[] =
+    [];
+
+  const sellerIds: string[] =
+    [];
 
   let subtotal = 0;
 
-  for (const cartItem of cart.items) {
-    const productRef = doc(
-      db,
-      "products",
-      cartItem.productId
-    );
+  /* --------------------------------------
+     Validate Every Cart Product
+  -------------------------------------- */
+
+  for (
+    const cartItem of cart.items
+  ) {
+    const productRef =
+      doc(
+        db,
+        "products",
+        cartItem.productId
+      );
 
     const productSnap =
-      await getDoc(productRef);
+      await getDoc(
+        productRef
+      );
 
-    if (!productSnap.exists()) {
+    if (
+      !productSnap.exists()
+    ) {
       throw new Error(
         `Product "${cartItem.name}" is no longer available.`
       );
@@ -349,16 +568,23 @@ export async function createCustomerOrder(
     const product =
       productSnap.data();
 
+    /* Product status */
+
     if (
-      product.status !== "active"
+      product.status !==
+      "active"
     ) {
       throw new Error(
         `"${product.name || cartItem.name}" is currently unavailable.`
       );
     }
 
+    /* Seller validation */
+
     const productSellerId =
-      clean(product.sellerId);
+      clean(
+        product.sellerId
+      );
 
     if (!productSellerId) {
       throw new Error(
@@ -375,22 +601,31 @@ export async function createCustomerOrder(
       );
     }
 
-    const stock = Number(
-      product.stock ?? 0
-    );
+    /* Stock validation */
+
+    const stock =
+      Number(
+        product.stock ?? 0
+      );
 
     if (
-      stock < cartItem.quantity
+      stock <
+      cartItem.quantity
     ) {
       throw new Error(
         `"${product.name || cartItem.name}" has only ${stock} item(s) available.`
       );
     }
 
-    const moq = Math.max(
-      1,
-      Number(product.moq ?? 1)
-    );
+    /* MOQ */
+
+    const moq =
+      Math.max(
+        1,
+        Number(
+          product.moq ?? 1
+        )
+      );
 
     if (
       cartItem.pricingType ===
@@ -402,35 +637,51 @@ export async function createCustomerOrder(
       );
     }
 
+    /* ------------------------------------
+       Wholesale Tiers
+    ------------------------------------ */
+
     const wholesaleTiers =
       Array.isArray(
         product.wholesaleTiers
       )
         ? product.wholesaleTiers
-            .map((tier: any) => ({
-              minQuantity: Number(
-                tier.minQuantity ?? 0
-              ),
+            .map(
+              (tier: any) => ({
+                minQuantity:
+                  Number(
+                    tier.minQuantity ??
+                      0
+                  ),
 
-              maxQuantity:
-                tier.maxQuantity ===
-                  undefined ||
-                tier.maxQuantity === null
-                  ? undefined
-                  : Number(
-                      tier.maxQuantity
-                    ),
+                maxQuantity:
+                  tier.maxQuantity ===
+                    undefined ||
+                  tier.maxQuantity ===
+                    null
+                    ? undefined
+                    : Number(
+                        tier.maxQuantity
+                      ),
 
-              price: Number(
-                tier.price ?? 0
-              ),
-            }))
+                price:
+                  Number(
+                    tier.price ??
+                      0
+                  ),
+              })
+            )
             .filter(
               (tier: any) =>
-                tier.minQuantity > 0 &&
+                tier.minQuantity >
+                  0 &&
                 tier.price >= 0
             )
         : [];
+
+    /* ------------------------------------
+       Calculate Current Price
+    ------------------------------------ */
 
     let selectedPrice: number;
 
@@ -441,7 +692,8 @@ export async function createCustomerOrder(
       selectedPrice =
         getWholesalePrice(
           {
-            id: productSnap.id,
+            id:
+              productSnap.id,
 
             name:
               product.name ||
@@ -452,7 +704,8 @@ export async function createCustomerOrder(
               cartItem.slug,
 
             categoryId:
-              product.categoryId || "",
+              product.categoryId ||
+              "",
 
             sellerId:
               product.sellerId,
@@ -464,13 +717,17 @@ export async function createCustomerOrder(
                 ? product.images
                 : [],
 
-            mrp: Number(
-              product.mrp ?? 0
-            ),
+            mrp:
+              Number(
+                product.mrp ??
+                  0
+              ),
 
-            retailPrice: Number(
-              product.retailPrice ?? 0
-            ),
+            retailPrice:
+              Number(
+                product.retailPrice ??
+                  0
+              ),
 
             wholesalePrice:
               Number(
@@ -499,9 +756,11 @@ export async function createCustomerOrder(
           cartItem.quantity
         );
     } else {
-      selectedPrice = Number(
-        product.retailPrice ?? 0
-      );
+      selectedPrice =
+        Number(
+          product.retailPrice ??
+            0
+        );
     }
 
     if (
@@ -515,66 +774,88 @@ export async function createCustomerOrder(
       );
     }
 
+    /* ------------------------------------
+       Item Subtotal
+    ------------------------------------ */
+
     const itemSubtotal =
       selectedPrice *
       cartItem.quantity;
 
+    /* ------------------------------------
+       Seller Name
+    ------------------------------------ */
+
     const sellerName =
-      clean(product.sellerName) ||
+      clean(
+        product.sellerName
+      ) ||
       clean(
         cartItem.sellerName
       ) ||
       "ANJIVO Seller";
 
-    const orderItem: OrderItem = {
-      productId:
-        productSnap.id,
+    /* ------------------------------------
+       Order Item
+    ------------------------------------ */
 
-      sellerId:
-        productSellerId,
+    const orderItem: OrderItem =
+      {
+        productId:
+          productSnap.id,
 
-      sellerName,
+        sellerId:
+          productSellerId,
 
-      name:
-        clean(product.name) ||
-        cartItem.name,
+        sellerName,
 
-      slug:
-        clean(product.slug) ||
-        cartItem.slug,
+        name:
+          clean(
+            product.name
+          ) ||
+          cartItem.name,
 
-      image:
-        Array.isArray(
-          product.images
-        ) &&
-        product.images.length > 0
-          ? product.images[0]
-          : cartItem.image,
+        slug:
+          clean(
+            product.slug
+          ) ||
+          cartItem.slug,
 
-      quantity:
-        cartItem.quantity,
-
-      mrp:
-        Number(
-          product.mrp ??
-            cartItem.mrp ??
+        image:
+          Array.isArray(
+            product.images
+          ) &&
+          product.images.length >
             0
-        ),
+            ? product.images[0]
+            : cartItem.image,
 
-      selectedPrice,
+        quantity:
+          cartItem.quantity,
 
-      pricingType:
-        cartItem.pricingType,
+        mrp:
+          Number(
+            product.mrp ??
+              cartItem.mrp ??
+              0
+          ),
 
-      moq,
+        selectedPrice,
 
-      subtotal:
-        itemSubtotal,
-    };
+        pricingType:
+          cartItem.pricingType,
+
+        moq,
+
+        subtotal:
+          itemSubtotal,
+      };
 
     orderItems.push(
       orderItem
     );
+
+    /* Seller IDs */
 
     if (
       !sellerIds.includes(
@@ -590,19 +871,32 @@ export async function createCustomerOrder(
       itemSubtotal;
   }
 
-  const shippingCharge = 0;
-  const discount = 0;
+  /* --------------------------------------
+     Charges
+  -------------------------------------- */
+
+  const shippingCharge =
+    0;
+
+  const discount =
+    0;
 
   const totalAmount =
     subtotal +
     shippingCharge -
     discount;
 
-  if (orderItems.length === 0) {
+  if (
+    orderItems.length === 0
+  ) {
     throw new Error(
       "No valid products found in cart."
     );
   }
+
+  /* --------------------------------------
+     Create Order
+  -------------------------------------- */
 
   const orderRef =
     await addDoc(
@@ -615,7 +909,9 @@ export async function createCustomerOrder(
           input.userId,
 
         customerName:
-          clean(userData.name) ||
+          clean(
+            userData.name
+          ) ||
           clean(
             userData.displayName
           ) ||
@@ -634,43 +930,50 @@ export async function createCustomerOrder(
         shippingAddress: {
           fullName:
             clean(
-              input.shippingAddress
+              input
+                .shippingAddress
                 .fullName
             ),
 
           phone:
             clean(
-              input.shippingAddress
+              input
+                .shippingAddress
                 .phone
             ),
 
           addressLine1:
             clean(
-              input.shippingAddress
+              input
+                .shippingAddress
                 .addressLine1
             ),
 
           addressLine2:
             clean(
-              input.shippingAddress
+              input
+                .shippingAddress
                 .addressLine2
             ),
 
           city:
             clean(
-              input.shippingAddress
+              input
+                .shippingAddress
                 .city
             ),
 
           state:
             clean(
-              input.shippingAddress
+              input
+                .shippingAddress
                 .state
             ),
 
           pincode:
             clean(
-              input.shippingAddress
+              input
+                .shippingAddress
                 .pincode
             ),
         },
