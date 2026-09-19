@@ -11,13 +11,9 @@ import Footer from "@/components/Footer";
 
 import { auth, db } from "@/lib/firebase";
 
-import {
-  createSellerProduct,
-} from "@/lib/seller-products";
+import { createSellerProduct } from "@/lib/seller-products";
 
-import {
-  getCategories,
-} from "@/lib/categories";
+import { getCategories } from "@/lib/categories";
 
 import type { Category } from "@/types/category";
 
@@ -36,310 +32,253 @@ const emptyTier: Tier = {
 export default function NewSellerProductPage() {
   const router = useRouter();
 
-  /* =========================================
+  /* =========================================================
      SELLER STATE
-  ========================================= */
+  ========================================================= */
 
-  const [sellerId, setSellerId] =
-    useState("");
+  const [sellerId, setSellerId] = useState("");
+  const [sellerName, setSellerName] = useState("");
 
-  const [sellerName, setSellerName] =
-    useState("");
-
-  /* =========================================
+  /* =========================================================
      PAGE STATE
-  ========================================= */
+  ========================================================= */
 
-  const [loading, setLoading] =
-    useState(true);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const [saving, setSaving] =
-    useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  const [error, setError] =
-    useState("");
-
-  const [success, setSuccess] =
-    useState("");
-
-  /* =========================================
+  /* =========================================================
      CATEGORY STATE
-  ========================================= */
+  ========================================================= */
 
-  const [categories, setCategories] =
-    useState<Category[]>([]);
-
+  const [categories, setCategories] = useState<Category[]>([]);
   const [categoriesLoading, setCategoriesLoading] =
     useState(true);
 
-  /* =========================================
+  /* =========================================================
      PRODUCT STATE
-  ========================================= */
+  ========================================================= */
 
-  const [name, setName] =
-    useState("");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
 
-  const [description, setDescription] =
-    useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [categoryName, setCategoryName] = useState("");
 
-  const [categoryId, setCategoryId] =
-    useState("");
+  const [imageUrl, setImageUrl] = useState("");
 
-  const [categoryName, setCategoryName] =
-    useState("");
+  const [mrp, setMrp] = useState("");
+  const [retailPrice, setRetailPrice] = useState("");
+  const [wholesalePrice, setWholesalePrice] = useState("");
 
-  const [imageUrl, setImageUrl] =
-    useState("");
+  const [moq, setMoq] = useState("10");
+  const [stock, setStock] = useState("");
 
-  const [mrp, setMrp] =
-    useState("");
-
-  const [retailPrice, setRetailPrice] =
-    useState("");
-
-  const [wholesalePrice, setWholesalePrice] =
-    useState("");
-
-  const [moq, setMoq] =
-    useState("10");
-
-  const [stock, setStock] =
-    useState("");
-
-  /* =========================================
+  /* =========================================================
      WHOLESALE TIERS
-  ========================================= */
+  ========================================================= */
 
-  const [tiers, setTiers] =
-    useState<Tier[]>([
-      {
-        minQuantity: "10",
-        maxQuantity: "24",
-        price: "",
-      },
-      {
-        minQuantity: "25",
-        maxQuantity: "49",
-        price: "",
-      },
-      {
-        minQuantity: "50",
-        maxQuantity: "99",
-        price: "",
-      },
-      {
-        minQuantity: "100",
-        maxQuantity: "",
-        price: "",
-      },
-    ]);
+  const [tiers, setTiers] = useState<Tier[]>([
+    {
+      minQuantity: "10",
+      maxQuantity: "24",
+      price: "",
+    },
+    {
+      minQuantity: "25",
+      maxQuantity: "49",
+      price: "",
+    },
+    {
+      minQuantity: "50",
+      maxQuantity: "99",
+      price: "",
+    },
+    {
+      minQuantity: "100",
+      maxQuantity: "",
+      price: "",
+    },
+  ]);
 
-  /* =========================================
+  /* =========================================================
      LOAD SELLER + CATEGORIES
-  ========================================= */
+  ========================================================= */
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            router.replace(
-              "/login?redirect=/seller/products/new"
-            );
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (user) => {
+        if (!user) {
+          router.replace(
+            "/login?redirect=/seller/products/new"
+          );
+          return;
+        }
 
+        try {
+          setError("");
+
+          /* =================================================
+             SELLER PROFILE
+          ================================================= */
+
+          const userRef = doc(
+            db,
+            "users",
+            user.uid
+          );
+
+          const snapshot = await getDoc(userRef);
+
+          if (!snapshot.exists()) {
+            setError(
+              "Seller profile not found."
+            );
+            setLoading(false);
             return;
           }
 
+          const data = snapshot.data();
+
+          if (data.role !== "SELLER") {
+            setError(
+              "Only sellers can add products."
+            );
+            setLoading(false);
+            return;
+          }
+
+          if (data.sellerStatus !== "approved") {
+            setError(
+              "Your seller account is not approved yet."
+            );
+            setLoading(false);
+            return;
+          }
+
+          setSellerId(user.uid);
+
+          setSellerName(
+            String(
+              data.name ||
+                user.displayName ||
+                "ANJIVO Seller"
+            )
+          );
+
+          /* =================================================
+             LOAD CATEGORIES
+          ================================================= */
+
+          setCategoriesLoading(true);
+
           try {
-            /* ================================
-               SELLER PROFILE
-            ================================= */
+            const categoryData =
+              await getCategories();
 
-            const userRef = doc(
-              db,
-              "users",
-              user.uid
+            setCategories(categoryData);
+          } catch (categoryError) {
+            console.error(
+              "Category loading error:",
+              categoryError
             );
-
-            const snapshot =
-              await getDoc(userRef);
-
-            if (!snapshot.exists()) {
-              setError(
-                "Seller profile not found."
-              );
-
-              setLoading(false);
-              return;
-            }
-
-            const data =
-              snapshot.data();
-
-            if (
-              data.role !== "SELLER"
-            ) {
-              setError(
-                "Only sellers can add products."
-              );
-
-              setLoading(false);
-              return;
-            }
-
-            if (
-              data.sellerStatus !==
-              "approved"
-            ) {
-              setError(
-                "Your seller account is not approved yet."
-              );
-
-              setLoading(false);
-              return;
-            }
-
-            setSellerId(user.uid);
-
-            setSellerName(
-              String(
-                data.name ||
-                  user.displayName ||
-                  "ANJIVO Seller"
-              )
-            );
-
-            /* ================================
-               LOAD CATEGORIES
-            ================================= */
-
-            setCategoriesLoading(true);
-
-            try {
-              const categoryData =
-                await getCategories();
-
-              setCategories(
-                categoryData
-              );
-            } catch (categoryError) {
-              console.error(
-                "Category loading error:",
-                categoryError
-              );
-
-              setError(
-                "Unable to load categories. Please try again."
-              );
-            } finally {
-              setCategoriesLoading(
-                false
-              );
-            }
-          } catch (err) {
-            console.error(err);
 
             setError(
-              "Unable to verify seller account."
-            );
-
-            setCategoriesLoading(
-              false
+              "Unable to load categories. Please try again."
             );
           } finally {
-            setLoading(false);
+            setCategoriesLoading(false);
           }
-        }
-      );
+        } catch (err) {
+          console.error(
+            "Seller verification error:",
+            err
+          );
 
-    return () =>
-      unsubscribe();
+          setError(
+            "Unable to verify seller account."
+          );
+
+          setCategoriesLoading(false);
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+
+    return () => unsubscribe();
   }, [router]);
 
-  /* =========================================
-     SLUG
-  ========================================= */
+  /* =========================================================
+     CREATE SLUG
+  ========================================================= */
 
-  function createSlug(
-    value: string
-  ) {
+  function createSlug(value: string) {
     return value
       .toLowerCase()
       .trim()
-      .replace(
-        /[^a-z0-9]+/g,
-        "-"
-      )
-      .replace(
-        /^-+|-+$/g,
-        "");
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
   }
 
-  /* =========================================
+  /* =========================================================
      UPDATE WHOLESALE TIER
-  ========================================= */
+  ========================================================= */
 
   function updateTier(
     index: number,
     field: keyof Tier,
     value: string
   ) {
-    setTiers(
-      (previous) =>
-        previous.map(
-          (tier, tierIndex) =>
-            tierIndex === index
-              ? {
-                  ...tier,
-                  [field]: value,
-                }
-              : tier
-        )
+    setTiers((previous) =>
+      previous.map((tier, tierIndex) =>
+        tierIndex === index
+          ? {
+              ...tier,
+              [field]: value,
+            }
+          : tier
+      )
     );
   }
 
-  /* =========================================
+  /* =========================================================
      ADD TIER
-  ========================================= */
+  ========================================================= */
 
   function addTier() {
-    setTiers(
-      (previous) => [
-        ...previous,
-        {
-          ...emptyTier,
-        },
-      ]
-    );
+    setTiers((previous) => [
+      ...previous,
+      {
+        ...emptyTier,
+      },
+    ]);
   }
 
-  /* =========================================
+  /* =========================================================
      REMOVE TIER
-  ========================================= */
+  ========================================================= */
 
-  function removeTier(
-    index: number
-  ) {
-    setTiers(
-      (previous) =>
-        previous.filter(
-          (_, tierIndex) =>
-            tierIndex !== index
-        )
+  function removeTier(index: number) {
+    setTiers((previous) =>
+      previous.filter(
+        (_, tierIndex) =>
+          tierIndex !== index
+      )
     );
   }
 
-  /* =========================================
+  /* =========================================================
      SELECT CATEGORY
-  ========================================= */
+  ========================================================= */
 
   function handleCategoryChange(
     selectedId: string
   ) {
-    setCategoryId(
-      selectedId
-    );
+    setCategoryId(selectedId);
 
     const selectedCategory =
       categories.find(
@@ -352,13 +291,21 @@ export default function NewSellerProductPage() {
     );
   }
 
-  /* =========================================
+  /* =========================================================
      VALIDATION
-  ========================================= */
+  ========================================================= */
 
   function validate() {
+    /* -------------------------------------------------------
+       BASIC
+    ------------------------------------------------------- */
+
     if (!name.trim()) {
       return "Product name is required.";
+    }
+
+    if (name.trim().length < 3) {
+      return "Product name must contain at least 3 characters.";
     }
 
     if (!categoryId.trim()) {
@@ -369,97 +316,168 @@ export default function NewSellerProductPage() {
       return "Selected category is invalid.";
     }
 
-    if (
-      !retailPrice ||
-      Number(retailPrice) <= 0
-    ) {
-      return "Enter a valid retail price.";
-    }
+    /* -------------------------------------------------------
+       PRICES
+    ------------------------------------------------------- */
+
+    const numericMrp = Number(mrp);
+    const numericRetailPrice =
+      Number(retailPrice);
+    const numericWholesalePrice =
+      Number(wholesalePrice);
 
     if (
       !mrp ||
-      Number(mrp) <= 0
+      !Number.isFinite(numericMrp) ||
+      numericMrp <= 0
     ) {
       return "Enter a valid MRP.";
     }
 
     if (
-      Number(retailPrice) >
-      Number(mrp)
+      !retailPrice ||
+      !Number.isFinite(numericRetailPrice) ||
+      numericRetailPrice <= 0
+    ) {
+      return "Enter a valid retail price.";
+    }
+
+    if (
+      numericRetailPrice > numericMrp
     ) {
       return "Retail price cannot be higher than MRP.";
     }
 
     if (
       !wholesalePrice ||
-      Number(wholesalePrice) <= 0
+      !Number.isFinite(numericWholesalePrice) ||
+      numericWholesalePrice <= 0
     ) {
       return "Enter a valid wholesale price.";
     }
 
     if (
-      Number(wholesalePrice) >
-      Number(retailPrice)
+      numericWholesalePrice >
+      numericRetailPrice
     ) {
       return "Wholesale price should not be higher than retail price.";
     }
 
+    /* -------------------------------------------------------
+       MOQ
+    ------------------------------------------------------- */
+
+    const numericMoq = Number(moq);
+
     if (
       !moq ||
-      Number(moq) < 1
+      !Number.isFinite(numericMoq) ||
+      numericMoq < 1
     ) {
       return "Enter a valid MOQ.";
     }
 
     if (
-      !stock ||
-      Number(stock) < 0
+      !Number.isInteger(numericMoq)
+    ) {
+      return "MOQ must be a whole number.";
+    }
+
+    /* -------------------------------------------------------
+       STOCK
+    ------------------------------------------------------- */
+
+    const numericStock = Number(stock);
+
+    if (
+      stock === "" ||
+      !Number.isFinite(numericStock) ||
+      numericStock < 0
     ) {
       return "Enter valid stock.";
     }
 
     if (
-      Number(moq) >
-      Number(stock)
+      !Number.isInteger(numericStock)
     ) {
+      return "Stock must be a whole number.";
+    }
+
+    if (numericMoq > numericStock) {
       return "MOQ cannot be greater than stock.";
     }
 
-    if (
-      tiers.length === 0
-    ) {
+    /* -------------------------------------------------------
+       WHOLESALE TIERS
+    ------------------------------------------------------- */
+
+    if (tiers.length === 0) {
       return "Add at least one wholesale tier.";
     }
 
+    const numericTiers = tiers.map(
+      (tier) => ({
+        min: Number(tier.minQuantity),
+        max: tier.maxQuantity
+          ? Number(tier.maxQuantity)
+          : null,
+        price: Number(tier.price),
+      })
+    );
+
+    /* -------------------------------------------------------
+       EACH TIER
+    ------------------------------------------------------- */
+
     for (
       let i = 0;
-      i < tiers.length;
+      i < numericTiers.length;
       i++
     ) {
-      const tier = tiers[i];
+      const current = numericTiers[i];
 
       if (
-        !tier.minQuantity ||
-        Number(tier.minQuantity) < 1
+        !tiers[i].minQuantity ||
+        !Number.isFinite(current.min) ||
+        current.min < 1
       ) {
         return `Wholesale Tier ${
           i + 1
-        }: enter minimum quantity.`;
+        }: enter a valid minimum quantity.`;
       }
 
       if (
-        !tier.price ||
-        Number(tier.price) <= 0
+        !Number.isInteger(current.min)
       ) {
         return `Wholesale Tier ${
           i + 1
-        }: enter price.`;
+        }: minimum quantity must be a whole number.`;
       }
 
       if (
-        tier.maxQuantity &&
-        Number(tier.maxQuantity) <
-          Number(tier.minQuantity)
+        !tiers[i].price ||
+        !Number.isFinite(current.price) ||
+        current.price <= 0
+      ) {
+        return `Wholesale Tier ${
+          i + 1
+        }: enter a valid price.`;
+      }
+
+      if (
+        !Number.isInteger(current.price)
+      ) {
+        return `Wholesale Tier ${
+          i + 1
+        }: price must be a whole number.`;
+      }
+
+      if (
+        current.max !== null &&
+        (
+          !Number.isFinite(current.max) ||
+          current.max < current.min
+        )
       ) {
         return `Wholesale Tier ${
           i + 1
@@ -467,8 +485,17 @@ export default function NewSellerProductPage() {
       }
 
       if (
-        Number(tier.price) >
-        Number(retailPrice)
+        current.max !== null &&
+        !Number.isInteger(current.max)
+      ) {
+        return `Wholesale Tier ${
+          i + 1
+        }: maximum quantity must be a whole number.`;
+      }
+
+      if (
+        current.price >
+        numericRetailPrice
       ) {
         return `Wholesale Tier ${
           i + 1
@@ -476,21 +503,9 @@ export default function NewSellerProductPage() {
       }
     }
 
-    /* =====================================
-       CHECK TIER ORDER
-    ===================================== */
-
-    const numericTiers =
-      tiers.map((tier) => ({
-        min: Number(
-          tier.minQuantity
-        ),
-        max: tier.maxQuantity
-          ? Number(
-              tier.maxQuantity
-            )
-          : null,
-      }));
+    /* -------------------------------------------------------
+       TIER ORDER + OVERLAP
+    ------------------------------------------------------- */
 
     for (
       let i = 1;
@@ -504,27 +519,86 @@ export default function NewSellerProductPage() {
         numericTiers[i];
 
       if (
-        current.min <=
-        previous.min
+        current.min <= previous.min
       ) {
         return "Wholesale tiers must be in increasing quantity order.";
       }
 
       if (
         previous.max !== null &&
-        current.min <=
-          previous.max
+        current.min <= previous.max
       ) {
         return "Wholesale tier quantity ranges cannot overlap.";
+      }
+    }
+
+    /* -------------------------------------------------------
+       MOQ MUST MATCH FIRST TIER
+    ------------------------------------------------------- */
+
+    const firstTier =
+      numericTiers[0];
+
+    if (
+      firstTier.min !== numericMoq
+    ) {
+      return "The first wholesale tier minimum quantity must match MOQ.";
+    }
+
+    /* -------------------------------------------------------
+       FIRST TIER PRICE MUST MATCH BASE WHOLESALE PRICE
+    ------------------------------------------------------- */
+
+    if (
+      firstTier.price !==
+      numericWholesalePrice
+    ) {
+      return "Base wholesale price must match the first wholesale tier price.";
+    }
+
+    /* -------------------------------------------------------
+       CONTINUOUS RANGE
+    ------------------------------------------------------- */
+
+    for (
+      let i = 1;
+      i < numericTiers.length;
+      i++
+    ) {
+      const previous =
+        numericTiers[i - 1];
+
+      const current =
+        numericTiers[i];
+
+      /*
+       * If previous tier has a maximum,
+       * next tier must begin exactly at
+       * previous maximum + 1.
+       *
+       * Example:
+       *
+       * 10-24
+       * 25-49
+       * 50-99
+       * 100+
+       */
+
+      if (
+        previous.max !== null &&
+        current.min !==
+          previous.max + 1
+      ) {
+        return "Wholesale quantity ranges should be continuous without gaps.";
       }
     }
 
     return "";
   }
 
-  /* =========================================
+  /* =========================================================
      SUBMIT
-  ========================================= */
+  ========================================================= */
 
   async function handleSubmit(
     event: React.FormEvent
@@ -538,10 +612,7 @@ export default function NewSellerProductPage() {
       validate();
 
     if (validationError) {
-      setError(
-        validationError
-      );
-
+      setError(validationError);
       return;
     }
 
@@ -549,26 +620,22 @@ export default function NewSellerProductPage() {
       setError(
         "Seller authentication is missing."
       );
-
       return;
     }
 
-    if (
-      categoriesLoading
-    ) {
+    if (categoriesLoading) {
       setError(
         "Please wait until categories finish loading."
       );
-
       return;
     }
 
     try {
       setSaving(true);
 
-      /* ================================
+      /* =====================================================
          WHOLESALE TIERS
-      ================================= */
+      ===================================================== */
 
       const wholesaleTiers =
         tiers
@@ -577,91 +644,85 @@ export default function NewSellerProductPage() {
               tier.minQuantity &&
               tier.price
           )
-          .map(
-            (tier) => ({
-              minQuantity:
-                Number(
-                  tier.minQuantity
-                ),
+          .map((tier) => ({
+            minQuantity:
+              Number(
+                tier.minQuantity
+              ),
 
-              ...(tier.maxQuantity
-                ? {
-                    maxQuantity:
-                      Number(
-                        tier.maxQuantity
-                      ),
-                  }
-                : {}),
+            ...(tier.maxQuantity
+              ? {
+                  maxQuantity:
+                    Number(
+                      tier.maxQuantity
+                    ),
+                }
+              : {}),
 
-              price:
-                Number(
-                  tier.price
-                ),
-            })
-          );
+            price:
+              Number(tier.price),
+          }));
 
-      /* ================================
+      /* =====================================================
          IMAGE
-      ================================= */
+      ===================================================== */
 
-      const images =
-        imageUrl.trim()
-          ? [imageUrl.trim()]
-          : [];
+      const images = imageUrl.trim()
+        ? [imageUrl.trim()]
+        : [];
 
-      /* ================================
+      /* =====================================================
          SLUG
-      ================================= */
+      ===================================================== */
 
       const slug =
         createSlug(name);
 
-      /* ================================
+      if (!slug) {
+        setError(
+          "Unable to create product slug."
+        );
+        return;
+      }
+
+      /* =====================================================
          CREATE PRODUCT
-      ================================= */
+      ===================================================== */
 
       const productId =
-        await createSellerProduct(sellerId, {
-          name: name.trim(),
-
-          slug,
-
-          description:
-            description.trim(),
-
-          categoryId,
-
-          categoryName,
-
+        await createSellerProduct(
           sellerId,
+          {
+            name: name.trim(),
 
-          sellerName,
+            slug,
 
-          images,
+            description:
+              description.trim(),
 
-          mrp:
-            Number(mrp),
+            categoryId,
 
-          retailPrice:
-            Number(
-              retailPrice
-            ),
+            categoryName,
 
-          wholesalePrice:
-            Number(
-              wholesalePrice
-            ),
+            images,
 
-          moq:
-            Number(moq),
+            mrp: Number(mrp),
 
-          wholesaleTiers,
+            retailPrice:
+              Number(retailPrice),
 
-          stock:
-            Number(stock),
+            wholesalePrice:
+              Number(
+                wholesalePrice
+              ),
 
-          status: "draft",
-        });
+            moq: Number(moq),
+
+            wholesaleTiers,
+
+            stock: Number(stock),
+          }
+        );
 
       console.log(
         "Created product:",
@@ -678,19 +739,24 @@ export default function NewSellerProductPage() {
         );
       }, 1000);
     } catch (err) {
-      console.error(err);
+      console.error(
+        "Create seller product error:",
+        err
+      );
 
       setError(
-        "Unable to create product. Please try again."
+        err instanceof Error
+          ? err.message
+          : "Unable to create product. Please try again."
       );
     } finally {
       setSaving(false);
     }
   }
 
-  /* =========================================
+  /* =========================================================
      LOADING
-  ========================================= */
+  ========================================================= */
 
   if (loading) {
     return (
@@ -699,7 +765,13 @@ export default function NewSellerProductPage() {
 
         <main className="mx-auto max-w-4xl px-4 py-16">
           <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-            ⏳ Checking seller account...
+            <div className="text-3xl">
+              ⏳
+            </div>
+
+            <p className="mt-3 text-sm font-bold text-gray-500">
+              Checking seller account...
+            </p>
           </div>
         </main>
 
@@ -708,9 +780,9 @@ export default function NewSellerProductPage() {
     );
   }
 
-  /* =========================================
+  /* =========================================================
      SELLER ACCESS ERROR
-  ========================================= */
+  ========================================================= */
 
   if (
     error &&
@@ -741,7 +813,6 @@ export default function NewSellerProductPage() {
             >
               Seller Dashboard
             </Link>
-
           </div>
         </main>
 
@@ -750,9 +821,9 @@ export default function NewSellerProductPage() {
     );
   }
 
-  /* =========================================
+  /* =========================================================
      MAIN PAGE
-  ========================================= */
+  ========================================================= */
 
   return (
     <div className="min-h-screen bg-[#f7f8fa]">
@@ -761,46 +832,59 @@ export default function NewSellerProductPage() {
 
       <main className="mx-auto max-w-5xl px-4 py-6 sm:py-10">
 
-        {/* ===================================
+        {/* ===================================================
             HEADER
-        =================================== */}
+        =================================================== */}
 
         <div className="mb-6">
 
           <Link
             href="/seller/products"
-            className="text-xs font-bold text-gray-400 hover:text-black"
+            className="text-xs font-bold text-gray-400 transition hover:text-black"
           >
             ← My Products
           </Link>
 
-          <h1 className="mt-3 text-3xl font-black tracking-tight">
+          <h1 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
             Add New Product
           </h1>
 
           <p className="mt-1 text-sm text-gray-500">
             Add your product to the ANJIVO marketplace.
           </p>
-
         </div>
 
-        {/* ===================================
+        {/* ===================================================
             ERROR
-        =================================== */}
+        =================================================== */}
 
         {error && (
-          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-            {error}
+          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+            <p className="text-sm font-semibold text-red-700">
+              {error}
+            </p>
+
+            <button
+              type="button"
+              onClick={() =>
+                setError("")
+              }
+              className="mt-2 text-xs font-bold text-red-700 underline"
+            >
+              Dismiss
+            </button>
           </div>
         )}
 
-        {/* ===================================
+        {/* ===================================================
             SUCCESS
-        =================================== */}
+        =================================================== */}
 
         {success && (
-          <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
-            {success}
+          <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3">
+            <p className="text-sm font-semibold text-green-700">
+              {success}
+            </p>
           </div>
         )}
 
@@ -809,21 +893,19 @@ export default function NewSellerProductPage() {
           className="space-y-5"
         >
 
-          {/* =================================
+          {/* =================================================
               BASIC INFORMATION
-          ================================= */}
+          ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                Step 1
-              </p>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+              Step 1
+            </p>
 
-              <h2 className="mt-1 text-xl font-black">
-                Basic Information
-              </h2>
-            </div>
+            <h2 className="mt-1 text-xl font-black">
+              Basic Information
+            </h2>
 
             <div className="mt-6 space-y-5">
 
@@ -838,13 +920,13 @@ export default function NewSellerProductPage() {
                 <input
                   type="text"
                   value={name}
-                  onChange={(e) =>
+                  onChange={(event) =>
                     setName(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   placeholder="Example: Premium Cotton T-Shirt"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition focus:border-black"
                 />
 
                 {name && (
@@ -853,7 +935,6 @@ export default function NewSellerProductPage() {
                     {createSlug(name)}
                   </p>
                 )}
-
               </div>
 
               {/* DESCRIPTION */}
@@ -866,16 +947,15 @@ export default function NewSellerProductPage() {
 
                 <textarea
                   value={description}
-                  onChange={(e) =>
+                  onChange={(event) =>
                     setDescription(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   rows={5}
                   placeholder="Describe your product, material, features, size, usage etc."
-                  className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition focus:border-black"
                 />
-
               </div>
 
               {/* CATEGORY */}
@@ -888,15 +968,15 @@ export default function NewSellerProductPage() {
 
                 <select
                   value={categoryId}
-                  onChange={(e) =>
+                  onChange={(event) =>
                     handleCategoryChange(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   disabled={
                     categoriesLoading
                   }
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:border-black disabled:cursor-not-allowed disabled:bg-gray-100"
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-black disabled:cursor-not-allowed disabled:bg-gray-100"
                 >
 
                   <option value="">
@@ -918,7 +998,6 @@ export default function NewSellerProductPage() {
                       </option>
                     )
                   )}
-
                 </select>
 
                 {categories.length === 0 &&
@@ -940,16 +1019,13 @@ export default function NewSellerProductPage() {
                     </p>
                   </div>
                 )}
-
               </div>
-
             </div>
-
           </section>
 
-          {/* =================================
+          {/* =================================================
               IMAGE
-          ================================= */}
+          ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
@@ -962,7 +1038,8 @@ export default function NewSellerProductPage() {
             </h2>
 
             <p className="mt-1 text-xs text-gray-400">
-              Image upload/storage integration will be connected later. For now use a public image URL.
+              Image upload/storage integration will be connected later.
+              For now use a public image URL.
             </p>
 
             <div className="mt-5">
@@ -974,15 +1051,14 @@ export default function NewSellerProductPage() {
               <input
                 type="url"
                 value={imageUrl}
-                onChange={(e) =>
+                onChange={(event) =>
                   setImageUrl(
-                    e.target.value
+                    event.target.value
                   )
                 }
                 placeholder="https://example.com/product-image.jpg"
-                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition focus:border-black"
               />
-
             </div>
 
             {imageUrl && (
@@ -992,20 +1068,19 @@ export default function NewSellerProductPage() {
                   src={imageUrl}
                   alt="Product preview"
                   className="h-64 w-full object-contain"
-                  onError={(e) => {
-                    e.currentTarget.style.display =
+                  onError={(event) => {
+                    event.currentTarget.style.display =
                       "none";
                   }}
                 />
 
               </div>
             )}
-
           </section>
 
-          {/* =================================
+          {/* =================================================
               PRICING
-          ================================= */}
+          ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
@@ -1037,9 +1112,9 @@ export default function NewSellerProductPage() {
                     type="number"
                     min="0"
                     value={mrp}
-                    onChange={(e) =>
+                    onChange={(event) =>
                       setMrp(
-                        e.target.value
+                        event.target.value
                       )
                     }
                     placeholder="499"
@@ -1047,7 +1122,6 @@ export default function NewSellerProductPage() {
                   />
 
                 </div>
-
               </div>
 
               {/* RETAIL */}
@@ -1068,9 +1142,9 @@ export default function NewSellerProductPage() {
                     type="number"
                     min="0"
                     value={retailPrice}
-                    onChange={(e) =>
+                    onChange={(event) =>
                       setRetailPrice(
-                        e.target.value
+                        event.target.value
                       )
                     }
                     placeholder="399"
@@ -1078,7 +1152,6 @@ export default function NewSellerProductPage() {
                   />
 
                 </div>
-
               </div>
 
               {/* WHOLESALE */}
@@ -1099,9 +1172,9 @@ export default function NewSellerProductPage() {
                     type="number"
                     min="0"
                     value={wholesalePrice}
-                    onChange={(e) =>
+                    onChange={(event) =>
                       setWholesalePrice(
-                        e.target.value
+                        event.target.value
                       )
                     }
                     placeholder="299"
@@ -1109,16 +1182,21 @@ export default function NewSellerProductPage() {
                   />
 
                 </div>
-
               </div>
 
             </div>
 
+            <div className="mt-4 rounded-xl bg-gray-50 p-3">
+              <p className="text-[10px] font-semibold leading-5 text-gray-500">
+                Base Wholesale Price must match
+                the first wholesale tier price.
+              </p>
+            </div>
           </section>
 
-          {/* =================================
+          {/* =================================================
               WHOLESALE TIERS
-          ================================= */}
+          ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
@@ -1143,11 +1221,10 @@ export default function NewSellerProductPage() {
               <button
                 type="button"
                 onClick={addTier}
-                className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+                className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold transition hover:border-black"
               >
                 + Add Tier
               </button>
-
             </div>
 
             <div className="mt-6 space-y-3">
@@ -1173,7 +1250,7 @@ export default function NewSellerProductPage() {
                               index
                             )
                           }
-                          className="text-[10px] font-bold text-red-500"
+                          className="text-[10px] font-bold text-red-500 hover:underline"
                         >
                           Remove
                         </button>
@@ -1197,17 +1274,16 @@ export default function NewSellerProductPage() {
                           value={
                             tier.minQuantity
                           }
-                          onChange={(e) =>
+                          onChange={(event) =>
                             updateTier(
                               index,
                               "minQuantity",
-                              e.target.value
+                              event.target.value
                             )
                           }
                           placeholder="10"
                           className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-black"
                         />
-
                       </div>
 
                       {/* MAX */}
@@ -1224,17 +1300,16 @@ export default function NewSellerProductPage() {
                           value={
                             tier.maxQuantity
                           }
-                          onChange={(e) =>
+                          onChange={(event) =>
                             updateTier(
                               index,
                               "maxQuantity",
-                              e.target.value
+                              event.target.value
                             )
                           }
                           placeholder="Leave empty for +"
                           className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-black"
                         />
-
                       </div>
 
                       {/* PRICE */}
@@ -1257,11 +1332,11 @@ export default function NewSellerProductPage() {
                             value={
                               tier.price
                             }
-                            onChange={(e) =>
+                            onChange={(event) =>
                               updateTier(
                                 index,
                                 "price",
-                                e.target.value
+                                event.target.value
                               )
                             }
                             placeholder="299"
@@ -1269,22 +1344,34 @@ export default function NewSellerProductPage() {
                           />
 
                         </div>
-
                       </div>
 
                     </div>
 
+                    {index === 0 && (
+                      <p className="mt-3 text-[10px] font-semibold text-gray-400">
+                        The first tier minimum must
+                        match your MOQ.
+                      </p>
+                    )}
+
+                    {index ===
+                      tiers.length - 1 && (
+                      <p className="mt-3 text-[10px] font-semibold text-gray-400">
+                        Leave maximum quantity empty
+                        for an unlimited upper range.
+                      </p>
+                    )}
                   </div>
                 )
               )}
 
             </div>
-
           </section>
 
-          {/* =================================
-              MOQ + STOCK
-          ================================= */}
+          {/* =================================================
+              MOQ + INVENTORY
+          ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
@@ -1310,16 +1397,17 @@ export default function NewSellerProductPage() {
                   type="number"
                   min="1"
                   value={moq}
-                  onChange={(e) =>
+                  onChange={(event) =>
                     setMoq(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
                 />
 
                 <p className="mt-1.5 text-[10px] text-gray-400">
-                  Wholesale customers must purchase at least this quantity.
+                  Wholesale customers must purchase
+                  at least this quantity.
                 </p>
 
               </div>
@@ -1336,24 +1424,28 @@ export default function NewSellerProductPage() {
                   type="number"
                   min="0"
                   value={stock}
-                  onChange={(e) =>
+                  onChange={(event) =>
                     setStock(
-                      e.target.value
+                      event.target.value
                     )
                   }
                   placeholder="100"
                   className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
                 />
 
+                <p className="mt-1.5 text-[10px] text-gray-400">
+                  Enter the total quantity currently
+                  available for sale.
+                </p>
+
               </div>
 
             </div>
-
           </section>
 
-          {/* =================================
-              SUBMIT
-          ================================= */}
+          {/* =================================================
+              APPROVAL
+          ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
@@ -1375,7 +1467,7 @@ export default function NewSellerProductPage() {
 
               <Link
                 href="/seller/products"
-                className="rounded-xl border border-gray-200 px-6 py-3 text-center text-sm font-bold"
+                className="rounded-xl border border-gray-200 px-6 py-3 text-center text-sm font-bold transition hover:border-black"
               >
                 Cancel
               </Link>
@@ -1387,7 +1479,7 @@ export default function NewSellerProductPage() {
                   categoriesLoading ||
                   categories.length === 0
                 }
-                className="rounded-xl bg-black px-7 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-xl bg-black px-7 py-3 text-sm font-bold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving
                   ? "Saving Product..."
@@ -1395,15 +1487,12 @@ export default function NewSellerProductPage() {
               </button>
 
             </div>
-
           </section>
 
         </form>
-
       </main>
 
       <Footer />
-
     </div>
   );
 }
