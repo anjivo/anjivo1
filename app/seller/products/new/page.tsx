@@ -621,7 +621,7 @@ export default function NewSellerProductPage() {
       ================================= */
 
       const productId =
-        await createSellerProduct({
+        await createSellerProduct(sellerId, {
           name: name.trim(),
 
           slug,
