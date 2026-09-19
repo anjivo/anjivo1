@@ -72,7 +72,7 @@ const managementSections: {
         title: "Customers",
         description:
           "Retail and wholesale customer accounts",
-        href: "/admin/users",
+        href: "/admin/customers",
         icon: "👥",
       },
     ],
@@ -396,9 +396,7 @@ export default function AdminDashboard() {
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:py-10">
 
-        {/* =================================================
-            HEADER
-        ================================================= */}
+        {/* HEADER */}
 
         <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
 
@@ -439,9 +437,7 @@ export default function AdminDashboard() {
 
         </div>
 
-        {/* =================================================
-            KPI CARDS
-        ================================================= */}
+        {/* KPI CARDS */}
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 
@@ -449,7 +445,7 @@ export default function AdminDashboard() {
             title="Total Users"
             value={stats.users}
             icon="👥"
-            href="/admin/users"
+            href="/admin/customers"
           />
 
           <StatCard
@@ -475,24 +471,27 @@ export default function AdminDashboard() {
 
         </div>
 
-        {/* =================================================
-            SECONDARY STATS
-        ================================================= */}
+        {/* SECONDARY STATS */}
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 
           <SmallStat
             title="Active Products"
-            value={stats.activeProducts}
+            value={
+              stats.activeProducts
+            }
             href="/admin/products"
           />
 
           <SmallStat
             title="Pending Sellers"
-            value={stats.pendingSellers}
+            value={
+              stats.pendingSellers
+            }
             href="/admin/sellers"
             urgent={
-              stats.pendingSellers > 0
+              stats.pendingSellers >
+              0
             }
           />
 
@@ -510,9 +509,7 @@ export default function AdminDashboard() {
 
         </div>
 
-        {/* =================================================
-            QUICK ACTIONS
-        ================================================= */}
+        {/* QUICK ACTIONS */}
 
         <section className="mt-8 rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
@@ -533,7 +530,8 @@ export default function AdminDashboard() {
               icon="🏪"
               title="Review Sellers"
               description={
-                stats.pendingSellers > 0
+                stats.pendingSellers >
+                0
                   ? `${stats.pendingSellers} pending`
                   : "No pending applications"
               }
@@ -563,9 +561,7 @@ export default function AdminDashboard() {
           </div>
         </section>
 
-        {/* =================================================
-            MANAGEMENT SECTIONS
-        ================================================= */}
+        {/* MANAGEMENT SECTIONS */}
 
         <div className="mt-8 space-y-8">
 
@@ -629,9 +625,7 @@ export default function AdminDashboard() {
 
         </div>
 
-        {/* =================================================
-            ADMIN ARCHITECTURE
-        ================================================= */}
+        {/* ADMIN ARCHITECTURE */}
 
         <section className="mt-10 rounded-3xl bg-black p-6 text-white sm:p-8">
 
@@ -705,6 +699,7 @@ function StatCard({
       className="rounded-3xl border border-gray-200 bg-white p-5 transition hover:-translate-y-0.5 hover:shadow-md"
     >
       <div className="flex items-center justify-between">
+
         <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gray-100 text-xl">
           {icon}
         </div>
@@ -712,6 +707,7 @@ function StatCard({
         <span className="text-xs font-bold text-gray-300">
           →
         </span>
+
       </div>
 
       <p className="mt-5 text-xs font-bold text-gray-400">
@@ -719,7 +715,9 @@ function StatCard({
       </p>
 
       <p className="mt-1 text-3xl font-black tracking-tight">
-        {value.toLocaleString("en-IN")}
+        {value.toLocaleString(
+          "en-IN"
+        )}
       </p>
     </Link>
   );
@@ -750,13 +748,17 @@ function SmallStat({
       </p>
 
       <div className="mt-2 flex items-end justify-between">
+
         <p className="text-2xl font-black">
-          {value.toLocaleString("en-IN")}
+          {value.toLocaleString(
+            "en-IN"
+          )}
         </p>
 
         <span className="text-xs font-bold text-gray-400">
           Manage →
         </span>
+
       </div>
     </Link>
   );
@@ -806,6 +808,7 @@ function AdminFeature({
 }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+
       <div className="text-xl">
         {icon}
       </div>
@@ -817,6 +820,7 @@ function AdminFeature({
       <p className="mt-1 text-[10px] text-gray-500">
         {text}
       </p>
+
     </div>
   );
 }
