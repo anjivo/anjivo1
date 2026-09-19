@@ -1,105 +1,97 @@
 import {
-  addDoc,
   collection,
+  doc,
+  getDoc,
   getDocs,
-  orderBy,
   query,
   serverTimestamp,
+  updateDoc,
   where,
 } from "firebase/firestore";
-
 import { db } from "@/lib/firebase";
-import type {
-  Product,
-  WholesaleTier,
-} from "@/types/product";
+import type { Product } from "@/types/product";
 
-export type CreateSellerProductInput = {
-  name: string;
-  slug: string;
-  description: string;
+function mapProduct(
+  id: string,
+  data: Record<string, unknown>
+): Product {
+  return {
+    id,
+    name: String(data.name ?? ""),
+    slug: String(data.slug ?? ""),
+    description: String(data.description ?? ""),
+    categoryId: String(data.categoryId ?? ""),
+    categoryName: String(data.categoryName ?? ""),
+    subcategoryId: data.subcategoryId
+      ? String(data.subcategoryId)
+      : undefined,
+    sellerId: String(data.sellerId ?? ""),
+    sellerName: data.sellerName
+      ? String(data.sellerName)
+      : undefined,
+    sellerVerified: Boolean(data.sellerVerified),
+    images: Array.isArray(data.images)
+      ? data.images.map(String)
+      : [],
+    mrp: Number(data.mrp ?? 0),
+    retailPrice: Number(data.retailPrice ?? 0),
+    wholesalePrice: Number(data.wholesalePrice ?? 0),
+    moq: Number(data.moq ?? 1),
+    wholesaleTiers: Array.isArray(data.wholesaleTiers)
+      ? data.wholesaleTiers.map((tier) => {
+          const value = tier as Record<string, unknown>;
 
-  categoryId: string;
-  categoryName: string;
-
-  sellerId: string;
-  sellerName: string;
-
-  images: string[];
-
-  mrp: number;
-  retailPrice: number;
-  wholesalePrice: number;
-
-  moq: number;
-  wholesaleTiers: WholesaleTier[];
-
-  stock: number;
-};
+          return {
+            minQuantity: Number(value.minQuantity ?? 1),
+            maxQuantity:
+              value.maxQuantity !== undefined
+                ? Number(value.maxQuantity)
+                : undefined,
+            price: Number(value.price ?? 0),
+          };
+        })
+      : [],
+    stock: Number(data.stock ?? 0),
+    rating:
+      data.rating !== undefined
+        ? Number(data.rating)
+        : undefined,
+    reviewsCount:
+      data.reviewsCount !== undefined
+        ? Number(data.reviewsCount)
+        : undefined,
+    status:
+      data.status === "active" ||
+      data.status === "out_of_stock" ||
+      data.status === "blocked"
+        ? data.status
+        : "draft",
+    featured: Boolean(data.featured),
+    bestSeller: Boolean(data.bestSeller),
+    trending: Boolean(data.trending),
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+  };
+}
 
 export async function createSellerProduct(
-  input: CreateSellerProductInput
+  sellerId: string,
+  data: Omit<
+    Product,
+    "id" | "createdAt" | "updatedAt"
+  >
 ): Promise<string> {
-  const productRef = await addDoc(
-    collection(db, "products"),
-    {
-      name: input.name.trim(),
+  const productsRef = collection(db, "products");
 
-      slug: input.slug.trim(),
+  const productRef = doc(productsRef);
 
-      description:
-        input.description.trim(),
-
-      categoryId:
-        input.categoryId.trim(),
-
-      categoryName:
-        input.categoryName.trim(),
-
-      sellerId:
-        input.sellerId,
-
-      sellerName:
-        input.sellerName.trim(),
-
-      sellerVerified: false,
-
-      images: input.images,
-
-      mrp: input.mrp,
-
-      retailPrice:
-        input.retailPrice,
-
-      wholesalePrice:
-        input.wholesalePrice,
-
-      moq: input.moq,
-
-      wholesaleTiers:
-        input.wholesaleTiers,
-
-      stock: input.stock,
-
-      rating: 0,
-
-      reviewsCount: 0,
-
-      status: "draft",
-
-      featured: false,
-
-      bestSeller: false,
-
-      trending: false,
-
-      createdAt:
-        serverTimestamp(),
-
-      updatedAt:
-        serverTimestamp(),
-    }
-  );
+  await updateDoc(productRef, {
+    ...data,
+    sellerId,
+    status: "draft",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
 
   return productRef.id;
 }
@@ -107,180 +99,106 @@ export async function createSellerProduct(
 export async function getSellerProducts(
   sellerId: string
 ): Promise<Product[]> {
-  const productsQuery = query(
-    collection(db, "products"),
-    where(
-      "sellerId",
-      "==",
-      sellerId
-    ),
-    orderBy(
-      "createdAt",
-      "desc"
+  const productsRef = collection(db, "products");
+
+  const q = query(
+    productsRef,
+    where("sellerId", "==", sellerId)
+  );
+
+  const snapshot = await getDocs(q);
+
+  return snapshot.docs
+    .map((item) =>
+      mapProduct(
+        item.id,
+        item.data() as Record<string, unknown>
+      )
     )
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getSellerProduct(
+  sellerId: string,
+  productId: string
+): Promise<Product | null> {
+  const productRef = doc(db, "products", productId);
+  const snapshot = await getDoc(productRef);
+
+  if (!snapshot.exists()) {
+    return null;
+  }
+
+  const data = snapshot.data();
+
+  if (data.sellerId !== sellerId) {
+    return null;
+  }
+
+  return mapProduct(
+    snapshot.id,
+    data as Record<string, unknown>
   );
+}
 
-  const snapshot =
-    await getDocs(productsQuery);
+export async function updateSellerProduct(
+  sellerId: string,
+  productId: string,
+  data: Partial<Product>
+): Promise<void> {
+  const productRef = doc(db, "products", productId);
+  const snapshot = await getDoc(productRef);
 
-  return snapshot.docs.map(
-    (document) => {
-      const data =
-        document.data();
+  if (!snapshot.exists()) {
+    throw new Error("Product not found.");
+  }
 
-      return {
-        id: document.id,
+  if (snapshot.data().sellerId !== sellerId) {
+    throw new Error("You are not allowed to edit this product.");
+  }
 
-        name: String(
-          data.name ?? ""
-        ),
+  const {
+    id,
+    sellerId: ignoredSellerId,
+    createdAt,
+    updatedAt,
+    ...safeData
+  } = data;
 
-        slug: String(
-          data.slug ?? ""
-        ),
+  await updateDoc(productRef, {
+    ...safeData,
+    updatedAt: serverTimestamp(),
+  });
+}
 
-        description:
-          data.description
-            ? String(
-                data.description
-              )
-            : undefined,
+export async function updateSellerStock(
+  sellerId: string,
+  productId: string,
+  stock: number
+): Promise<void> {
+  if (!Number.isFinite(stock) || stock < 0) {
+    throw new Error("Invalid stock quantity.");
+  }
 
-        categoryId: String(
-          data.categoryId ?? ""
-        ),
+  const productRef = doc(db, "products", productId);
+  const snapshot = await getDoc(productRef);
 
-        categoryName:
-          data.categoryName
-            ? String(
-                data.categoryName
-              )
-            : undefined,
+  if (!snapshot.exists()) {
+    throw new Error("Product not found.");
+  }
 
-        sellerId: String(
-          data.sellerId ?? ""
-        ),
+  if (snapshot.data().sellerId !== sellerId) {
+    throw new Error("You are not allowed to update this product.");
+  }
 
-        sellerName:
-          data.sellerName
-            ? String(
-                data.sellerName
-              )
-            : undefined,
-
-        sellerVerified:
-          Boolean(
-            data.sellerVerified
-          ),
-
-        images: Array.isArray(
-          data.images
-        )
-          ? data.images.map(String)
-          : [],
-
-        mrp: Number(
-          data.mrp ?? 0
-        ),
-
-        retailPrice: Number(
-          data.retailPrice ?? 0
-        ),
-
-        wholesalePrice: Number(
-          data.wholesalePrice ?? 0
-        ),
-
-        moq: Number(
-          data.moq ?? 1
-        ),
-
-        wholesaleTiers:
-          Array.isArray(
-            data.wholesaleTiers
-          )
-            ? data.wholesaleTiers.map(
-                (tier) => {
-                  const item =
-                    tier as Record<
-                      string,
-                      unknown
-                    >;
-
-                  return {
-                    minQuantity:
-                      Number(
-                        item.minQuantity ??
-                          1
-                      ),
-
-                    maxQuantity:
-                      item.maxQuantity !==
-                      undefined
-                        ? Number(
-                            item.maxQuantity
-                          )
-                        : undefined,
-
-                    price: Number(
-                      item.price ?? 0
-                    ),
-                  };
-                }
-              )
-            : [],
-
-        stock: Number(
-          data.stock ?? 0
-        ),
-
-        rating:
-          data.rating !==
-          undefined
-            ? Number(
-                data.rating
-              )
-            : undefined,
-
-        reviewsCount:
-          data.reviewsCount !==
-          undefined
-            ? Number(
-                data.reviewsCount
-              )
-            : undefined,
-
-        status:
-          data.status ===
-            "out_of_stock" ||
-          data.status ===
-            "blocked" ||
-          data.status ===
-            "draft"
-            ? data.status
-            : "active",
-
-        featured:
-          Boolean(
-            data.featured
-          ),
-
-        bestSeller:
-          Boolean(
-            data.bestSeller
-          ),
-
-        trending:
-          Boolean(
-            data.trending
-          ),
-
-        createdAt:
-          data.createdAt,
-
-        updatedAt:
-          data.updatedAt,
-      };
-    }
-  );
+  await updateDoc(productRef, {
+    stock,
+    status:
+      stock === 0
+        ? "out_of_stock"
+        : snapshot.data().status === "out_of_stock"
+          ? "draft"
+          : snapshot.data().status,
+    updatedAt: serverTimestamp(),
+  });
 }
