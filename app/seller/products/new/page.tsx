@@ -8,10 +8,18 @@ import { useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+
 import { auth, db } from "@/lib/firebase";
+
 import {
   createSellerProduct,
 } from "@/lib/seller-products";
+
+import {
+  getCategories,
+} from "@/lib/categories";
+
+import type { Category } from "@/types/category";
 
 type Tier = {
   minQuantity: string;
@@ -28,11 +36,19 @@ const emptyTier: Tier = {
 export default function NewSellerProductPage() {
   const router = useRouter();
 
+  /* =========================================
+     SELLER STATE
+  ========================================= */
+
   const [sellerId, setSellerId] =
     useState("");
 
   const [sellerName, setSellerName] =
     useState("");
+
+  /* =========================================
+     PAGE STATE
+  ========================================= */
 
   const [loading, setLoading] =
     useState(true);
@@ -45,6 +61,20 @@ export default function NewSellerProductPage() {
 
   const [success, setSuccess] =
     useState("");
+
+  /* =========================================
+     CATEGORY STATE
+  ========================================= */
+
+  const [categories, setCategories] =
+    useState<Category[]>([]);
+
+  const [categoriesLoading, setCategoriesLoading] =
+    useState(true);
+
+  /* =========================================
+     PRODUCT STATE
+  ========================================= */
 
   const [name, setName] =
     useState("");
@@ -76,6 +106,10 @@ export default function NewSellerProductPage() {
   const [stock, setStock] =
     useState("");
 
+  /* =========================================
+     WHOLESALE TIERS
+  ========================================= */
+
   const [tiers, setTiers] =
     useState<Tier[]>([
       {
@@ -100,6 +134,10 @@ export default function NewSellerProductPage() {
       },
     ]);
 
+  /* =========================================
+     LOAD SELLER + CATEGORIES
+  ========================================= */
+
   useEffect(() => {
     const unsubscribe =
       onAuthStateChanged(
@@ -109,10 +147,15 @@ export default function NewSellerProductPage() {
             router.replace(
               "/login?redirect=/seller/products/new"
             );
+
             return;
           }
 
           try {
+            /* ================================
+               SELLER PROFILE
+            ================================= */
+
             const userRef = doc(
               db,
               "users",
@@ -126,6 +169,7 @@ export default function NewSellerProductPage() {
               setError(
                 "Seller profile not found."
               );
+
               setLoading(false);
               return;
             }
@@ -139,6 +183,7 @@ export default function NewSellerProductPage() {
               setError(
                 "Only sellers can add products."
               );
+
               setLoading(false);
               return;
             }
@@ -150,6 +195,7 @@ export default function NewSellerProductPage() {
               setError(
                 "Your seller account is not approved yet."
               );
+
               setLoading(false);
               return;
             }
@@ -163,11 +209,43 @@ export default function NewSellerProductPage() {
                   "ANJIVO Seller"
               )
             );
+
+            /* ================================
+               LOAD CATEGORIES
+            ================================= */
+
+            setCategoriesLoading(true);
+
+            try {
+              const categoryData =
+                await getCategories();
+
+              setCategories(
+                categoryData
+              );
+            } catch (categoryError) {
+              console.error(
+                "Category loading error:",
+                categoryError
+              );
+
+              setError(
+                "Unable to load categories. Please try again."
+              );
+            } finally {
+              setCategoriesLoading(
+                false
+              );
+            }
           } catch (err) {
             console.error(err);
 
             setError(
               "Unable to verify seller account."
+            );
+
+            setCategoriesLoading(
+              false
             );
           } finally {
             setLoading(false);
@@ -175,8 +253,13 @@ export default function NewSellerProductPage() {
         }
       );
 
-    return () => unsubscribe();
+    return () =>
+      unsubscribe();
   }, [router]);
+
+  /* =========================================
+     SLUG
+  ========================================= */
 
   function createSlug(
     value: string
@@ -193,43 +276,85 @@ export default function NewSellerProductPage() {
         "");
   }
 
+  /* =========================================
+     UPDATE WHOLESALE TIER
+  ========================================= */
+
   function updateTier(
     index: number,
     field: keyof Tier,
     value: string
   ) {
-    setTiers((previous) =>
-      previous.map(
-        (tier, tierIndex) =>
-          tierIndex === index
-            ? {
-                ...tier,
-                [field]: value,
-              }
-            : tier
-      )
+    setTiers(
+      (previous) =>
+        previous.map(
+          (tier, tierIndex) =>
+            tierIndex === index
+              ? {
+                  ...tier,
+                  [field]: value,
+                }
+              : tier
+        )
     );
   }
 
+  /* =========================================
+     ADD TIER
+  ========================================= */
+
   function addTier() {
-    setTiers((previous) => [
-      ...previous,
-      {
-        ...emptyTier,
-      },
-    ]);
+    setTiers(
+      (previous) => [
+        ...previous,
+        {
+          ...emptyTier,
+        },
+      ]
+    );
   }
+
+  /* =========================================
+     REMOVE TIER
+  ========================================= */
 
   function removeTier(
     index: number
   ) {
-    setTiers((previous) =>
-      previous.filter(
-        (_, tierIndex) =>
-          tierIndex !== index
-      )
+    setTiers(
+      (previous) =>
+        previous.filter(
+          (_, tierIndex) =>
+            tierIndex !== index
+        )
     );
   }
+
+  /* =========================================
+     SELECT CATEGORY
+  ========================================= */
+
+  function handleCategoryChange(
+    selectedId: string
+  ) {
+    setCategoryId(
+      selectedId
+    );
+
+    const selectedCategory =
+      categories.find(
+        (category) =>
+          category.id === selectedId
+      );
+
+    setCategoryName(
+      selectedCategory?.name || ""
+    );
+  }
+
+  /* =========================================
+     VALIDATION
+  ========================================= */
 
   function validate() {
     if (!name.trim()) {
@@ -237,11 +362,11 @@ export default function NewSellerProductPage() {
     }
 
     if (!categoryId.trim()) {
-      return "Category ID is required.";
+      return "Please select a category.";
     }
 
     if (!categoryName.trim()) {
-      return "Category name is required.";
+      return "Selected category is invalid.";
     }
 
     if (
@@ -273,6 +398,13 @@ export default function NewSellerProductPage() {
     }
 
     if (
+      Number(wholesalePrice) >
+      Number(retailPrice)
+    ) {
+      return "Wholesale price should not be higher than retail price.";
+    }
+
+    if (
       !moq ||
       Number(moq) < 1
     ) {
@@ -291,6 +423,12 @@ export default function NewSellerProductPage() {
       Number(stock)
     ) {
       return "MOQ cannot be greater than stock.";
+    }
+
+    if (
+      tiers.length === 0
+    ) {
+      return "Add at least one wholesale tier.";
     }
 
     for (
@@ -327,10 +465,66 @@ export default function NewSellerProductPage() {
           i + 1
         }: maximum quantity cannot be smaller than minimum quantity.`;
       }
+
+      if (
+        Number(tier.price) >
+        Number(retailPrice)
+      ) {
+        return `Wholesale Tier ${
+          i + 1
+        }: wholesale price cannot be higher than retail price.`;
+      }
+    }
+
+    /* =====================================
+       CHECK TIER ORDER
+    ===================================== */
+
+    const numericTiers =
+      tiers.map((tier) => ({
+        min: Number(
+          tier.minQuantity
+        ),
+        max: tier.maxQuantity
+          ? Number(
+              tier.maxQuantity
+            )
+          : null,
+      }));
+
+    for (
+      let i = 1;
+      i < numericTiers.length;
+      i++
+    ) {
+      const previous =
+        numericTiers[i - 1];
+
+      const current =
+        numericTiers[i];
+
+      if (
+        current.min <=
+        previous.min
+      ) {
+        return "Wholesale tiers must be in increasing quantity order.";
+      }
+
+      if (
+        previous.max !== null &&
+        current.min <=
+          previous.max
+      ) {
+        return "Wholesale tier quantity ranges cannot overlap.";
+      }
     }
 
     return "";
   }
+
+  /* =========================================
+     SUBMIT
+  ========================================= */
 
   async function handleSubmit(
     event: React.FormEvent
@@ -344,7 +538,10 @@ export default function NewSellerProductPage() {
       validate();
 
     if (validationError) {
-      setError(validationError);
+      setError(
+        validationError
+      );
+
       return;
     }
 
@@ -352,11 +549,26 @@ export default function NewSellerProductPage() {
       setError(
         "Seller authentication is missing."
       );
+
+      return;
+    }
+
+    if (
+      categoriesLoading
+    ) {
+      setError(
+        "Please wait until categories finish loading."
+      );
+
       return;
     }
 
     try {
       setSaving(true);
+
+      /* ================================
+         WHOLESALE TIERS
+      ================================= */
 
       const wholesaleTiers =
         tiers
@@ -365,41 +577,57 @@ export default function NewSellerProductPage() {
               tier.minQuantity &&
               tier.price
           )
-          .map((tier) => ({
-            minQuantity:
-              Number(
-                tier.minQuantity
-              ),
+          .map(
+            (tier) => ({
+              minQuantity:
+                Number(
+                  tier.minQuantity
+                ),
 
-            ...(tier.maxQuantity
-              ? {
-                  maxQuantity:
-                    Number(
-                      tier.maxQuantity
-                    ),
-                }
-              : {}),
+              ...(tier.maxQuantity
+                ? {
+                    maxQuantity:
+                      Number(
+                        tier.maxQuantity
+                      ),
+                  }
+                : {}),
 
-            price: Number(
-              tier.price
-            ),
-          }));
+              price:
+                Number(
+                  tier.price
+                ),
+            })
+          );
 
-      const images = imageUrl
-        .trim()
-        ? [imageUrl.trim()]
-        : [];
+      /* ================================
+         IMAGE
+      ================================= */
+
+      const images =
+        imageUrl.trim()
+          ? [imageUrl.trim()]
+          : [];
+
+      /* ================================
+         SLUG
+      ================================= */
 
       const slug =
         createSlug(name);
 
+      /* ================================
+         CREATE PRODUCT
+      ================================= */
+
       const productId =
         await createSellerProduct({
-          name,
+          name: name.trim(),
 
           slug,
 
-          description,
+          description:
+            description.trim(),
 
           categoryId,
 
@@ -411,7 +639,8 @@ export default function NewSellerProductPage() {
 
           images,
 
-          mrp: Number(mrp),
+          mrp:
+            Number(mrp),
 
           retailPrice:
             Number(
@@ -423,12 +652,19 @@ export default function NewSellerProductPage() {
               wholesalePrice
             ),
 
-          moq: Number(moq),
+          moq:
+            Number(moq),
 
           wholesaleTiers,
 
-          stock: Number(stock),
+          stock:
+            Number(stock),
         });
+
+      console.log(
+        "Created product:",
+        productId
+      );
 
       setSuccess(
         "Product saved as draft successfully."
@@ -439,11 +675,6 @@ export default function NewSellerProductPage() {
           "/seller/products"
         );
       }, 1000);
-
-      console.log(
-        "Created product:",
-        productId
-      );
     } catch (err) {
       console.error(err);
 
@@ -454,6 +685,10 @@ export default function NewSellerProductPage() {
       setSaving(false);
     }
   }
+
+  /* =========================================
+     LOADING
+  ========================================= */
 
   if (loading) {
     return (
@@ -471,13 +706,19 @@ export default function NewSellerProductPage() {
     );
   }
 
-  if (error && !sellerId) {
+  /* =========================================
+     SELLER ACCESS ERROR
+  ========================================= */
+
+  if (
+    error &&
+    !sellerId
+  ) {
     return (
       <div className="min-h-screen bg-[#f7f8fa]">
         <Header />
 
         <main className="mx-auto max-w-2xl px-4 py-16">
-
           <div className="rounded-3xl border border-red-200 bg-white p-8 text-center">
 
             <div className="text-5xl">
@@ -500,13 +741,16 @@ export default function NewSellerProductPage() {
             </Link>
 
           </div>
-
         </main>
 
         <Footer />
       </div>
     );
   }
+
+  /* =========================================
+     MAIN PAGE
+  ========================================= */
 
   return (
     <div className="min-h-screen bg-[#f7f8fa]">
@@ -515,7 +759,10 @@ export default function NewSellerProductPage() {
 
       <main className="mx-auto max-w-5xl px-4 py-6 sm:py-10">
 
-        {/* HEADER */}
+        {/* ===================================
+            HEADER
+        =================================== */}
+
         <div className="mb-6">
 
           <Link
@@ -535,14 +782,20 @@ export default function NewSellerProductPage() {
 
         </div>
 
-        {/* ERROR */}
+        {/* ===================================
+            ERROR
+        =================================== */}
+
         {error && (
           <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
             {error}
           </div>
         )}
 
-        {/* SUCCESS */}
+        {/* ===================================
+            SUCCESS
+        =================================== */}
+
         {success && (
           <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
             {success}
@@ -554,7 +807,10 @@ export default function NewSellerProductPage() {
           className="space-y-5"
         >
 
-          {/* BASIC INFORMATION */}
+          {/* =================================
+              BASIC INFORMATION
+          ================================= */}
+
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <div>
@@ -569,7 +825,10 @@ export default function NewSellerProductPage() {
 
             <div className="mt-6 space-y-5">
 
+              {/* PRODUCT NAME */}
+
               <div>
+
                 <label className="mb-2 block text-xs font-bold">
                   Product Name *
                 </label>
@@ -592,9 +851,13 @@ export default function NewSellerProductPage() {
                     {createSlug(name)}
                   </p>
                 )}
+
               </div>
 
+              {/* DESCRIPTION */}
+
               <div>
+
                 <label className="mb-2 block text-xs font-bold">
                   Description
                 </label>
@@ -610,45 +873,71 @@ export default function NewSellerProductPage() {
                   placeholder="Describe your product, material, features, size, usage etc."
                   className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
                 />
+
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2">
+              {/* CATEGORY */}
 
-                <div>
-                  <label className="mb-2 block text-xs font-bold">
-                    Category ID *
-                  </label>
+              <div>
 
-                  <input
-                    type="text"
-                    value={categoryId}
-                    onChange={(e) =>
-                      setCategoryId(
-                        e.target.value
-                      )
-                    }
-                    placeholder="Example: fashion"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
+                <label className="mb-2 block text-xs font-bold">
+                  Category *
+                </label>
 
-                <div>
-                  <label className="mb-2 block text-xs font-bold">
-                    Category Name *
-                  </label>
+                <select
+                  value={categoryId}
+                  onChange={(e) =>
+                    handleCategoryChange(
+                      e.target.value
+                    )
+                  }
+                  disabled={
+                    categoriesLoading
+                  }
+                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:border-black disabled:cursor-not-allowed disabled:bg-gray-100"
+                >
 
-                  <input
-                    type="text"
-                    value={categoryName}
-                    onChange={(e) =>
-                      setCategoryName(
-                        e.target.value
-                      )
-                    }
-                    placeholder="Example: Fashion"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
+                  <option value="">
+                    {categoriesLoading
+                      ? "Loading categories..."
+                      : "Select Category"}
+                  </option>
+
+                  {categories.map(
+                    (category) => (
+                      <option
+                        key={category.id}
+                        value={category.id}
+                      >
+                        {category.icon
+                          ? `${category.icon} `
+                          : ""}
+                        {category.name}
+                      </option>
+                    )
+                  )}
+
+                </select>
+
+                {categories.length === 0 &&
+                  !categoriesLoading && (
+                    <p className="mt-2 text-xs font-semibold text-red-500">
+                      No active categories available.
+                      Please ask admin to create a category first.
+                    </p>
+                  )}
+
+                {categoryId && (
+                  <div className="mt-2 rounded-lg bg-gray-50 px-3 py-2">
+                    <p className="text-[10px] text-gray-400">
+                      Selected Category
+                    </p>
+
+                    <p className="text-xs font-bold text-gray-700">
+                      {categoryName}
+                    </p>
+                  </div>
+                )}
 
               </div>
 
@@ -656,7 +945,10 @@ export default function NewSellerProductPage() {
 
           </section>
 
-          {/* IMAGE */}
+          {/* =================================
+              IMAGE
+          ================================= */}
+
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
@@ -709,7 +1001,10 @@ export default function NewSellerProductPage() {
 
           </section>
 
-          {/* PRICING */}
+          {/* =================================
+              PRICING
+          ================================= */}
+
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
@@ -722,12 +1017,16 @@ export default function NewSellerProductPage() {
 
             <div className="mt-6 grid gap-4 sm:grid-cols-3">
 
+              {/* MRP */}
+
               <div>
+
                 <label className="mb-2 block text-xs font-bold">
                   MRP *
                 </label>
 
                 <div className="relative">
+
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">
                     ₹
                   </span>
@@ -741,18 +1040,24 @@ export default function NewSellerProductPage() {
                         e.target.value
                       )
                     }
-                    placeholder="0"
+                    placeholder="499"
                     className="w-full rounded-xl border border-gray-200 py-3 pl-8 pr-4 text-sm outline-none focus:border-black"
                   />
+
                 </div>
+
               </div>
 
+              {/* RETAIL */}
+
               <div>
+
                 <label className="mb-2 block text-xs font-bold">
                   Retail Price *
                 </label>
 
                 <div className="relative">
+
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">
                     ₹
                   </span>
@@ -766,18 +1071,24 @@ export default function NewSellerProductPage() {
                         e.target.value
                       )
                     }
-                    placeholder="0"
+                    placeholder="399"
                     className="w-full rounded-xl border border-gray-200 py-3 pl-8 pr-4 text-sm outline-none focus:border-black"
                   />
+
                 </div>
+
               </div>
 
+              {/* WHOLESALE */}
+
               <div>
+
                 <label className="mb-2 block text-xs font-bold">
                   Base Wholesale Price *
                 </label>
 
                 <div className="relative">
+
                   <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">
                     ₹
                   </span>
@@ -791,22 +1102,28 @@ export default function NewSellerProductPage() {
                         e.target.value
                       )
                     }
-                    placeholder="0"
+                    placeholder="299"
                     className="w-full rounded-xl border border-gray-200 py-3 pl-8 pr-4 text-sm outline-none focus:border-black"
                   />
+
                 </div>
+
               </div>
 
             </div>
 
           </section>
 
-          {/* WHOLESALE */}
+          {/* =================================
+              WHOLESALE TIERS
+          ================================= */}
+
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <div className="flex flex-wrap items-start justify-between gap-3">
 
               <div>
+
                 <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
                   Step 4
                 </p>
@@ -818,6 +1135,7 @@ export default function NewSellerProductPage() {
                 <p className="mt-1 text-xs text-gray-400">
                   Set different prices for different quantities.
                 </p>
+
               </div>
 
               <button
@@ -845,8 +1163,7 @@ export default function NewSellerProductPage() {
                         Tier {index + 1}
                       </p>
 
-                      {tiers.length >
-                        1 && (
+                      {tiers.length > 1 && (
                         <button
                           type="button"
                           onClick={() =>
@@ -864,7 +1181,10 @@ export default function NewSellerProductPage() {
 
                     <div className="grid gap-3 sm:grid-cols-3">
 
+                      {/* MIN */}
+
                       <div>
+
                         <label className="mb-1.5 block text-[10px] font-bold text-gray-500">
                           Minimum Qty
                         </label>
@@ -885,9 +1205,13 @@ export default function NewSellerProductPage() {
                           placeholder="10"
                           className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-black"
                         />
+
                       </div>
 
+                      {/* MAX */}
+
                       <div>
+
                         <label className="mb-1.5 block text-[10px] font-bold text-gray-500">
                           Maximum Qty
                         </label>
@@ -908,14 +1232,19 @@ export default function NewSellerProductPage() {
                           placeholder="Leave empty for +"
                           className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-black"
                         />
+
                       </div>
 
+                      {/* PRICE */}
+
                       <div>
+
                         <label className="mb-1.5 block text-[10px] font-bold text-gray-500">
                           Price / Piece
                         </label>
 
                         <div className="relative">
+
                           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
                             ₹
                           </span>
@@ -933,10 +1262,12 @@ export default function NewSellerProductPage() {
                                 e.target.value
                               )
                             }
-                            placeholder="149"
+                            placeholder="299"
                             className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-7 pr-3 text-sm outline-none focus:border-black"
                           />
+
                         </div>
+
                       </div>
 
                     </div>
@@ -949,7 +1280,10 @@ export default function NewSellerProductPage() {
 
           </section>
 
-          {/* MOQ + STOCK */}
+          {/* =================================
+              MOQ + STOCK
+          ================================= */}
+
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
@@ -962,7 +1296,10 @@ export default function NewSellerProductPage() {
 
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
 
+              {/* MOQ */}
+
               <div>
+
                 <label className="mb-2 block text-xs font-bold">
                   Minimum Order Quantity (MOQ) *
                 </label>
@@ -982,9 +1319,13 @@ export default function NewSellerProductPage() {
                 <p className="mt-1.5 text-[10px] text-gray-400">
                   Wholesale customers must purchase at least this quantity.
                 </p>
+
               </div>
 
+              {/* STOCK */}
+
               <div>
+
                 <label className="mb-2 block text-xs font-bold">
                   Available Stock *
                 </label>
@@ -1001,13 +1342,17 @@ export default function NewSellerProductPage() {
                   placeholder="100"
                   className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
                 />
+
               </div>
 
             </div>
 
           </section>
 
-          {/* SUBMIT */}
+          {/* =================================
+              SUBMIT
+          ================================= */}
+
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <div className="rounded-2xl bg-gray-50 p-4">
@@ -1035,7 +1380,11 @@ export default function NewSellerProductPage() {
 
               <button
                 type="submit"
-                disabled={saving}
+                disabled={
+                  saving ||
+                  categoriesLoading ||
+                  categories.length === 0
+                }
                 className="rounded-xl bg-black px-7 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving
