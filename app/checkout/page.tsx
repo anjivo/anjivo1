@@ -2,45 +2,34 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 
-import Header from "@/components/Header";
-import Footer from "@/components/Footer";
 import { auth } from "@/lib/firebase";
-import {
-  getCart,
-  clearCart,
-  type CartItem,
-} from "@/lib/cart";
-import {
-  createOrder,
-  type ShippingAddress,
-} from "@/lib/orders";
+import { getCart, groupCartBySeller } from "@/lib/cart";
+import { createCustomerOrder } from "@/lib/orders";
+import type { ShippingAddress } from "@/lib/orders";
+import type { Cart } from "@/lib/cart";
+
+type FormErrors = {
+  fullName?: string;
+  phone?: string;
+  addressLine1?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+};
 
 export default function CheckoutPage() {
-  const router = useRouter();
+  const [userId, setUserId] = useState("");
+  const [cart, setCart] = useState<Cart | null>(null);
 
-  const [user, setUser] =
-    useState<User | null>(null);
-
-  const [items, setItems] =
-    useState<CartItem[]>([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
+  const [loading, setLoading] = useState(true);
   const [placingOrder, setPlacingOrder] =
     useState(false);
 
-  const [error, setError] =
-    useState("");
-
-  const [success, setSuccess] =
-    useState("");
-
-  const [paymentMethod, setPaymentMethod] =
-    useState<"COD" | "ONLINE">("COD");
+  const [error, setError] = useState("");
+  const [errors, setErrors] =
+    useState<FormErrors>({});
 
   const [address, setAddress] =
     useState<ShippingAddress>({
@@ -54,179 +43,150 @@ export default function CheckoutPage() {
     });
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (currentUser) => {
-          setUser(currentUser);
-
-          if (!currentUser) {
-            router.replace(
-              "/login?redirect=/checkout"
-            );
-            return;
-          }
-
-          try {
-            const cart = await getCart(
-              currentUser.uid
-            );
-
-            setItems(cart.items);
-          } catch (err) {
-            console.error(err);
-
-            setError(
-              "Unable to load your cart."
-            );
-          } finally {
-            setLoading(false);
-          }
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (user) => {
+        if (!user) {
+          setUserId("");
+          setCart(null);
+          setLoading(false);
+          return;
         }
-      );
+
+        setUserId(user.uid);
+
+        try {
+          const currentCart = await getCart(user.uid);
+          setCart(currentCart);
+
+          setAddress((current) => ({
+            ...current,
+            fullName:
+              current.fullName ||
+              user.displayName ||
+              "",
+          }));
+        } catch (err) {
+          console.error(err);
+          setError(
+            "Unable to load your cart."
+          );
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
 
     return () => unsubscribe();
-  }, [router]);
+  }, []);
 
-  const subtotal = useMemo(() => {
-    return items.reduce(
-      (total, item) =>
-        total +
-        item.selectedPrice *
-          item.quantity,
-      0
-    );
-  }, [items]);
+  const sellerGroups = useMemo(() => {
+    if (!cart) return [];
 
-  const totalQuantity = useMemo(() => {
-    return items.reduce(
-      (total, item) =>
-        total + item.quantity,
-      0
+    return Object.entries(
+      groupCartBySeller(cart)
     );
-  }, [items]);
+  }, [cart]);
+
+  const subtotal = cart?.subtotal ?? 0;
+  const shippingCharge = 0;
+  const discount = 0;
+  const total = subtotal + shippingCharge - discount;
 
   function updateAddress(
     field: keyof ShippingAddress,
     value: string
   ) {
-    setAddress((previous) => ({
-      ...previous,
+    setAddress((current) => ({
+      ...current,
       [field]: value,
     }));
+
+    setErrors((current) => ({
+      ...current,
+      [field]: undefined,
+    }));
+
+    setError("");
   }
 
-  function validateAddress() {
-    if (!address.fullName.trim()) {
-      return "Please enter your full name.";
+  function validateAddress(): boolean {
+    const nextErrors: FormErrors = {};
+
+    if (address.fullName.trim().length < 2) {
+      nextErrors.fullName =
+        "Enter your full name.";
+    }
+
+    if (!/^[6-9]\d{9}$/.test(address.phone.trim())) {
+      nextErrors.phone =
+        "Enter a valid 10 digit mobile number.";
     }
 
     if (
-      !/^[6-9]\d{9}$/.test(
-        address.phone.trim()
-      )
+      address.addressLine1.trim().length < 5
     ) {
-      return "Please enter a valid 10-digit mobile number.";
+      nextErrors.addressLine1 =
+        "Enter your complete address.";
     }
 
-    if (!address.addressLine1.trim()) {
-      return "Please enter your address.";
+    if (address.city.trim().length < 2) {
+      nextErrors.city =
+        "Enter your city.";
     }
 
-    if (!address.city.trim()) {
-      return "Please enter your city.";
+    if (address.state.trim().length < 2) {
+      nextErrors.state =
+        "Enter your state.";
     }
 
-    if (!address.state.trim()) {
-      return "Please enter your state.";
+    if (!/^\d{6}$/.test(address.pincode.trim())) {
+      nextErrors.pincode =
+        "Enter a valid 6 digit pincode.";
     }
 
-    if (
-      !/^\d{6}$/.test(
-        address.pincode.trim()
-      )
-    ) {
-      return "Please enter a valid 6-digit pincode.";
-    }
+    setErrors(nextErrors);
 
-    return "";
+    return Object.keys(nextErrors).length === 0;
   }
 
-  async function handlePlaceOrder() {
-    if (!user) {
-      router.push(
-        "/login?redirect=/checkout"
-      );
-      return;
-    }
-
-    if (items.length === 0) {
+  async function placeOrder() {
+    if (!userId) {
       setError(
-        "Your cart is empty."
+        "Please login before placing your order."
       );
       return;
     }
 
-    const validationError =
-      validateAddress();
+    if (!cart || cart.items.length === 0) {
+      setError("Your cart is empty.");
+      return;
+    }
 
-    if (validationError) {
-      setError(validationError);
+    if (!validateAddress()) {
       return;
     }
 
     try {
       setPlacingOrder(true);
       setError("");
-      setSuccess("");
 
-      const orderId =
-        await createOrder({
-          userId: user.uid,
-          items,
-          shippingAddress: {
-            fullName:
-              address.fullName.trim(),
-
-            phone:
-              address.phone.trim(),
-
-            addressLine1:
-              address.addressLine1.trim(),
-
-            addressLine2:
-              address.addressLine2?.trim() ||
-              "",
-
-            city:
-              address.city.trim(),
-
-            state:
-              address.state.trim(),
-
-            pincode:
-              address.pincode.trim(),
-          },
-
-          paymentMethod,
+      const result =
+        await createCustomerOrder({
+          userId,
+          shippingAddress: address,
+          paymentMethod: "COD",
         });
 
-      await clearCart(user.uid);
-
-      setSuccess(
-        "Order placed successfully."
-      );
-
-      setTimeout(() => {
-        router.push(
-          `/account/orders/${orderId}`
-        );
-      }, 700);
+      window.location.href =
+        `/order-success/${result.orderId}`;
     } catch (err) {
       console.error(err);
 
       setError(
-        "Unable to place order. Please try again."
+        err instanceof Error
+          ? err.message
+          : "Unable to place order."
       );
     } finally {
       setPlacingOrder(false);
@@ -235,453 +195,386 @@ export default function CheckoutPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#f7f8fa]">
-        <Header />
-
-        <main className="mx-auto max-w-7xl px-4 py-16">
-          <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-            <div className="text-3xl">
-              ⏳
-            </div>
-
-            <p className="mt-3 text-sm font-semibold text-gray-500">
-              Loading checkout...
-            </p>
+      <main className="min-h-screen bg-slate-50">
+        <div className="mx-auto max-w-7xl px-4 py-16">
+          <div className="rounded-3xl border bg-white p-10 text-center">
+            Loading checkout...
           </div>
-        </main>
-
-        <Footer />
-      </div>
+        </div>
+      </main>
     );
   }
 
-  if (items.length === 0) {
+  if (!userId) {
     return (
-      <div className="min-h-screen bg-[#f7f8fa]">
-        <Header />
-
-        <main className="mx-auto max-w-7xl px-4 py-16">
-          <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-            <div className="text-5xl">
-              🛒
+      <main className="min-h-screen bg-slate-50">
+        <div className="mx-auto max-w-xl px-4 py-20">
+          <div className="rounded-3xl border bg-white p-8 text-center shadow-sm">
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-2xl">
+              🔐
             </div>
 
-            <h1 className="mt-4 text-2xl font-black">
+            <h1 className="text-2xl font-bold text-slate-900">
+              Login Required
+            </h1>
+
+            <p className="mt-2 text-slate-500">
+              Please login to continue checkout.
+            </p>
+
+            <Link
+              href="/login?redirect=/checkout"
+              className="mt-6 inline-flex rounded-xl bg-slate-900 px-6 py-3 font-semibold text-white"
+            >
+              Login
+            </Link>
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (!cart || cart.items.length === 0) {
+    return (
+      <main className="min-h-screen bg-slate-50">
+        <div className="mx-auto max-w-xl px-4 py-20">
+          <div className="rounded-3xl border bg-white p-8 text-center shadow-sm">
+            <div className="text-5xl">🛒</div>
+
+            <h1 className="mt-4 text-2xl font-bold text-slate-900">
               Your cart is empty
             </h1>
 
-            <p className="mt-2 text-sm text-gray-500">
-              Add some products before checkout.
+            <p className="mt-2 text-slate-500">
+              Add products before proceeding to checkout.
             </p>
 
             <Link
               href="/products"
-              className="mt-6 inline-flex rounded-xl bg-black px-6 py-3 text-sm font-bold text-white"
+              className="mt-6 inline-flex rounded-xl bg-slate-900 px-6 py-3 font-semibold text-white"
             >
-              Continue Shopping
+              Browse Products
             </Link>
           </div>
-        </main>
-
-        <Footer />
-      </div>
+        </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#f7f8fa] text-gray-950">
-      <Header />
+    <main className="min-h-screen bg-slate-50">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+        {/* Header */}
 
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:py-10">
-        {/* HEADER */}
-        <div className="mb-6">
-          <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">
-            ANJIVO Checkout
-          </p>
+        <div className="mb-8">
+          <Link
+            href="/cart"
+            className="text-sm font-semibold text-slate-500 hover:text-slate-900"
+          >
+            ← Back to Cart
+          </Link>
 
-          <h1 className="mt-2 text-3xl font-black tracking-tight">
-            Complete Your Order
+          <h1 className="mt-3 text-3xl font-black tracking-tight text-slate-900">
+            Checkout
           </h1>
 
-          <p className="mt-1 text-sm text-gray-500">
-            Enter delivery details and choose your payment method.
+          <p className="mt-1 text-slate-500">
+            Complete your delivery details and place your order.
           </p>
         </div>
 
-        {/* ERROR */}
         {error && (
-          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+          <div className="mb-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">
             {error}
           </div>
         )}
 
-        {/* SUCCESS */}
-        {success && (
-          <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
-            {success}
-          </div>
-        )}
-
-        <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
+        <div className="grid gap-8 lg:grid-cols-[1fr_390px]">
           {/* LEFT */}
-          <div className="space-y-5">
-            {/* ADDRESS */}
-            <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black text-white">
-                  📍
-                </div>
 
-                <div>
-                  <h2 className="text-lg font-black">
-                    Delivery Address
-                  </h2>
+          <div className="space-y-6">
+            {/* Address */}
 
-                  <p className="text-xs text-gray-400">
-                    Where should we deliver your order?
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                {/* FULL NAME */}
-                <div>
-                  <label className="mb-1.5 block text-xs font-bold">
-                    Full Name *
-                  </label>
-
-                  <input
-                    type="text"
-                    value={address.fullName}
-                    onChange={(e) =>
-                      updateAddress(
-                        "fullName",
-                        e.target.value
-                      )
-                    }
-                    placeholder="Enter full name"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-
-                {/* PHONE */}
-                <div>
-                  <label className="mb-1.5 block text-xs font-bold">
-                    Mobile Number *
-                  </label>
-
-                  <input
-                    type="tel"
-                    value={address.phone}
-                    maxLength={10}
-                    onChange={(e) =>
-                      updateAddress(
-                        "phone",
-                        e.target.value.replace(
-                          /\D/g,
-                          ""
-                        )
-                      )
-                    }
-                    placeholder="10-digit mobile"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-
-                {/* ADDRESS */}
-                <div className="sm:col-span-2">
-                  <label className="mb-1.5 block text-xs font-bold">
-                    Address *
-                  </label>
-
-                  <textarea
-                    value={
-                      address.addressLine1
-                    }
-                    onChange={(e) =>
-                      updateAddress(
-                        "addressLine1",
-                        e.target.value
-                      )
-                    }
-                    placeholder="House / Shop / Street / Area"
-                    rows={3}
-                    className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-
-                {/* LANDMARK */}
-                <div className="sm:col-span-2">
-                  <label className="mb-1.5 block text-xs font-bold">
-                    Landmark
-                    <span className="ml-1 font-normal text-gray-400">
-                      (Optional)
-                    </span>
-                  </label>
-
-                  <input
-                    type="text"
-                    value={
-                      address.addressLine2
-                    }
-                    onChange={(e) =>
-                      updateAddress(
-                        "addressLine2",
-                        e.target.value
-                      )
-                    }
-                    placeholder="Nearby landmark"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-
-                {/* CITY */}
-                <div>
-                  <label className="mb-1.5 block text-xs font-bold">
-                    City *
-                  </label>
-
-                  <input
-                    type="text"
-                    value={address.city}
-                    onChange={(e) =>
-                      updateAddress(
-                        "city",
-                        e.target.value
-                      )
-                    }
-                    placeholder="City"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-
-                {/* STATE */}
-                <div>
-                  <label className="mb-1.5 block text-xs font-bold">
-                    State *
-                  </label>
-
-                  <input
-                    type="text"
-                    value={address.state}
-                    onChange={(e) =>
-                      updateAddress(
-                        "state",
-                        e.target.value
-                      )
-                    }
-                    placeholder="State"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-
-                {/* PINCODE */}
-                <div>
-                  <label className="mb-1.5 block text-xs font-bold">
-                    Pincode *
-                  </label>
-
-                  <input
-                    type="text"
-                    value={address.pincode}
-                    maxLength={6}
-                    onChange={(e) =>
-                      updateAddress(
-                        "pincode",
-                        e.target.value.replace(
-                          /\D/g,
-                          ""
-                        )
-                      )
-                    }
-                    placeholder="6-digit pincode"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-              </div>
-            </section>
-
-            {/* PAYMENT */}
-            <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-              <h2 className="text-lg font-black">
-                Payment Method
-              </h2>
-
-              <p className="mt-1 text-xs text-gray-400">
-                Choose how you want to pay.
-              </p>
-
-              <div className="mt-5 space-y-3">
-                {/* COD */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPaymentMethod("COD")
-                  }
-                  className={`flex w-full items-center justify-between rounded-2xl border p-4 text-left transition ${
-                    paymentMethod === "COD"
-                      ? "border-black bg-gray-50"
-                      : "border-gray-200"
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-xl">
-                      💵
-                    </div>
-
-                    <div>
-                      <p className="text-sm font-black">
-                        Cash on Delivery
-                      </p>
-
-                      <p className="mt-0.5 text-[10px] text-gray-400">
-                        Pay when your order arrives
-                      </p>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`h-5 w-5 rounded-full border-2 ${
-                      paymentMethod === "COD"
-                        ? "border-black bg-black"
-                        : "border-gray-300"
-                    }`}
-                  />
-                </button>
-
-                {/* ONLINE */}
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPaymentMethod("ONLINE")
-                  }
-                  className={`flex w-full items-center justify-between rounded-2xl border p-4 text-left transition ${
-                    paymentMethod === "ONLINE"
-                      ? "border-black bg-gray-50"
-                      : "border-gray-200"
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-xl">
-                      💳
-                    </div>
-
-                    <div>
-                      <p className="text-sm font-black">
-                        Online Payment
-                      </p>
-
-                      <p className="mt-0.5 text-[10px] text-gray-400">
-                        UPI / Card / Net Banking
-                      </p>
-                    </div>
-                  </div>
-
-                  <div
-                    className={`h-5 w-5 rounded-full border-2 ${
-                      paymentMethod === "ONLINE"
-                        ? "border-black bg-black"
-                        : "border-gray-300"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {paymentMethod === "ONLINE" && (
-                <div className="mt-4 rounded-xl bg-yellow-50 px-4 py-3 text-xs font-semibold text-yellow-800">
-                  Online payment gateway will be connected in the next payment integration step.
-                </div>
-              )}
-            </section>
-
-            {/* ITEMS */}
-            <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-black">
-                  Order Items
+            <section className="rounded-3xl border bg-white p-5 shadow-sm sm:p-7">
+              <div className="mb-6">
+                <h2 className="text-xl font-bold text-slate-900">
+                  1. Delivery Address
                 </h2>
 
-                <span className="text-xs font-bold text-gray-400">
-                  {totalQuantity} items
-                </span>
+                <p className="mt-1 text-sm text-slate-500">
+                  Where should we deliver your order?
+                </p>
               </div>
 
-              <div className="mt-5 space-y-3">
-                {items.map((item) => (
-                  <div
-                    key={`${item.productId}-${item.pricingType}`}
-                    className="flex gap-3 rounded-2xl border border-gray-100 p-3"
-                  >
-                    <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gray-100">
-                      {item.image ? (
-                        <img
-                          src={item.image}
-                          alt={item.name}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <span>
-                          📦
-                        </span>
-                      )}
-                    </div>
+              <div className="grid gap-5 sm:grid-cols-2">
+                <Field
+                  label="Full Name"
+                  value={address.fullName}
+                  onChange={(value) =>
+                    updateAddress("fullName", value)
+                  }
+                  error={errors.fullName}
+                  placeholder="Enter full name"
+                />
 
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-bold">
-                        {item.name}
-                      </p>
+                <Field
+                  label="Mobile Number"
+                  value={address.phone}
+                  onChange={(value) =>
+                    updateAddress("phone", value)
+                  }
+                  error={errors.phone}
+                  placeholder="10 digit mobile number"
+                  type="tel"
+                />
 
-                      <p className="mt-1 text-[10px] uppercase text-gray-400">
-                        {item.pricingType}
-                      </p>
+                <div className="sm:col-span-2">
+                  <Field
+                    label="Address Line 1"
+                    value={address.addressLine1}
+                    onChange={(value) =>
+                      updateAddress(
+                        "addressLine1",
+                        value
+                      )
+                    }
+                    error={errors.addressLine1}
+                    placeholder="House / Shop / Street / Area"
+                  />
+                </div>
 
-                      <div className="mt-1 flex items-center justify-between">
-                        <span className="text-xs text-gray-500">
-                          Qty:{" "}
-                          {item.quantity}
-                        </span>
+                <div className="sm:col-span-2">
+                  <Field
+                    label="Address Line 2"
+                    value={address.addressLine2 || ""}
+                    onChange={(value) =>
+                      updateAddress(
+                        "addressLine2",
+                        value
+                      )
+                    }
+                    placeholder="Landmark / Area (optional)"
+                  />
+                </div>
 
-                        <span className="text-sm font-black">
-                          ₹
-                          {(
-                            item.selectedPrice *
-                            item.quantity
-                          ).toLocaleString(
-                            "en-IN"
-                          )}
-                        </span>
+                <Field
+                  label="City"
+                  value={address.city}
+                  onChange={(value) =>
+                    updateAddress("city", value)
+                  }
+                  error={errors.city}
+                  placeholder="City"
+                />
+
+                <Field
+                  label="State"
+                  value={address.state}
+                  onChange={(value) =>
+                    updateAddress("state", value)
+                  }
+                  error={errors.state}
+                  placeholder="State"
+                />
+
+                <Field
+                  label="Pincode"
+                  value={address.pincode}
+                  onChange={(value) =>
+                    updateAddress(
+                      "pincode",
+                      value.replace(/\D/g, "").slice(0, 6)
+                    )
+                  }
+                  error={errors.pincode}
+                  placeholder="6 digit pincode"
+                  type="text"
+                />
+              </div>
+            </section>
+
+            {/* Payment */}
+
+            <section className="rounded-3xl border bg-white p-5 shadow-sm sm:p-7">
+              <div className="mb-6">
+                <h2 className="text-xl font-bold text-slate-900">
+                  2. Payment Method
+                </h2>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Choose how you want to pay.
+                </p>
+              </div>
+
+              <div className="rounded-2xl border-2 border-slate-900 bg-slate-50 p-4">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white">
+                    ₹
+                  </div>
+
+                  <div>
+                    <p className="font-bold text-slate-900">
+                      Cash on Delivery
+                    </p>
+
+                    <p className="mt-1 text-sm text-slate-500">
+                      Pay when your order is delivered.
+                    </p>
+                  </div>
+
+                  <div className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-slate-900">
+                    <div className="h-2 w-2 rounded-full bg-white" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-700">
+                Online payment will be enabled after payment gateway integration.
+              </div>
+            </section>
+
+            {/* Sellers */}
+
+            <section className="rounded-3xl border bg-white p-5 shadow-sm sm:p-7">
+              <div className="mb-6">
+                <h2 className="text-xl font-bold text-slate-900">
+                  3. Order Items
+                </h2>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Your cart may contain products from multiple sellers.
+                </p>
+              </div>
+
+              <div className="space-y-5">
+                {sellerGroups.map(
+                  ([sellerId, items]) => (
+                    <div
+                      key={sellerId}
+                      className="rounded-2xl border p-4"
+                    >
+                      <div className="mb-4 flex items-center gap-3">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
+                          🏪
+                        </div>
+
+                        <div>
+                          <p className="text-xs text-slate-500">
+                            Seller
+                          </p>
+
+                          <p className="font-bold text-slate-900">
+                            {items[0]?.sellerName ||
+                              "ANJIVO Seller"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3">
+                        {items.map((item) => (
+                          <div
+                            key={`${item.id}-${item.pricingType}`}
+                            className="flex gap-3"
+                          >
+                            <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-slate-100">
+                              {item.image ? (
+                                <img
+                                  src={item.image}
+                                  alt={item.name}
+                                  className="h-full w-full object-cover"
+                                />
+                              ) : (
+                                <div className="flex h-full items-center justify-center text-xl">
+                                  📦
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="min-w-0 flex-1">
+                              <p className="line-clamp-2 text-sm font-semibold text-slate-900">
+                                {item.name}
+                              </p>
+
+                              <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">
+                                  Qty: {item.quantity}
+                                </span>
+
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">
+                                  {item.pricingType ===
+                                  "wholesale"
+                                    ? "Wholesale"
+                                    : "Retail"}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="text-right">
+                              <p className="font-bold text-slate-900">
+                                ₹
+                                {(
+                                  item.selectedPrice *
+                                  item.quantity
+                                ).toLocaleString("en-IN")}
+                              </p>
+
+                              <p className="text-xs text-slate-500">
+                                ₹
+                                {item.selectedPrice.toLocaleString(
+                                  "en-IN"
+                                )}{" "}
+                                each
+                              </p>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                )}
               </div>
             </section>
           </div>
 
           {/* RIGHT */}
-          <aside>
-            <div className="sticky top-24 rounded-3xl border border-gray-200 bg-white p-5 sm:p-6">
-              <h2 className="text-lg font-black">
+
+          <aside className="lg:sticky lg:top-6 lg:self-start">
+            <div className="rounded-3xl border bg-white p-5 shadow-sm sm:p-6">
+              <h2 className="text-xl font-bold text-slate-900">
                 Order Summary
               </h2>
 
-              <div className="mt-5 space-y-3 text-sm">
+              <div className="mt-6 space-y-4 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-500">
+                  <span className="text-slate-500">
                     Items
                   </span>
 
-                  <span className="font-semibold">
-                    {totalQuantity}
+                  <span className="font-semibold text-slate-900">
+                    {cart.items.reduce(
+                      (sum, item) =>
+                        sum + item.quantity,
+                      0
+                    )}
                   </span>
                 </div>
 
                 <div className="flex justify-between">
-                  <span className="text-gray-500">
+                  <span className="text-slate-500">
+                    Sellers
+                  </span>
+
+                  <span className="font-semibold text-slate-900">
+                    {sellerGroups.length}
+                  </span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="text-slate-500">
                     Subtotal
                   </span>
 
-                  <span className="font-semibold">
+                  <span className="font-semibold text-slate-900">
                     ₹
                     {subtotal.toLocaleString(
                       "en-IN"
@@ -690,66 +583,123 @@ export default function CheckoutPage() {
                 </div>
 
                 <div className="flex justify-between">
-                  <span className="text-gray-500">
-                    Delivery
+                  <span className="text-slate-500">
+                    Shipping
                   </span>
 
-                  <span className="font-bold">
-                    FREE
+                  <span className="font-semibold text-emerald-600">
+                    {shippingCharge === 0
+                      ? "FREE"
+                      : `₹${shippingCharge}`}
                   </span>
                 </div>
-              </div>
 
-              <div className="my-5 border-t border-gray-100" />
+                <div className="flex justify-between">
+                  <span className="text-slate-500">
+                    Discount
+                  </span>
 
-              <div className="flex items-end justify-between">
-                <div>
-                  <p className="text-xs text-gray-400">
-                    Total Amount
-                  </p>
-
-                  <p className="mt-1 text-2xl font-black">
+                  <span className="font-semibold text-slate-900">
                     ₹
-                    {subtotal.toLocaleString(
+                    {discount.toLocaleString(
                       "en-IN"
                     )}
-                  </p>
+                  </span>
                 </div>
 
-                <span className="rounded-full bg-gray-100 px-3 py-1 text-[9px] font-bold">
-                  {paymentMethod}
-                </span>
+                <div className="border-t pt-4">
+                  <div className="flex items-end justify-between">
+                    <div>
+                      <p className="text-sm text-slate-500">
+                        Total Amount
+                      </p>
+
+                      <p className="mt-1 text-3xl font-black text-slate-900">
+                        ₹
+                        {total.toLocaleString(
+                          "en-IN"
+                        )}
+                      </p>
+                    </div>
+
+                    <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+                      COD
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <button
                 type="button"
-                onClick={handlePlaceOrder}
+                onClick={placeOrder}
                 disabled={placingOrder}
-                className="mt-6 w-full rounded-2xl bg-black py-4 text-sm font-black text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                className="mt-7 w-full rounded-2xl bg-slate-900 px-5 py-4 text-base font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {placingOrder
                   ? "Placing Order..."
-                  : paymentMethod === "COD"
-                    ? "Place Order"
-                    : "Continue to Payment"}
+                  : `Place Order • ₹${total.toLocaleString(
+                      "en-IN"
+                    )}`}
               </button>
 
-              <p className="mt-4 text-center text-[9px] leading-4 text-gray-400">
-                By placing this order, you agree to ANJIVO's terms and policies.
-              </p>
+              <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">
+                By placing this order, you confirm that the delivery information provided by you is correct.
+              </div>
 
               <Link
                 href="/cart"
-                className="mt-4 block text-center text-xs font-bold text-gray-500 hover:text-black"
+                className="mt-4 block text-center text-sm font-semibold text-slate-600 hover:text-slate-900"
               >
-                ← Back to Cart
+                ← Modify Cart
               </Link>
             </div>
           </aside>
         </div>
-      </main>
+      </div>
+    </main>
+  );
+}
 
-      <Footer />
+function Field({
+  label,
+  value,
+  onChange,
+  error,
+  placeholder,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string;
+  placeholder?: string;
+  type?: string;
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-semibold text-slate-700">
+        {label}
+      </label>
+
+      <input
+        type={type}
+        value={value}
+        onChange={(event) =>
+          onChange(event.target.value)
+        }
+        placeholder={placeholder}
+        className={`w-full rounded-xl border px-4 py-3 text-sm outline-none transition focus:ring-2 ${
+          error
+            ? "border-red-300 focus:border-red-500 focus:ring-red-100"
+            : "border-slate-200 focus:border-slate-900 focus:ring-slate-100"
+        }`}
+      />
+
+      {error && (
+        <p className="mt-1 text-xs font-medium text-red-600">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
