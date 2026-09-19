@@ -124,7 +124,7 @@ export default function CartPage() {
 
     try {
       setUpdating(
-        `${item.sellerId}-${item.productId}`
+        `${item.sellerId}-${item.id}-${item.pricingType}`
       );
 
       setError("");
@@ -132,13 +132,19 @@ export default function CartPage() {
       const updated =
         await updateCartQuantity(
           userId,
-          item.productId,
+          item.id,
           item.sellerId,
+          item.pricingType,
           quantity
         );
 
       setCart(updated);
     } catch (err) {
+      console.error(
+        "Quantity update error:",
+        err
+      );
+
       setError(
         err instanceof Error
           ? err.message
@@ -160,7 +166,7 @@ export default function CartPage() {
 
     try {
       setUpdating(
-        `${item.sellerId}-${item.productId}`
+        `${item.sellerId}-${item.id}-${item.pricingType}`
       );
 
       setError("");
@@ -168,12 +174,18 @@ export default function CartPage() {
       const updated =
         await removeFromCart(
           userId,
-          item.productId,
-          item.sellerId
+          item.id,
+          item.sellerId,
+          item.pricingType
         );
 
       setCart(updated);
     } catch (err) {
+      console.error(
+        "Remove cart item error:",
+        err
+      );
+
       setError(
         err instanceof Error
           ? err.message
@@ -349,7 +361,7 @@ export default function CartPage() {
 
                   {group.items.map((item) => {
                     const key =
-                      `${item.sellerId}-${item.productId}`;
+                      `${item.sellerId}-${item.id}-${item.pricingType}`;
 
                     const isUpdating =
                       updating === key;
@@ -386,6 +398,7 @@ export default function CartPage() {
                           {/* INFO */}
 
                           <div className="min-w-0 flex-1">
+
                             <Link
                               href={`/products/${item.slug}`}
                               className="text-sm font-black hover:underline"
@@ -408,6 +421,7 @@ export default function CartPage() {
                             )}
 
                             <div className="mt-3 flex flex-wrap items-center gap-3">
+
                               <p className="text-base font-black">
                                 {money(
                                   item.selectedPrice
@@ -420,6 +434,7 @@ export default function CartPage() {
                                   {money(item.mrp)}
                                 </p>
                               )}
+
                             </div>
                           </div>
 
@@ -586,6 +601,7 @@ export default function CartPage() {
               <div className="my-5 border-t border-gray-100" />
 
               <div className="flex items-center justify-between">
+
                 <span className="text-sm font-black">
                   Total
                 </span>
@@ -593,6 +609,7 @@ export default function CartPage() {
                 <span className="text-xl font-black">
                   {money(subtotal)}
                 </span>
+
               </div>
 
               <Link
@@ -612,6 +629,7 @@ export default function CartPage() {
             {/* SECURITY */}
 
             <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
+
               <p className="text-xs font-black">
                 🛡 Secure Shopping
               </p>
@@ -620,6 +638,7 @@ export default function CartPage() {
                 Your cart can contain products from
                 multiple ANJIVO sellers.
               </p>
+
             </div>
 
           </aside>
