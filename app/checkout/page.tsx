@@ -21,22 +21,30 @@ import {
 export default function CheckoutPage() {
   const router = useRouter();
 
-  const [user, setUser] = useState<User | null>(null);
-  const [items, setItems] = useState<CartItem[]>([]);
+  const [user, setUser] =
+    useState<User | null>(null);
 
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] =
+    useState<CartItem[]>([]);
+
+  const [loading, setLoading] =
+    useState(true);
+
   const [placingOrder, setPlacingOrder] =
     useState(false);
 
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [error, setError] =
+    useState("");
+
+  const [success, setSuccess] =
+    useState("");
 
   const [paymentMethod, setPaymentMethod] =
     useState<"COD" | "ONLINE">("COD");
 
   const [address, setAddress] =
     useState<ShippingAddress>({
-      name: "",
+      fullName: "",
       phone: "",
       addressLine1: "",
       addressLine2: "",
@@ -46,32 +54,36 @@ export default function CheckoutPage() {
     });
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      async (currentUser) => {
-        setUser(currentUser);
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        async (currentUser) => {
+          setUser(currentUser);
 
-        if (!currentUser) {
-          router.replace("/login?redirect=/checkout");
-          return;
+          if (!currentUser) {
+            router.replace(
+              "/login?redirect=/checkout"
+            );
+            return;
+          }
+
+          try {
+            const cart = await getCart(
+              currentUser.uid
+            );
+
+            setItems(cart.items);
+          } catch (err) {
+            console.error(err);
+
+            setError(
+              "Unable to load your cart."
+            );
+          } finally {
+            setLoading(false);
+          }
         }
-
-        try {
-          const cart = await getCart(
-            currentUser.uid
-          );
-
-          setItems(cart.items);
-        } catch (err) {
-          console.error(err);
-          setError(
-            "Unable to load your cart."
-          );
-        } finally {
-          setLoading(false);
-        }
-      }
-    );
+      );
 
     return () => unsubscribe();
   }, [router]);
@@ -80,7 +92,8 @@ export default function CheckoutPage() {
     return items.reduce(
       (total, item) =>
         total +
-        item.selectedPrice * item.quantity,
+        item.selectedPrice *
+          item.quantity,
       0
     );
   }, [items]);
@@ -104,7 +117,7 @@ export default function CheckoutPage() {
   }
 
   function validateAddress() {
-    if (!address.name.trim()) {
+    if (!address.fullName.trim()) {
       return "Please enter your full name.";
     }
 
@@ -141,7 +154,9 @@ export default function CheckoutPage() {
 
   async function handlePlaceOrder() {
     if (!user) {
-      router.push("/login?redirect=/checkout");
+      router.push(
+        "/login?redirect=/checkout"
+      );
       return;
     }
 
@@ -170,18 +185,29 @@ export default function CheckoutPage() {
           userId: user.uid,
           items,
           shippingAddress: {
-            ...address,
-            name: address.name.trim(),
-            phone: address.phone.trim(),
+            fullName:
+              address.fullName.trim(),
+
+            phone:
+              address.phone.trim(),
+
             addressLine1:
               address.addressLine1.trim(),
+
             addressLine2:
-              address.addressLine2?.trim() || "",
-            city: address.city.trim(),
-            state: address.state.trim(),
+              address.addressLine2?.trim() ||
+              "",
+
+            city:
+              address.city.trim(),
+
+            state:
+              address.state.trim(),
+
             pincode:
               address.pincode.trim(),
           },
+
           paymentMethod,
         });
 
@@ -236,7 +262,6 @@ export default function CheckoutPage() {
 
         <main className="mx-auto max-w-7xl px-4 py-16">
           <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-
             <div className="text-5xl">
               🛒
             </div>
@@ -255,7 +280,6 @@ export default function CheckoutPage() {
             >
               Continue Shopping
             </Link>
-
           </div>
         </main>
 
@@ -266,14 +290,11 @@ export default function CheckoutPage() {
 
   return (
     <div className="min-h-screen bg-[#f7f8fa] text-gray-950">
-
       <Header />
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:py-10">
-
         {/* HEADER */}
         <div className="mb-6">
-
           <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">
             ANJIVO Checkout
           </p>
@@ -285,7 +306,6 @@ export default function CheckoutPage() {
           <p className="mt-1 text-sm text-gray-500">
             Enter delivery details and choose your payment method.
           </p>
-
         </div>
 
         {/* ERROR */}
@@ -303,15 +323,11 @@ export default function CheckoutPage() {
         )}
 
         <div className="grid gap-6 lg:grid-cols-[1fr_400px]">
-
           {/* LEFT */}
           <div className="space-y-5">
-
             {/* ADDRESS */}
             <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-
               <div className="flex items-center gap-3">
-
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-black text-white">
                   📍
                 </div>
@@ -325,12 +341,10 @@ export default function CheckoutPage() {
                     Where should we deliver your order?
                   </p>
                 </div>
-
               </div>
 
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
-
-                {/* NAME */}
+                {/* FULL NAME */}
                 <div>
                   <label className="mb-1.5 block text-xs font-bold">
                     Full Name *
@@ -338,10 +352,10 @@ export default function CheckoutPage() {
 
                   <input
                     type="text"
-                    value={address.name}
+                    value={address.fullName}
                     onChange={(e) =>
                       updateAddress(
-                        "name",
+                        "fullName",
                         e.target.value
                       )
                     }
@@ -381,7 +395,9 @@ export default function CheckoutPage() {
                   </label>
 
                   <textarea
-                    value={address.addressLine1}
+                    value={
+                      address.addressLine1
+                    }
                     onChange={(e) =>
                       updateAddress(
                         "addressLine1",
@@ -482,14 +498,11 @@ export default function CheckoutPage() {
                     className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
                   />
                 </div>
-
               </div>
-
             </section>
 
             {/* PAYMENT */}
             <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-
               <h2 className="text-lg font-black">
                 Payment Method
               </h2>
@@ -499,7 +512,6 @@ export default function CheckoutPage() {
               </p>
 
               <div className="mt-5 space-y-3">
-
                 {/* COD */}
                 <button
                   type="button"
@@ -512,9 +524,7 @@ export default function CheckoutPage() {
                       : "border-gray-200"
                   }`}
                 >
-
                   <div className="flex items-center gap-3">
-
                     <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-xl">
                       💵
                     </div>
@@ -528,7 +538,6 @@ export default function CheckoutPage() {
                         Pay when your order arrives
                       </p>
                     </div>
-
                   </div>
 
                   <div
@@ -538,7 +547,6 @@ export default function CheckoutPage() {
                         : "border-gray-300"
                     }`}
                   />
-
                 </button>
 
                 {/* ONLINE */}
@@ -553,9 +561,7 @@ export default function CheckoutPage() {
                       : "border-gray-200"
                   }`}
                 >
-
                   <div className="flex items-center gap-3">
-
                     <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white text-xl">
                       💳
                     </div>
@@ -569,7 +575,6 @@ export default function CheckoutPage() {
                         UPI / Card / Net Banking
                       </p>
                     </div>
-
                   </div>
 
                   <div
@@ -579,9 +584,7 @@ export default function CheckoutPage() {
                         : "border-gray-300"
                     }`}
                   />
-
                 </button>
-
               </div>
 
               {paymentMethod === "ONLINE" && (
@@ -589,14 +592,11 @@ export default function CheckoutPage() {
                   Online payment gateway will be connected in the next payment integration step.
                 </div>
               )}
-
             </section>
 
             {/* ITEMS */}
             <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-
               <div className="flex items-center justify-between">
-
                 <h2 className="text-lg font-black">
                   Order Items
                 </h2>
@@ -604,19 +604,15 @@ export default function CheckoutPage() {
                 <span className="text-xs font-bold text-gray-400">
                   {totalQuantity} items
                 </span>
-
               </div>
 
               <div className="mt-5 space-y-3">
-
                 {items.map((item) => (
                   <div
                     key={`${item.productId}-${item.pricingType}`}
                     className="flex gap-3 rounded-2xl border border-gray-100 p-3"
                   >
-
                     <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-gray-100">
-
                       {item.image ? (
                         <img
                           src={item.image}
@@ -624,13 +620,13 @@ export default function CheckoutPage() {
                           className="h-full w-full object-cover"
                         />
                       ) : (
-                        <span>📦</span>
+                        <span>
+                          📦
+                        </span>
                       )}
-
                     </div>
 
                     <div className="min-w-0 flex-1">
-
                       <p className="truncate text-sm font-bold">
                         {item.name}
                       </p>
@@ -640,9 +636,9 @@ export default function CheckoutPage() {
                       </p>
 
                       <div className="mt-1 flex items-center justify-between">
-
                         <span className="text-xs text-gray-500">
-                          Qty: {item.quantity}
+                          Qty:{" "}
+                          {item.quantity}
                         </span>
 
                         <span className="text-sm font-black">
@@ -650,33 +646,26 @@ export default function CheckoutPage() {
                           {(
                             item.selectedPrice *
                             item.quantity
-                          ).toLocaleString("en-IN")}
+                          ).toLocaleString(
+                            "en-IN"
+                          )}
                         </span>
-
                       </div>
-
                     </div>
-
                   </div>
                 ))}
-
               </div>
-
             </section>
-
           </div>
 
           {/* RIGHT */}
           <aside>
-
             <div className="sticky top-24 rounded-3xl border border-gray-200 bg-white p-5 sm:p-6">
-
               <h2 className="text-lg font-black">
                 Order Summary
               </h2>
 
               <div className="mt-5 space-y-3 text-sm">
-
                 <div className="flex justify-between">
                   <span className="text-gray-500">
                     Items
@@ -709,13 +698,11 @@ export default function CheckoutPage() {
                     FREE
                   </span>
                 </div>
-
               </div>
 
               <div className="my-5 border-t border-gray-100" />
 
               <div className="flex items-end justify-between">
-
                 <div>
                   <p className="text-xs text-gray-400">
                     Total Amount
@@ -732,7 +719,6 @@ export default function CheckoutPage() {
                 <span className="rounded-full bg-gray-100 px-3 py-1 text-[9px] font-bold">
                   {paymentMethod}
                 </span>
-
               </div>
 
               <button
@@ -744,8 +730,8 @@ export default function CheckoutPage() {
                 {placingOrder
                   ? "Placing Order..."
                   : paymentMethod === "COD"
-                  ? "Place Order"
-                  : "Continue to Payment"}
+                    ? "Place Order"
+                    : "Continue to Payment"}
               </button>
 
               <p className="mt-4 text-center text-[9px] leading-4 text-gray-400">
@@ -758,17 +744,12 @@ export default function CheckoutPage() {
               >
                 ← Back to Cart
               </Link>
-
             </div>
-
           </aside>
-
         </div>
-
       </main>
 
       <Footer />
-
     </div>
   );
 }
