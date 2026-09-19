@@ -50,10 +50,13 @@ export type OrderStatus =
   | "pending"
   | "confirmed"
   | "processing"
+  | "packed"
   | "shipped"
+  | "out_for_delivery"
   | "delivered"
   | "cancelled"
-  | "returned";
+  | "returned"
+  | "refunded";
 
 export type Order = {
   id: string;
