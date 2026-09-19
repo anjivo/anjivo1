@@ -25,10 +25,14 @@ export default async function ProductsPage() {
 
       <main>
         {/* ================= PAGE HEADER ================= */}
+
         <section className="border-b border-gray-200 bg-white">
           <div className="mx-auto max-w-7xl px-4 py-8 sm:py-10">
+
             <div className="flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
+
               <div>
+
                 <div className="flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-black" />
 
@@ -45,6 +49,7 @@ export default async function ProductsPage() {
                   Discover products from verified sellers. Buy retail
                   or unlock wholesale pricing when you buy in bulk.
                 </p>
+
               </div>
 
               <Link
@@ -53,19 +58,24 @@ export default async function ProductsPage() {
               >
                 📦 Explore Wholesale
               </Link>
+
             </div>
+
           </div>
         </section>
 
         {/* ================= FILTER BAR ================= */}
+
         <section className="border-b border-gray-200 bg-white">
-          <div className="mx-auto flex max-w-7xl items-center gap-2 overflow-x-auto px-4 py-3 whitespace-nowrap">
-            <button
-              type="button"
+
+          <div className="mx-auto flex max-w-7xl items-center gap-2 overflow-x-auto whitespace-nowrap px-4 py-3">
+
+            <Link
+              href="/products"
               className="rounded-lg bg-black px-4 py-2 text-[11px] font-bold text-white"
             >
               All Products
-            </button>
+            </Link>
 
             <Link
               href="/products?sort=new"
@@ -101,14 +111,22 @@ export default async function ProductsPage() {
             >
               📦 Wholesale
             </Link>
+
           </div>
+
         </section>
 
         {/* ================= PRODUCTS ================= */}
+
         <section className="mx-auto max-w-7xl px-4 py-8 sm:py-10">
+
           {error ? (
+
             <div className="rounded-2xl border border-gray-200 bg-white p-8 text-center">
-              <div className="text-3xl">⚠️</div>
+
+              <div className="text-3xl">
+                ⚠️
+              </div>
 
               <h2 className="mt-3 text-lg font-black">
                 Products could not be loaded
@@ -118,10 +136,16 @@ export default async function ProductsPage() {
                 Please check the Firebase connection and Firestore
                 configuration, then refresh the page.
               </p>
+
             </div>
+
           ) : products.length === 0 ? (
+
             <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">
-              <div className="text-5xl">📦</div>
+
+              <div className="text-5xl">
+                📦
+              </div>
 
               <h2 className="mt-4 text-xl font-black">
                 No products available yet
@@ -137,11 +161,19 @@ export default async function ProductsPage() {
               >
                 Become a Seller
               </Link>
+
             </div>
+
           ) : (
+
             <>
+
+              {/* ================= PRODUCT COUNT ================= */}
+
               <div className="mb-5 flex items-center justify-between gap-4">
+
                 <div>
+
                   <p className="text-sm font-black text-gray-900">
                     Products
                   </p>
@@ -149,55 +181,30 @@ export default async function ProductsPage() {
                   <p className="mt-1 text-[11px] text-gray-400">
                     {products.length} products loaded from ANJIVO
                   </p>
+
                 </div>
 
-                <select
-                  defaultValue="latest"
-                  className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 outline-none focus:border-black"
-                  aria-label="Sort products"
-                >
-                  <option value="latest">Latest</option>
-                  <option value="price-low">Price: Low to High</option>
-                  <option value="price-high">Price: High to Low</option>
-                </select>
               </div>
 
+              {/* ================= PRODUCT GRID ================= */}
+
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-4">
+
                 {products.map((product) => (
-                  <Link
+                  <ProductCard
                     key={product.id}
-                    href={`/products/${product.slug || product.id}`}
-                    className="block"
-                  >
-                    <ProductCard
-                      name={product.name}
-                      category={product.categoryName || product.categoryId}
-                      price={product.retailPrice}
-                      wholesalePrice={product.wholesalePrice}
-                      oldPrice={product.mrp}
-                      rating={product.rating}
-                      reviews={product.reviewsCount}
-                      image={product.images[0] || "📦"}
-                      seller={product.sellerName}
-                      moq={product.moq}
-                      stock={product.stock}
-                      verifiedSeller={product.sellerVerified ?? false}
-                      badge={
-                        product.bestSeller
-                          ? "Bestseller"
-                          : product.trending
-                            ? "Trending"
-                            : product.featured
-                              ? "Featured"
-                              : undefined
-                      }
-                    />
-                  </Link>
+                    product={product}
+                  />
                 ))}
+
               </div>
+
             </>
+
           )}
+
         </section>
+
       </main>
 
       <Footer />
