@@ -11,22 +11,14 @@ import type { Product } from "@/types/product";
 
 const productsCollection = collection(db, "products");
 
-
-/* =========================================
-   MAP FIRESTORE PRODUCT
-========================================= */
-
 function mapProduct(
   id: string,
   data: Record<string, unknown>
 ): Product {
   return {
     id,
-
     name: String(data.name ?? ""),
-
     slug: String(data.slug ?? ""),
-
     description:
       data.description !== undefined
         ? String(data.description)
@@ -56,10 +48,9 @@ function mapProduct(
         ? Boolean(data.sellerVerified)
         : undefined,
 
-    images:
-      Array.isArray(data.images)
-        ? data.images.map(String)
-        : [],
+    images: Array.isArray(data.images)
+      ? data.images.map(String)
+      : [],
 
     mrp: Number(data.mrp ?? 0),
 
@@ -71,9 +62,7 @@ function mapProduct(
       data.wholesalePrice ?? 0
     ),
 
-    moq: Number(
-      data.moq ?? 1
-    ),
+    moq: Number(data.moq ?? 1),
 
     wholesaleTiers:
       Array.isArray(data.wholesaleTiers)
@@ -98,9 +87,7 @@ function mapProduct(
           })
         : [],
 
-    stock: Number(
-      data.stock ?? 0
-    ),
+    stock: Number(data.stock ?? 0),
 
     rating:
       data.rating !== undefined
@@ -135,22 +122,12 @@ function mapProduct(
         : false,
 
     createdAt: data.createdAt,
-
     updatedAt: data.updatedAt,
   };
 }
 
-
-/* =========================================
-   FIRESTORE DATE → NUMBER
-========================================= */
-
-function getTime(
-  value: unknown
-): number {
-  if (!value) {
-    return 0;
-  }
+function getTime(value: unknown): number {
+  if (!value) return 0;
 
   if (
     typeof value === "object" &&
@@ -184,11 +161,6 @@ function getTime(
   return 0;
 }
 
-
-/* =========================================
-   SORT NEWEST FIRST
-========================================= */
-
 function sortByNewest(
   products: Product[]
 ): Product[] {
@@ -199,7 +171,6 @@ function sortByNewest(
   );
 }
 
-
 /* =========================================
    GET ALL ACTIVE PRODUCTS
 ========================================= */
@@ -207,15 +178,13 @@ function sortByNewest(
 export async function getProducts(
   productLimit = 24
 ): Promise<Product[]> {
-
   const productsQuery = query(
     productsCollection,
     where("status", "==", "active")
   );
 
-  const snapshot = await getDocs(
-    productsQuery
-  );
+  const snapshot =
+    await getDocs(productsQuery);
 
   const products = snapshot.docs.map(
     (document) =>
@@ -231,7 +200,6 @@ export async function getProducts(
   );
 }
 
-
 /* =========================================
    GET PRODUCT BY SLUG
 ========================================= */
@@ -239,31 +207,20 @@ export async function getProducts(
 export async function getProductBySlug(
   slug: string
 ): Promise<Product | null> {
-
-  /*
-   * Sirf slug se search kar rahe hain.
-   * Status ko JavaScript me check karenge.
-   *
-   * Isse compound Firestore index ki
-   * dependency nahi rahegi.
-   */
-
   const productQuery = query(
     productsCollection,
     where("slug", "==", slug),
     limit(1)
   );
 
-  const snapshot = await getDocs(
-    productQuery
-  );
+  const snapshot =
+    await getDocs(productQuery);
 
   if (snapshot.empty) {
     return null;
   }
 
-  const document =
-    snapshot.docs[0];
+  const document = snapshot.docs[0];
 
   const product = mapProduct(
     document.id,
@@ -277,23 +234,20 @@ export async function getProductBySlug(
   return product;
 }
 
-
 /* =========================================
-   GET FEATURED PRODUCTS
+   FEATURED PRODUCTS
 ========================================= */
 
 export async function getFeaturedProducts(
   productLimit = 8
 ): Promise<Product[]> {
-
   const productsQuery = query(
     productsCollection,
     where("status", "==", "active")
   );
 
-  const snapshot = await getDocs(
-    productsQuery
-  );
+  const snapshot =
+    await getDocs(productsQuery);
 
   const products = snapshot.docs
     .map((document) =>
@@ -313,23 +267,20 @@ export async function getFeaturedProducts(
   );
 }
 
-
 /* =========================================
-   GET BEST SELLERS
+   BEST SELLERS
 ========================================= */
 
 export async function getBestSellerProducts(
   productLimit = 8
 ): Promise<Product[]> {
-
   const productsQuery = query(
     productsCollection,
     where("status", "==", "active")
   );
 
-  const snapshot = await getDocs(
-    productsQuery
-  );
+  const snapshot =
+    await getDocs(productsQuery);
 
   const products = snapshot.docs
     .map((document) =>
@@ -349,23 +300,20 @@ export async function getBestSellerProducts(
   );
 }
 
-
 /* =========================================
-   GET TRENDING PRODUCTS
+   TRENDING PRODUCTS
 ========================================= */
 
 export async function getTrendingProducts(
   productLimit = 8
 ): Promise<Product[]> {
-
   const productsQuery = query(
     productsCollection,
     where("status", "==", "active")
   );
 
-  const snapshot = await getDocs(
-    productsQuery
-  );
+  const snapshot =
+    await getDocs(productsQuery);
 
   const products = snapshot.docs
     .map((document) =>
@@ -380,6 +328,188 @@ export async function getTrendingProducts(
     );
 
   return sortByNewest(products).slice(
+    0,
+    productLimit
+  );
+}
+
+/* =========================================
+   SEARCH + FILTER
+========================================= */
+
+export type ProductFilters = {
+  search?: string;
+  categoryId?: string;
+  sellerId?: string;
+
+  minPrice?: number;
+  maxPrice?: number;
+
+  minRating?: number;
+
+  pricingType?:
+    | "retail"
+    | "wholesale"
+    | "all";
+
+  sort?:
+    | "newest"
+    | "price_low"
+    | "price_high"
+    | "rating_high"
+    | "name_az";
+};
+
+/* =========================================
+   SEARCH PRODUCTS
+========================================= */
+
+export async function searchProducts(
+  filters: ProductFilters = {},
+  productLimit = 48
+): Promise<Product[]> {
+  const productsQuery = query(
+    productsCollection,
+    where("status", "==", "active")
+  );
+
+  const snapshot =
+    await getDocs(productsQuery);
+
+  let products = snapshot.docs.map(
+    (document) =>
+      mapProduct(
+        document.id,
+        document.data()
+      )
+  );
+
+  /* SEARCH */
+
+  const search =
+    filters.search
+      ?.trim()
+      .toLowerCase();
+
+  if (search) {
+    products = products.filter(
+      (product) => {
+        const searchableText = [
+          product.name,
+          product.description,
+          product.categoryName,
+          product.sellerName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+
+        return searchableText.includes(
+          search
+        );
+      }
+    );
+  }
+
+  /* CATEGORY */
+
+  if (filters.categoryId) {
+    products = products.filter(
+      (product) =>
+        product.categoryId ===
+        filters.categoryId
+    );
+  }
+
+  /* SELLER */
+
+  if (filters.sellerId) {
+    products = products.filter(
+      (product) =>
+        product.sellerId ===
+        filters.sellerId
+    );
+  }
+
+  /* PRICE */
+
+  const minPrice =
+    filters.minPrice ?? 0;
+
+  const maxPrice =
+    filters.maxPrice ?? Infinity;
+
+  products = products.filter(
+    (product) => {
+      const price =
+        filters.pricingType ===
+        "wholesale"
+          ? product.wholesalePrice
+          : product.retailPrice;
+
+      return (
+        price >= minPrice &&
+        price <= maxPrice
+      );
+    }
+  );
+
+  /* RATING */
+
+  if (
+    filters.minRating !== undefined
+  ) {
+    products = products.filter(
+      (product) =>
+        (product.rating ?? 0) >=
+        filters.minRating!
+    );
+  }
+
+  /* SORT */
+
+  switch (filters.sort) {
+    case "price_low":
+      products.sort(
+        (a, b) =>
+          a.retailPrice -
+          b.retailPrice
+      );
+      break;
+
+    case "price_high":
+      products.sort(
+        (a, b) =>
+          b.retailPrice -
+          a.retailPrice
+      );
+      break;
+
+    case "rating_high":
+      products.sort(
+        (a, b) =>
+          (b.rating ?? 0) -
+          (a.rating ?? 0)
+      );
+      break;
+
+    case "name_az":
+      products.sort((a, b) =>
+        a.name.localeCompare(
+          b.name
+        )
+      );
+      break;
+
+    case "newest":
+    default:
+      products = sortByNewest(
+        products
+      );
+      break;
+  }
+
+  return products.slice(
     0,
     productLimit
   );
