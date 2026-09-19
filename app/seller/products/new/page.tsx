@@ -1,0 +1,1058 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
+import { useRouter } from "next/navigation";
+
+import Header from "@/components/Header";
+import Footer from "@/components/Footer";
+import { auth, db } from "@/lib/firebase";
+import {
+  createSellerProduct,
+} from "@/lib/seller-products";
+
+type Tier = {
+  minQuantity: string;
+  maxQuantity: string;
+  price: string;
+};
+
+const emptyTier: Tier = {
+  minQuantity: "",
+  maxQuantity: "",
+  price: "",
+};
+
+export default function NewSellerProductPage() {
+  const router = useRouter();
+
+  const [sellerId, setSellerId] =
+    useState("");
+
+  const [sellerName, setSellerName] =
+    useState("");
+
+  const [loading, setLoading] =
+    useState(true);
+
+  const [saving, setSaving] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const [success, setSuccess] =
+    useState("");
+
+  const [name, setName] =
+    useState("");
+
+  const [description, setDescription] =
+    useState("");
+
+  const [categoryId, setCategoryId] =
+    useState("");
+
+  const [categoryName, setCategoryName] =
+    useState("");
+
+  const [imageUrl, setImageUrl] =
+    useState("");
+
+  const [mrp, setMrp] =
+    useState("");
+
+  const [retailPrice, setRetailPrice] =
+    useState("");
+
+  const [wholesalePrice, setWholesalePrice] =
+    useState("");
+
+  const [moq, setMoq] =
+    useState("10");
+
+  const [stock, setStock] =
+    useState("");
+
+  const [tiers, setTiers] =
+    useState<Tier[]>([
+      {
+        minQuantity: "10",
+        maxQuantity: "24",
+        price: "",
+      },
+      {
+        minQuantity: "25",
+        maxQuantity: "49",
+        price: "",
+      },
+      {
+        minQuantity: "50",
+        maxQuantity: "99",
+        price: "",
+      },
+      {
+        minQuantity: "100",
+        maxQuantity: "",
+        price: "",
+      },
+    ]);
+
+  useEffect(() => {
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        async (user) => {
+          if (!user) {
+            router.replace(
+              "/login?redirect=/seller/products/new"
+            );
+            return;
+          }
+
+          try {
+            const userRef = doc(
+              db,
+              "users",
+              user.uid
+            );
+
+            const snapshot =
+              await getDoc(userRef);
+
+            if (!snapshot.exists()) {
+              setError(
+                "Seller profile not found."
+              );
+              setLoading(false);
+              return;
+            }
+
+            const data =
+              snapshot.data();
+
+            if (
+              data.role !== "SELLER"
+            ) {
+              setError(
+                "Only sellers can add products."
+              );
+              setLoading(false);
+              return;
+            }
+
+            if (
+              data.sellerStatus !==
+              "approved"
+            ) {
+              setError(
+                "Your seller account is not approved yet."
+              );
+              setLoading(false);
+              return;
+            }
+
+            setSellerId(user.uid);
+
+            setSellerName(
+              String(
+                data.name ||
+                  user.displayName ||
+                  "ANJIVO Seller"
+              )
+            );
+          } catch (err) {
+            console.error(err);
+
+            setError(
+              "Unable to verify seller account."
+            );
+          } finally {
+            setLoading(false);
+          }
+        }
+      );
+
+    return () => unsubscribe();
+  }, [router]);
+
+  function createSlug(
+    value: string
+  ) {
+    return value
+      .toLowerCase()
+      .trim()
+      .replace(
+        /[^a-z0-9]+/g,
+        "-"
+      )
+      .replace(
+        /^-+|-+$/g,
+        "");
+  }
+
+  function updateTier(
+    index: number,
+    field: keyof Tier,
+    value: string
+  ) {
+    setTiers((previous) =>
+      previous.map(
+        (tier, tierIndex) =>
+          tierIndex === index
+            ? {
+                ...tier,
+                [field]: value,
+              }
+            : tier
+      )
+    );
+  }
+
+  function addTier() {
+    setTiers((previous) => [
+      ...previous,
+      {
+        ...emptyTier,
+      },
+    ]);
+  }
+
+  function removeTier(
+    index: number
+  ) {
+    setTiers((previous) =>
+      previous.filter(
+        (_, tierIndex) =>
+          tierIndex !== index
+      )
+    );
+  }
+
+  function validate() {
+    if (!name.trim()) {
+      return "Product name is required.";
+    }
+
+    if (!categoryId.trim()) {
+      return "Category ID is required.";
+    }
+
+    if (!categoryName.trim()) {
+      return "Category name is required.";
+    }
+
+    if (
+      !retailPrice ||
+      Number(retailPrice) <= 0
+    ) {
+      return "Enter a valid retail price.";
+    }
+
+    if (
+      !mrp ||
+      Number(mrp) <= 0
+    ) {
+      return "Enter a valid MRP.";
+    }
+
+    if (
+      Number(retailPrice) >
+      Number(mrp)
+    ) {
+      return "Retail price cannot be higher than MRP.";
+    }
+
+    if (
+      !wholesalePrice ||
+      Number(wholesalePrice) <= 0
+    ) {
+      return "Enter a valid wholesale price.";
+    }
+
+    if (
+      !moq ||
+      Number(moq) < 1
+    ) {
+      return "Enter a valid MOQ.";
+    }
+
+    if (
+      !stock ||
+      Number(stock) < 0
+    ) {
+      return "Enter valid stock.";
+    }
+
+    if (
+      Number(moq) >
+      Number(stock)
+    ) {
+      return "MOQ cannot be greater than stock.";
+    }
+
+    for (
+      let i = 0;
+      i < tiers.length;
+      i++
+    ) {
+      const tier = tiers[i];
+
+      if (
+        !tier.minQuantity ||
+        Number(tier.minQuantity) < 1
+      ) {
+        return `Wholesale Tier ${
+          i + 1
+        }: enter minimum quantity.`;
+      }
+
+      if (
+        !tier.price ||
+        Number(tier.price) <= 0
+      ) {
+        return `Wholesale Tier ${
+          i + 1
+        }: enter price.`;
+      }
+
+      if (
+        tier.maxQuantity &&
+        Number(tier.maxQuantity) <
+          Number(tier.minQuantity)
+      ) {
+        return `Wholesale Tier ${
+          i + 1
+        }: maximum quantity cannot be smaller than minimum quantity.`;
+      }
+    }
+
+    return "";
+  }
+
+  async function handleSubmit(
+    event: React.FormEvent
+  ) {
+    event.preventDefault();
+
+    setError("");
+    setSuccess("");
+
+    const validationError =
+      validate();
+
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    if (!sellerId) {
+      setError(
+        "Seller authentication is missing."
+      );
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      const wholesaleTiers =
+        tiers
+          .filter(
+            (tier) =>
+              tier.minQuantity &&
+              tier.price
+          )
+          .map((tier) => ({
+            minQuantity:
+              Number(
+                tier.minQuantity
+              ),
+
+            ...(tier.maxQuantity
+              ? {
+                  maxQuantity:
+                    Number(
+                      tier.maxQuantity
+                    ),
+                }
+              : {}),
+
+            price: Number(
+              tier.price
+            ),
+          }));
+
+      const images = imageUrl
+        .trim()
+        ? [imageUrl.trim()]
+        : [];
+
+      const slug =
+        createSlug(name);
+
+      const productId =
+        await createSellerProduct({
+          name,
+
+          slug,
+
+          description,
+
+          categoryId,
+
+          categoryName,
+
+          sellerId,
+
+          sellerName,
+
+          images,
+
+          mrp: Number(mrp),
+
+          retailPrice:
+            Number(
+              retailPrice
+            ),
+
+          wholesalePrice:
+            Number(
+              wholesalePrice
+            ),
+
+          moq: Number(moq),
+
+          wholesaleTiers,
+
+          stock: Number(stock),
+        });
+
+      setSuccess(
+        "Product saved as draft successfully."
+      );
+
+      setTimeout(() => {
+        router.push(
+          "/seller/products"
+        );
+      }, 1000);
+
+      console.log(
+        "Created product:",
+        productId
+      );
+    } catch (err) {
+      console.error(err);
+
+      setError(
+        "Unable to create product. Please try again."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#f7f8fa]">
+        <Header />
+
+        <main className="mx-auto max-w-4xl px-4 py-16">
+          <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
+            ⏳ Checking seller account...
+          </div>
+        </main>
+
+        <Footer />
+      </div>
+    );
+  }
+
+  if (error && !sellerId) {
+    return (
+      <div className="min-h-screen bg-[#f7f8fa]">
+        <Header />
+
+        <main className="mx-auto max-w-2xl px-4 py-16">
+
+          <div className="rounded-3xl border border-red-200 bg-white p-8 text-center">
+
+            <div className="text-5xl">
+              🔒
+            </div>
+
+            <h1 className="mt-4 text-xl font-black">
+              Seller Access Required
+            </h1>
+
+            <p className="mt-2 text-sm text-gray-500">
+              {error}
+            </p>
+
+            <Link
+              href="/seller"
+              className="mt-6 inline-flex rounded-xl bg-black px-6 py-3 text-sm font-bold text-white"
+            >
+              Seller Dashboard
+            </Link>
+
+          </div>
+
+        </main>
+
+        <Footer />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#f7f8fa]">
+
+      <Header />
+
+      <main className="mx-auto max-w-5xl px-4 py-6 sm:py-10">
+
+        {/* HEADER */}
+        <div className="mb-6">
+
+          <Link
+            href="/seller/products"
+            className="text-xs font-bold text-gray-400 hover:text-black"
+          >
+            ← My Products
+          </Link>
+
+          <h1 className="mt-3 text-3xl font-black tracking-tight">
+            Add New Product
+          </h1>
+
+          <p className="mt-1 text-sm text-gray-500">
+            Add your product to the ANJIVO marketplace.
+          </p>
+
+        </div>
+
+        {/* ERROR */}
+        {error && (
+          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
+            {error}
+          </div>
+        )}
+
+        {/* SUCCESS */}
+        {success && (
+          <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
+            {success}
+          </div>
+        )}
+
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-5"
+        >
+
+          {/* BASIC INFORMATION */}
+          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                Step 1
+              </p>
+
+              <h2 className="mt-1 text-xl font-black">
+                Basic Information
+              </h2>
+            </div>
+
+            <div className="mt-6 space-y-5">
+
+              <div>
+                <label className="mb-2 block text-xs font-bold">
+                  Product Name *
+                </label>
+
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) =>
+                    setName(
+                      e.target.value
+                    )
+                  }
+                  placeholder="Example: Premium Cotton T-Shirt"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                />
+
+                {name && (
+                  <p className="mt-2 text-[10px] text-gray-400">
+                    Slug:{" "}
+                    {createSlug(name)}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-bold">
+                  Description
+                </label>
+
+                <textarea
+                  value={description}
+                  onChange={(e) =>
+                    setDescription(
+                      e.target.value
+                    )
+                  }
+                  rows={5}
+                  placeholder="Describe your product, material, features, size, usage etc."
+                  className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                />
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2">
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold">
+                    Category ID *
+                  </label>
+
+                  <input
+                    type="text"
+                    value={categoryId}
+                    onChange={(e) =>
+                      setCategoryId(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Example: fashion"
+                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-bold">
+                    Category Name *
+                  </label>
+
+                  <input
+                    type="text"
+                    value={categoryName}
+                    onChange={(e) =>
+                      setCategoryName(
+                        e.target.value
+                      )
+                    }
+                    placeholder="Example: Fashion"
+                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  />
+                </div>
+
+              </div>
+
+            </div>
+
+          </section>
+
+          {/* IMAGE */}
+          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+              Step 2
+            </p>
+
+            <h2 className="mt-1 text-xl font-black">
+              Product Image
+            </h2>
+
+            <p className="mt-1 text-xs text-gray-400">
+              Image upload/storage integration will be connected later. For now use a public image URL.
+            </p>
+
+            <div className="mt-5">
+
+              <label className="mb-2 block text-xs font-bold">
+                Product Image URL
+              </label>
+
+              <input
+                type="url"
+                value={imageUrl}
+                onChange={(e) =>
+                  setImageUrl(
+                    e.target.value
+                  )
+                }
+                placeholder="https://example.com/product-image.jpg"
+                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+              />
+
+            </div>
+
+            {imageUrl && (
+              <div className="mt-4 overflow-hidden rounded-2xl border border-gray-200 bg-gray-50">
+
+                <img
+                  src={imageUrl}
+                  alt="Product preview"
+                  className="h-64 w-full object-contain"
+                  onError={(e) => {
+                    e.currentTarget.style.display =
+                      "none";
+                  }}
+                />
+
+              </div>
+            )}
+
+          </section>
+
+          {/* PRICING */}
+          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+              Step 3
+            </p>
+
+            <h2 className="mt-1 text-xl font-black">
+              Pricing
+            </h2>
+
+            <div className="mt-6 grid gap-4 sm:grid-cols-3">
+
+              <div>
+                <label className="mb-2 block text-xs font-bold">
+                  MRP *
+                </label>
+
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+                    ₹
+                  </span>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={mrp}
+                    onChange={(e) =>
+                      setMrp(
+                        e.target.value
+                      )
+                    }
+                    placeholder="0"
+                    className="w-full rounded-xl border border-gray-200 py-3 pl-8 pr-4 text-sm outline-none focus:border-black"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-bold">
+                  Retail Price *
+                </label>
+
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+                    ₹
+                  </span>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={retailPrice}
+                    onChange={(e) =>
+                      setRetailPrice(
+                        e.target.value
+                      )
+                    }
+                    placeholder="0"
+                    className="w-full rounded-xl border border-gray-200 py-3 pl-8 pr-4 text-sm outline-none focus:border-black"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-bold">
+                  Base Wholesale Price *
+                </label>
+
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+                    ₹
+                  </span>
+
+                  <input
+                    type="number"
+                    min="0"
+                    value={wholesalePrice}
+                    onChange={(e) =>
+                      setWholesalePrice(
+                        e.target.value
+                      )
+                    }
+                    placeholder="0"
+                    className="w-full rounded-xl border border-gray-200 py-3 pl-8 pr-4 text-sm outline-none focus:border-black"
+                  />
+                </div>
+              </div>
+
+            </div>
+
+          </section>
+
+          {/* WHOLESALE */}
+          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+
+            <div className="flex flex-wrap items-start justify-between gap-3">
+
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                  Step 4
+                </p>
+
+                <h2 className="mt-1 text-xl font-black">
+                  Wholesale Pricing
+                </h2>
+
+                <p className="mt-1 text-xs text-gray-400">
+                  Set different prices for different quantities.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={addTier}
+                className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+              >
+                + Add Tier
+              </button>
+
+            </div>
+
+            <div className="mt-6 space-y-3">
+
+              {tiers.map(
+                (tier, index) => (
+                  <div
+                    key={index}
+                    className="rounded-2xl border border-gray-200 bg-gray-50 p-4"
+                  >
+
+                    <div className="mb-3 flex items-center justify-between">
+
+                      <p className="text-xs font-black">
+                        Tier {index + 1}
+                      </p>
+
+                      {tiers.length >
+                        1 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            removeTier(
+                              index
+                            )
+                          }
+                          className="text-[10px] font-bold text-red-500"
+                        >
+                          Remove
+                        </button>
+                      )}
+
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-3">
+
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-bold text-gray-500">
+                          Minimum Qty
+                        </label>
+
+                        <input
+                          type="number"
+                          min="1"
+                          value={
+                            tier.minQuantity
+                          }
+                          onChange={(e) =>
+                            updateTier(
+                              index,
+                              "minQuantity",
+                              e.target.value
+                            )
+                          }
+                          placeholder="10"
+                          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-black"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-bold text-gray-500">
+                          Maximum Qty
+                        </label>
+
+                        <input
+                          type="number"
+                          min="1"
+                          value={
+                            tier.maxQuantity
+                          }
+                          onChange={(e) =>
+                            updateTier(
+                              index,
+                              "maxQuantity",
+                              e.target.value
+                            )
+                          }
+                          placeholder="Leave empty for +"
+                          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-black"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[10px] font-bold text-gray-500">
+                          Price / Piece
+                        </label>
+
+                        <div className="relative">
+                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">
+                            ₹
+                          </span>
+
+                          <input
+                            type="number"
+                            min="0"
+                            value={
+                              tier.price
+                            }
+                            onChange={(e) =>
+                              updateTier(
+                                index,
+                                "price",
+                                e.target.value
+                              )
+                            }
+                            placeholder="149"
+                            className="w-full rounded-xl border border-gray-200 bg-white py-2.5 pl-7 pr-3 text-sm outline-none focus:border-black"
+                          />
+                        </div>
+                      </div>
+
+                    </div>
+
+                  </div>
+                )
+              )}
+
+            </div>
+
+          </section>
+
+          {/* MOQ + STOCK */}
+          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+              Step 5
+            </p>
+
+            <h2 className="mt-1 text-xl font-black">
+              MOQ & Inventory
+            </h2>
+
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+
+              <div>
+                <label className="mb-2 block text-xs font-bold">
+                  Minimum Order Quantity (MOQ) *
+                </label>
+
+                <input
+                  type="number"
+                  min="1"
+                  value={moq}
+                  onChange={(e) =>
+                    setMoq(
+                      e.target.value
+                    )
+                  }
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                />
+
+                <p className="mt-1.5 text-[10px] text-gray-400">
+                  Wholesale customers must purchase at least this quantity.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-2 block text-xs font-bold">
+                  Available Stock *
+                </label>
+
+                <input
+                  type="number"
+                  min="0"
+                  value={stock}
+                  onChange={(e) =>
+                    setStock(
+                      e.target.value
+                    )
+                  }
+                  placeholder="100"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                />
+              </div>
+
+            </div>
+
+          </section>
+
+          {/* SUBMIT */}
+          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+
+            <div className="rounded-2xl bg-gray-50 p-4">
+
+              <p className="text-xs font-black">
+                Product Approval
+              </p>
+
+              <p className="mt-1 text-[10px] leading-5 text-gray-500">
+                Your product will be saved as a draft.
+                ANJIVO admin will review and approve it
+                before it becomes visible to customers.
+              </p>
+
+            </div>
+
+            <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+
+              <Link
+                href="/seller/products"
+                className="rounded-xl border border-gray-200 px-6 py-3 text-center text-sm font-bold"
+              >
+                Cancel
+              </Link>
+
+              <button
+                type="submit"
+                disabled={saving}
+                className="rounded-xl bg-black px-7 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving
+                  ? "Saving Product..."
+                  : "Save Product as Draft"}
+              </button>
+
+            </div>
+
+          </section>
+
+        </form>
+
+      </main>
+
+      <Footer />
+
+    </div>
+  );
+}
