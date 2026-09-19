@@ -113,6 +113,7 @@ function mapProduct(
   };
 }
 
+
 /* =========================================
    GET ALL ACTIVE PRODUCTS
 ========================================= */
@@ -133,6 +134,36 @@ export async function getProducts(
     mapProduct(doc.id, doc.data())
   );
 }
+
+
+/* =========================================
+   GET PRODUCT BY SLUG
+========================================= */
+
+export async function getProductBySlug(
+  slug: string
+): Promise<Product | null> {
+  const productQuery = query(
+    productsCollection,
+    where("slug", "==", slug),
+    where("status", "==", "active"),
+    limit(1)
+  );
+
+  const snapshot = await getDocs(productQuery);
+
+  if (snapshot.empty) {
+    return null;
+  }
+
+  const document = snapshot.docs[0];
+
+  return mapProduct(
+    document.id,
+    document.data()
+  );
+}
+
 
 /* =========================================
    GET FEATURED PRODUCTS
@@ -156,6 +187,7 @@ export async function getFeaturedProducts(
   );
 }
 
+
 /* =========================================
    GET BEST SELLERS
 ========================================= */
@@ -177,6 +209,7 @@ export async function getBestSellerProducts(
     mapProduct(doc.id, doc.data())
   );
 }
+
 
 /* =========================================
    GET TRENDING PRODUCTS
