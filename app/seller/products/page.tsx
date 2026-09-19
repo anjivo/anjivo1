@@ -3,14 +3,21 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
+import {
+  doc,
+  getDoc,
+} from "firebase/firestore";
 import { useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+
 import { auth, db } from "@/lib/firebase";
+
 import {
   getSellerProducts,
 } from "@/lib/seller-products";
+
 import type { Product } from "@/types/product";
 
 export default function SellerProductsPage() {
@@ -38,30 +45,58 @@ export default function SellerProductsPage() {
           }
 
           try {
+            /*
+             * ========================================
+             * VERIFY SELLER ACCOUNT
+             * ========================================
+             */
+
             const userSnapshot =
-              await import(
-                "firebase/firestore"
-              ).then(
-                ({ getDoc, doc }) =>
-                  getDoc(
-                    doc(
-                      db,
-                      "users",
-                      user.uid
-                    )
-                  )
+              await getDoc(
+                doc(
+                  db,
+                  "users",
+                  user.uid
+                )
               );
 
+            if (!userSnapshot.exists()) {
+              setError(
+                "Seller profile not found."
+              );
+              setLoading(false);
+              return;
+            }
+
+            const userData =
+              userSnapshot.data();
+
             if (
-              !userSnapshot.exists() ||
-              userSnapshot.data()
-                .role !== "SELLER"
+              userData.role !== "SELLER"
             ) {
               setError(
                 "Seller access required."
               );
+              setLoading(false);
               return;
             }
+
+            if (
+              userData.sellerStatus !==
+              "approved"
+            ) {
+              setError(
+                "Your seller account is not approved yet."
+              );
+              setLoading(false);
+              return;
+            }
+
+            /*
+             * ========================================
+             * LOAD SELLER PRODUCTS
+             * ========================================
+             */
 
             const result =
               await getSellerProducts(
@@ -70,10 +105,13 @@ export default function SellerProductsPage() {
 
             setProducts(result);
           } catch (err) {
-            console.error(err);
+            console.error(
+              "Seller products error:",
+              err
+            );
 
             setError(
-              "Unable to load products."
+              "Unable to load products. Please try again."
             );
           } finally {
             setLoading(false);
@@ -84,6 +122,40 @@ export default function SellerProductsPage() {
     return () => unsubscribe();
   }, [router]);
 
+  /*
+   * ========================================
+   * LOADING
+   * ========================================
+   */
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-[#f7f8fa]">
+        <Header />
+
+        <main className="mx-auto max-w-7xl px-4 py-10">
+          <div className="rounded-3xl border border-gray-200 bg-white p-12 text-center">
+            <div className="text-4xl">
+              ⏳
+            </div>
+
+            <p className="mt-4 text-sm font-semibold text-gray-500">
+              Loading your products...
+            </p>
+          </div>
+        </main>
+
+        <Footer />
+      </div>
+    );
+  }
+
+  /*
+   * ========================================
+   * MAIN PAGE
+   * ========================================
+   */
+
   return (
     <div className="min-h-screen bg-[#f7f8fa]">
 
@@ -91,7 +163,11 @@ export default function SellerProductsPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:py-10">
 
-        <div className="flex flex-wrap items-center justify-between gap-4">
+        {/* ====================================
+            HEADER
+        ==================================== */}
+
+        <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
 
           <div>
             <Link
@@ -101,38 +177,51 @@ export default function SellerProductsPage() {
               ← Seller Dashboard
             </Link>
 
-            <h1 className="mt-3 text-3xl font-black">
+            <h1 className="mt-3 text-3xl font-black tracking-tight">
               My Products
             </h1>
 
             <p className="mt-1 text-sm text-gray-500">
-              Manage your ANJIVO marketplace products.
+              Manage your ANJIVO marketplace
+              products.
             </p>
           </div>
 
           <Link
             href="/seller/products/new"
-            className="rounded-xl bg-black px-5 py-3 text-sm font-bold text-white"
+            className="inline-flex items-center justify-center rounded-xl bg-black px-5 py-3 text-sm font-bold text-white transition hover:bg-gray-800"
           >
             + Add Product
           </Link>
 
         </div>
 
-        {loading && (
-          <div className="mt-8 rounded-3xl border border-gray-200 bg-white p-10 text-center">
-            ⏳ Loading products...
-          </div>
-        )}
+        {/* ====================================
+            ERROR
+        ==================================== */}
 
         {error && (
-          <div className="mt-8 rounded-2xl bg-red-50 p-5 text-sm font-semibold text-red-700">
-            {error}
+          <div className="mt-8 rounded-2xl border border-red-200 bg-red-50 p-5">
+
+            <p className="text-sm font-semibold text-red-700">
+              {error}
+            </p>
+
+            <Link
+              href="/seller"
+              className="mt-4 inline-flex rounded-xl bg-black px-5 py-2.5 text-xs font-bold text-white"
+            >
+              Seller Dashboard
+            </Link>
+
           </div>
         )}
 
-        {!loading &&
-          !error &&
+        {/* ====================================
+            EMPTY STATE
+        ==================================== */}
+
+        {!error &&
           products.length === 0 && (
             <div className="mt-8 rounded-3xl border border-dashed border-gray-300 bg-white p-12 text-center">
 
@@ -145,7 +234,8 @@ export default function SellerProductsPage() {
               </h2>
 
               <p className="mt-2 text-sm text-gray-500">
-                Add your first product to start selling.
+                Add your first product to start
+                selling on ANJIVO.
               </p>
 
               <Link
@@ -158,21 +248,30 @@ export default function SellerProductsPage() {
             </div>
           )}
 
-        {!loading &&
-          !error &&
+        {/* ====================================
+            PRODUCT GRID
+        ==================================== */}
+
+        {!error &&
           products.length > 0 && (
-            <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
 
               {products.map(
                 (product) => (
                   <div
                     key={product.id}
-                    className="overflow-hidden rounded-3xl border border-gray-200 bg-white"
+                    className="overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
                   >
 
-                    <div className="flex aspect-square items-center justify-center bg-gray-100">
+                    {/* =========================
+                        IMAGE
+                    ========================= */}
 
-                      {product.images[0] ? (
+                    <div className="relative flex aspect-square items-center justify-center overflow-hidden bg-gray-100">
+
+                      {product.images &&
+                      product.images.length > 0 &&
+                      product.images[0] ? (
                         <img
                           src={
                             product.images[0]
@@ -188,75 +287,144 @@ export default function SellerProductsPage() {
                         </span>
                       )}
 
-                    </div>
+                      {/* STATUS */}
 
-                    <div className="p-4">
-
-                      <div className="flex items-start justify-between gap-2">
-
-                        <h2 className="line-clamp-2 text-sm font-black">
-                          {product.name}
-                        </h2>
+                      <div className="absolute right-3 top-3">
 
                         <span
-                          className={`shrink-0 rounded-full px-2 py-1 text-[8px] font-bold uppercase ${
+                          className={`rounded-full px-2.5 py-1 text-[9px] font-bold uppercase shadow-sm ${
                             product.status ===
                             "active"
                               ? "bg-green-100 text-green-700"
                               : product.status ===
                                 "blocked"
                               ? "bg-red-100 text-red-700"
+                              : product.status ===
+                                "out_of_stock"
+                              ? "bg-orange-100 text-orange-700"
                               : "bg-yellow-100 text-yellow-700"
                           }`}
                         >
-                          {product.status}
+                          {product.status.replace(
+                            "_",
+                            " "
+                          )}
                         </span>
 
                       </div>
 
+                    </div>
+
+                    {/* =========================
+                        PRODUCT INFO
+                    ========================= */}
+
+                    <div className="p-4">
+
+                      <div className="min-h-[42px]">
+
+                        <h2 className="line-clamp-2 text-sm font-black text-gray-900">
+                          {product.name}
+                        </h2>
+
+                      </div>
+
+                      {/* CATEGORY */}
+
+                      {product.categoryName && (
+                        <p className="mt-2 truncate text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                          {product.categoryName}
+                        </p>
+                      )}
+
+                      {/* PRICE / STOCK */}
+
                       <div className="mt-4 grid grid-cols-2 gap-2">
 
                         <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="text-[9px] text-gray-400">
+
+                          <p className="text-[9px] font-semibold text-gray-400">
                             Retail
                           </p>
 
-                          <p className="mt-1 text-sm font-black">
+                          <p className="mt-1 text-sm font-black text-gray-900">
                             ₹
                             {product.retailPrice.toLocaleString(
                               "en-IN"
                             )}
                           </p>
+
                         </div>
 
                         <div className="rounded-xl bg-gray-50 p-3">
-                          <p className="text-[9px] text-gray-400">
+
+                          <p className="text-[9px] font-semibold text-gray-400">
                             Stock
                           </p>
 
-                          <p className="mt-1 text-sm font-black">
-                            {product.stock}
+                          <p className="mt-1 text-sm font-black text-gray-900">
+                            {product.stock.toLocaleString(
+                              "en-IN"
+                            )}
                           </p>
+
                         </div>
 
                       </div>
 
-                      <div className="mt-4 flex gap-2">
+                      {/* WHOLESALE */}
+
+                      <div className="mt-2 rounded-xl bg-gray-50 p-3">
+
+                        <div className="flex items-center justify-between">
+
+                          <p className="text-[9px] font-semibold text-gray-400">
+                            Wholesale From
+                          </p>
+
+                          <p className="text-[9px] font-semibold text-gray-400">
+                            MOQ {product.moq}
+                          </p>
+
+                        </div>
+
+                        <p className="mt-1 text-sm font-black text-gray-900">
+                          ₹
+                          {product.wholesalePrice.toLocaleString(
+                            "en-IN"
+                          )}
+                          <span className="ml-1 text-[9px] font-medium text-gray-400">
+                            / piece
+                          </span>
+                        </p>
+
+                      </div>
+
+                      {/* =========================
+                          ACTIONS
+                      ========================= */}
+
+                      <div className="mt-4 grid grid-cols-2 gap-2">
+
+                        {/* VIEW */}
 
                         <Link
                           href={`/products/${product.slug}`}
                           target="_blank"
-                          className="flex-1 rounded-xl border border-gray-200 py-2.5 text-center text-xs font-bold"
+                          rel="noopener noreferrer"
+                          className="rounded-xl border border-gray-200 py-2.5 text-center text-xs font-bold text-gray-700 transition hover:border-black hover:text-black"
                         >
                           View
                         </Link>
 
-                        <button
-                          type="button"
-                          className="flex-1 rounded-xl bg-black py-2.5 text-xs font-bold text-white"
+                        {/* EDIT */}
+
+                        <Link
+                          href={`/seller/products/${product.id}/edit`}
+                          className="rounded-xl bg-black py-2.5 text-center text-xs font-bold text-white transition hover:bg-gray-800"
                         >
                           Edit
-                        </button>
+                        </Link>
 
                       </div>
 
