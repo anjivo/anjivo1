@@ -5,13 +5,18 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { onAuthStateChanged, type User } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  type User,
+} from "firebase/auth";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+
 import { getProductBySlug } from "@/lib/products";
 import { auth } from "@/lib/firebase";
 import { addToCart } from "@/lib/cart";
+
 import type { Product } from "@/types/product";
 
 type ProductPageProps = {
@@ -25,28 +30,47 @@ export default function ProductDetailsPage({
 }: ProductPageProps) {
   const router = useRouter();
 
-  const [product, setProduct] = useState<Product | null>(null);
-  const [user, setUser] = useState<User | null>(null);
+  const [product, setProduct] =
+    useState<Product | null>(null);
 
-  const [loading, setLoading] = useState(true);
-  const [quantity, setQuantity] = useState(1);
-  const [pricingType, setPricingType] = useState<
-    "retail" | "wholesale"
-  >("retail");
+  const [user, setUser] =
+    useState<User | null>(null);
 
-  const [addingToCart, setAddingToCart] = useState(false);
-  const [cartMessage, setCartMessage] = useState("");
+  const [loading, setLoading] =
+    useState(true);
+
+  const [quantity, setQuantity] =
+    useState(1);
+
+  const [pricingType, setPricingType] =
+    useState<"retail" | "wholesale">(
+      "retail"
+    );
+
+  const [addingToCart, setAddingToCart] =
+    useState(false);
+
+  const [cartMessage, setCartMessage] =
+    useState("");
+
+  /* =======================================================
+     LOAD PRODUCT
+  ======================================================= */
 
   useEffect(() => {
     async function loadProduct() {
       try {
         const { slug } = await params;
 
-        const result = await getProductBySlug(slug);
+        const result =
+          await getProductBySlug(slug);
 
         setProduct(result);
       } catch (error) {
-        console.error("Failed to load product:", error);
+        console.error(
+          "Failed to load product:",
+          error
+        );
       } finally {
         setLoading(false);
       }
@@ -55,21 +79,33 @@ export default function ProductDetailsPage({
     loadProduct();
   }, [params]);
 
+  /* =======================================================
+     AUTH
+  ======================================================= */
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (currentUser) => {
-        setUser(currentUser);
-      }
-    );
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        (currentUser) => {
+          setUser(currentUser);
+        }
+      );
 
     return () => unsubscribe();
   }, []);
 
-  const wholesalePrice = useMemo(() => {
-    if (!product) return 0;
+  /* =======================================================
+     WHOLESALE PRICE
+  ======================================================= */
 
-    let price = product.wholesalePrice;
+  const wholesalePrice = useMemo(() => {
+    if (!product) {
+      return 0;
+    }
+
+    let price =
+      product.wholesalePrice;
 
     for (const tier of product.wholesaleTiers) {
       if (
@@ -86,31 +122,52 @@ export default function ProductDetailsPage({
     return price;
   }, [product, quantity]);
 
+  /* =======================================================
+     SELECTED PRICE
+  ======================================================= */
+
   const selectedPrice =
     pricingType === "wholesale"
       ? wholesalePrice
       : product?.retailPrice ?? 0;
 
+  /* =======================================================
+     DISCOUNT
+  ======================================================= */
+
   const discount =
-    product && product.mrp > product.retailPrice
+    product &&
+    product.mrp > product.retailPrice
       ? Math.round(
-          ((product.mrp - product.retailPrice) /
+          ((product.mrp -
+            product.retailPrice) /
             product.mrp) *
             100
         )
       : 0;
 
+  /* =======================================================
+     ADD TO CART
+  ======================================================= */
+
   async function handleAddToCart() {
-    if (!product) return;
+    if (!product) {
+      return;
+    }
 
     if (!user) {
       router.push(
         `/login?redirect=/products/${product.slug}`
       );
+
       return;
     }
 
     if (product.stock <= 0) {
+      setCartMessage(
+        "This product is currently out of stock."
+      );
+
       return;
     }
 
@@ -121,6 +178,7 @@ export default function ProductDetailsPage({
       setCartMessage(
         `Wholesale minimum quantity is ${product.moq}.`
       );
+
       return;
     }
 
@@ -128,6 +186,7 @@ export default function ProductDetailsPage({
       setCartMessage(
         `Only ${product.stock} pieces are available.`
       );
+
       return;
     }
 
@@ -135,55 +194,92 @@ export default function ProductDetailsPage({
       setAddingToCart(true);
       setCartMessage("");
 
-      await addToCart(user.uid, {
-        productId: product.id,
-        name: product.name,
-        slug: product.slug,
+      await addToCart(
+        user.uid,
+        {
+          /* IMPORTANT:
+             CartItem uses "id", not "productId".
+          */
+          id: product.id,
 
-        sellerId: product.sellerId,
-        sellerName: product.sellerName,
+          name: product.name,
 
-        image: product.images[0],
+          slug: product.slug,
 
-        retailPrice: product.retailPrice,
-        wholesalePrice: product.wholesalePrice,
+          sellerId: product.sellerId,
 
-        quantity,
+          sellerName:
+            product.sellerName,
 
-        moq: product.moq,
+          image:
+            product.images[0] || "",
 
-        selectedPrice,
+          mrp: product.mrp,
 
-        pricingType,
+          retailPrice:
+            product.retailPrice,
 
-        stock: product.stock,
-      });
+          wholesalePrice:
+            product.wholesalePrice,
 
-      setCartMessage("Product added to cart successfully.");
+          wholesaleTiers:
+            product.wholesaleTiers || [],
 
-    } catch (error) {
-      console.error("Failed to add product to cart:", error);
+          moq: product.moq,
+
+          pricingType,
+
+          stock: product.stock,
+        },
+        quantity
+      );
 
       setCartMessage(
-        "Could not add product to cart. Please try again."
+        "Product added to cart successfully."
+      );
+    } catch (error) {
+      console.error(
+        "Failed to add product to cart:",
+        error
+      );
+
+      setCartMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not add product to cart. Please try again."
       );
     } finally {
       setAddingToCart(false);
     }
   }
 
-  function handleBuyNow() {
+  /* =======================================================
+     BUY NOW
+  ======================================================= */
+
+  async function handleBuyNow() {
     if (!user) {
       router.push(
         `/login?redirect=/products/${product?.slug}`
       );
+
       return;
     }
 
-    handleAddToCart().then(() => {
+    await handleAddToCart();
+
+    /*
+     * Small delay allows the cart operation to complete
+     * before navigating.
+     */
+    setTimeout(() => {
       router.push("/cart");
-    });
+    }, 300);
   }
+
+  /* =======================================================
+     LOADING
+  ======================================================= */
 
   if (loading) {
     return (
@@ -192,7 +288,9 @@ export default function ProductDetailsPage({
 
         <main className="mx-auto max-w-7xl px-4 py-16">
           <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-            <div className="text-3xl">⏳</div>
+            <div className="text-3xl">
+              ⏳
+            </div>
 
             <p className="mt-3 text-sm font-semibold text-gray-500">
               Loading product...
@@ -205,6 +303,10 @@ export default function ProductDetailsPage({
     );
   }
 
+  /* =======================================================
+     PRODUCT NOT FOUND
+  ======================================================= */
+
   if (!product) {
     return (
       <div className="min-h-screen bg-[#f7f8fa]">
@@ -213,7 +315,9 @@ export default function ProductDetailsPage({
         <main className="mx-auto max-w-7xl px-4 py-16">
           <div className="rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center">
 
-            <div className="text-5xl">📦</div>
+            <div className="text-5xl">
+              📦
+            </div>
 
             <h1 className="mt-4 text-2xl font-black">
               Product not found
@@ -238,7 +342,12 @@ export default function ProductDetailsPage({
     );
   }
 
-  const mainImage = product.images[0];
+  const mainImage =
+    product.images[0];
+
+  /* =======================================================
+     MAIN
+  ======================================================= */
 
   return (
     <div className="min-h-screen bg-[#f7f8fa] text-gray-950">
@@ -246,12 +355,18 @@ export default function ProductDetailsPage({
 
       <main>
 
-        {/* ================= BREADCRUMB ================= */}
+        {/* =================================================
+            BREADCRUMB
+        ================================================= */}
+
         <div className="mx-auto max-w-7xl px-4 pt-5">
 
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
 
-            <Link href="/" className="hover:text-black">
+            <Link
+              href="/"
+              className="hover:text-black"
+            >
               Home
             </Link>
 
@@ -274,12 +389,18 @@ export default function ProductDetailsPage({
 
         </div>
 
-        {/* ================= PRODUCT ================= */}
+        {/* =================================================
+            PRODUCT
+        ================================================= */}
+
         <section className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
 
           <div className="grid gap-6 lg:grid-cols-2 lg:gap-10">
 
-            {/* ================= IMAGE ================= */}
+            {/* =================================================
+                IMAGE
+            ================================================= */}
+
             <div>
 
               <div className="relative aspect-square overflow-hidden rounded-3xl border border-gray-200 bg-white">
@@ -316,29 +437,37 @@ export default function ProductDetailsPage({
               {product.images.length > 1 && (
                 <div className="mt-3 grid grid-cols-5 gap-2">
 
-                  {product.images.slice(0, 5).map(
-                    (image, index) => (
-                      <div
-                        key={`${image}-${index}`}
-                        className="relative aspect-square overflow-hidden rounded-xl border border-gray-200 bg-white"
-                      >
-                        <Image
-                          src={image}
-                          alt={`${product.name} ${index + 1}`}
-                          fill
-                          sizes="100px"
-                          className="object-cover"
-                        />
-                      </div>
-                    )
-                  )}
+                  {product.images
+                    .slice(0, 5)
+                    .map(
+                      (
+                        image,
+                        index
+                      ) => (
+                        <div
+                          key={`${image}-${index}`}
+                          className="relative aspect-square overflow-hidden rounded-xl border border-gray-200 bg-white"
+                        >
+                          <Image
+                            src={image}
+                            alt={`${product.name} ${index + 1}`}
+                            fill
+                            sizes="100px"
+                            className="object-cover"
+                          />
+                        </div>
+                      )
+                    )}
 
                 </div>
               )}
 
             </div>
 
-            {/* ================= DETAILS ================= */}
+            {/* =================================================
+                DETAILS
+            ================================================= */}
+
             <div className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
               <div className="flex items-center justify-between gap-3">
@@ -386,7 +515,10 @@ export default function ProductDetailsPage({
                 </p>
               )}
 
-              {/* ================= BUYING MODE ================= */}
+              {/* =================================================
+                  BUYING MODE
+              ================================================= */}
+
               <div className="mt-6">
 
                 <p className="mb-2 text-xs font-black">
@@ -394,6 +526,8 @@ export default function ProductDetailsPage({
                 </p>
 
                 <div className="grid grid-cols-2 gap-2">
+
+                  {/* RETAIL */}
 
                   <button
                     type="button"
@@ -427,19 +561,30 @@ export default function ProductDetailsPage({
                     </p>
                   </button>
 
+                  {/* WHOLESALE */}
+
                   <button
                     type="button"
                     onClick={() => {
-                      setPricingType("wholesale");
+                      setPricingType(
+                        "wholesale"
+                      );
 
                       setQuantity(
-                        Math.max(1, product.moq)
+                        Math.min(
+                          Math.max(
+                            1,
+                            product.moq
+                          ),
+                          product.stock
+                        )
                       );
 
                       setCartMessage("");
                     }}
                     className={`rounded-xl border p-3 text-left transition ${
-                      pricingType === "wholesale"
+                      pricingType ===
+                      "wholesale"
                         ? "border-black bg-black text-white"
                         : "border-gray-200 bg-white hover:border-black"
                     }`}
@@ -454,7 +599,8 @@ export default function ProductDetailsPage({
 
                     <p
                       className={`mt-1 text-[9px] ${
-                        pricingType === "wholesale"
+                        pricingType ===
+                        "wholesale"
                           ? "text-gray-300"
                           : "text-gray-400"
                       }`}
@@ -467,11 +613,15 @@ export default function ProductDetailsPage({
 
               </div>
 
-              {/* ================= PRICE ================= */}
+              {/* =================================================
+                  PRICE
+              ================================================= */}
+
               <div className="mt-5 rounded-2xl bg-gray-50 p-4">
 
                 <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                  {pricingType === "wholesale"
+                  {pricingType ===
+                  "wholesale"
                     ? "Wholesale Price"
                     : "Retail Price"}
                 </p>
@@ -479,10 +629,14 @@ export default function ProductDetailsPage({
                 <div className="mt-1 flex flex-wrap items-center gap-3">
 
                   <span className="text-3xl font-black">
-                    ₹{selectedPrice.toLocaleString("en-IN")}
+                    ₹
+                    {selectedPrice.toLocaleString(
+                      "en-IN"
+                    )}
                   </span>
 
-                  {pricingType === "retail" &&
+                  {pricingType ===
+                    "retail" &&
                     product.mrp >
                       product.retailPrice && (
                       <span className="text-sm text-gray-400 line-through">
@@ -493,7 +647,8 @@ export default function ProductDetailsPage({
                       </span>
                     )}
 
-                  {pricingType === "retail" &&
+                  {pricingType ===
+                    "retail" &&
                     discount > 0 && (
                       <span className="text-xs font-black">
                         {discount}% OFF
@@ -502,7 +657,8 @@ export default function ProductDetailsPage({
 
                 </div>
 
-                {pricingType === "wholesale" && (
+                {pricingType ===
+                  "wholesale" && (
                   <p className="mt-1 text-[10px] text-gray-500">
                     Price updates automatically according to quantity.
                   </p>
@@ -510,11 +666,16 @@ export default function ProductDetailsPage({
 
               </div>
 
-              {/* ================= WHOLESALE TIERS ================= */}
-              {product.wholesaleTiers.length > 0 && (
+              {/* =================================================
+                  WHOLESALE TIERS
+              ================================================= */}
+
+              {product.wholesaleTiers.length >
+                0 && (
                 <div className="mt-4 rounded-2xl border border-gray-200 p-4">
 
                   <div className="flex items-center justify-between">
+
                     <p className="text-xs font-black">
                       Wholesale Pricing
                     </p>
@@ -522,55 +683,70 @@ export default function ProductDetailsPage({
                     <span className="text-[9px] font-bold text-gray-400">
                       MOQ {product.moq}
                     </span>
+
                   </div>
 
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
 
                     {product.wholesaleTiers.map(
-                      (tier, index) => (
-                        <button
-                          type="button"
-                          key={`${tier.minQuantity}-${index}`}
-                          onClick={() => {
-                            setPricingType("wholesale");
+                      (tier, index) => {
+                        const isSelected =
+                          pricingType ===
+                            "wholesale" &&
+                          quantity >=
+                            tier.minQuantity &&
+                          (
+                            tier.maxQuantity ===
+                              undefined ||
+                            quantity <=
+                              tier.maxQuantity
+                          );
 
-                            setQuantity(
-                              Math.max(
-                                tier.minQuantity,
-                                product.moq
-                              )
-                            );
+                        return (
+                          <button
+                            type="button"
+                            key={`${tier.minQuantity}-${index}`}
+                            onClick={() => {
+                              setPricingType(
+                                "wholesale"
+                              );
 
-                            setCartMessage("");
-                          }}
-                          className={`rounded-xl border p-3 text-center transition ${
-                            pricingType === "wholesale" &&
-                            quantity >=
-                              tier.minQuantity &&
-                            (
-                              tier.maxQuantity ===
-                                undefined ||
-                              quantity <=
-                                tier.maxQuantity
-                            )
-                              ? "border-black bg-black text-white"
-                              : "border-gray-200 bg-gray-50 hover:border-black"
-                          }`}
-                        >
-                          <p className="text-[9px] opacity-60">
-                            {tier.maxQuantity
-                              ? `${tier.minQuantity}-${tier.maxQuantity}`
-                              : `${tier.minQuantity}+`}
-                          </p>
+                              const nextQuantity =
+                                Math.max(
+                                  tier.minQuantity,
+                                  product.moq
+                                );
 
-                          <p className="mt-1 text-sm font-black">
-                            ₹
-                            {tier.price.toLocaleString(
-                              "en-IN"
-                            )}
-                          </p>
-                        </button>
-                      )
+                              setQuantity(
+                                Math.min(
+                                  nextQuantity,
+                                  product.stock
+                                )
+                              );
+
+                              setCartMessage("");
+                            }}
+                            className={`rounded-xl border p-3 text-center transition ${
+                              isSelected
+                                ? "border-black bg-black text-white"
+                                : "border-gray-200 bg-gray-50 hover:border-black"
+                            }`}
+                          >
+                            <p className="text-[9px] opacity-60">
+                              {tier.maxQuantity
+                                ? `${tier.minQuantity}-${tier.maxQuantity}`
+                                : `${tier.minQuantity}+`}
+                            </p>
+
+                            <p className="mt-1 text-sm font-black">
+                              ₹
+                              {tier.price.toLocaleString(
+                                "en-IN"
+                              )}
+                            </p>
+                          </button>
+                        );
+                      }
                     )}
 
                   </div>
@@ -578,7 +754,10 @@ export default function ProductDetailsPage({
                 </div>
               )}
 
-              {/* ================= QUANTITY ================= */}
+              {/* =================================================
+                  QUANTITY
+              ================================================= */}
+
               <div className="mt-5">
 
                 <div className="flex items-center justify-between">
@@ -595,12 +774,15 @@ export default function ProductDetailsPage({
 
                 <div className="mt-2 flex items-center gap-3">
 
+                  {/* MINUS */}
+
                   <button
                     type="button"
                     onClick={() =>
                       setQuantity(
                         Math.max(
-                          pricingType === "wholesale"
+                          pricingType ===
+                            "wholesale"
                             ? product.moq
                             : 1,
                           quantity - 1
@@ -609,7 +791,8 @@ export default function ProductDetailsPage({
                     }
                     disabled={
                       quantity <=
-                      (pricingType === "wholesale"
+                      (pricingType ===
+                      "wholesale"
                         ? product.moq
                         : 1)
                     }
@@ -618,9 +801,13 @@ export default function ProductDetailsPage({
                     −
                   </button>
 
+                  {/* CURRENT */}
+
                   <div className="flex h-11 min-w-16 items-center justify-center rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm font-black">
                     {quantity}
                   </div>
+
+                  {/* PLUS */}
 
                   <button
                     type="button"
@@ -633,7 +820,8 @@ export default function ProductDetailsPage({
                       )
                     }
                     disabled={
-                      quantity >= product.stock
+                      quantity >=
+                      product.stock
                     }
                     className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 text-lg font-bold disabled:opacity-40"
                   >
@@ -644,7 +832,10 @@ export default function ProductDetailsPage({
 
               </div>
 
-              {/* ================= SELLER ================= */}
+              {/* =================================================
+                  SELLER
+              ================================================= */}
+
               <div className="mt-5 flex items-center justify-between rounded-2xl border border-gray-200 p-4">
 
                 <div className="flex items-center gap-3">
@@ -654,6 +845,7 @@ export default function ProductDetailsPage({
                   </div>
 
                   <div>
+
                     <p className="text-[9px] uppercase tracking-wider text-gray-400">
                       Sold by
                     </p>
@@ -662,6 +854,7 @@ export default function ProductDetailsPage({
                       {product.sellerName ||
                         "ANJIVO Seller"}
                     </p>
+
                   </div>
 
                 </div>
@@ -674,14 +867,20 @@ export default function ProductDetailsPage({
 
               </div>
 
-              {/* ================= CART MESSAGE ================= */}
+              {/* =================================================
+                  CART MESSAGE
+              ================================================= */}
+
               {cartMessage && (
                 <div className="mt-4 rounded-xl bg-gray-100 px-4 py-3 text-xs font-semibold text-gray-700">
                   {cartMessage}
                 </div>
               )}
 
-              {/* ================= ACTIONS ================= */}
+              {/* =================================================
+                  ACTIONS
+              ================================================= */}
+
               <div className="mt-5 grid grid-cols-2 gap-3">
 
                 <button
@@ -712,8 +911,13 @@ export default function ProductDetailsPage({
 
               </div>
 
-              {/* ================= VIEW CART ================= */}
-              {cartMessage.includes("successfully") && (
+              {/* =================================================
+                  VIEW CART
+              ================================================= */}
+
+              {cartMessage.includes(
+                "successfully"
+              ) && (
                 <Link
                   href="/cart"
                   className="mt-3 block rounded-xl border border-gray-200 bg-gray-50 py-3 text-center text-xs font-bold hover:border-black"
@@ -722,11 +926,15 @@ export default function ProductDetailsPage({
                 </Link>
               )}
 
-              {/* ================= TRUST ================= */}
+              {/* =================================================
+                  TRUST
+              ================================================= */}
+
               <div className="mt-5 grid grid-cols-3 gap-2 border-t border-gray-100 pt-5">
 
                 <div className="text-center">
                   <div>🔒</div>
+
                   <p className="mt-1 text-[9px] font-bold text-gray-500">
                     Secure
                   </p>
@@ -734,6 +942,7 @@ export default function ProductDetailsPage({
 
                 <div className="text-center">
                   <div>✓</div>
+
                   <p className="mt-1 text-[9px] font-bold text-gray-500">
                     Verified
                   </p>
@@ -741,6 +950,7 @@ export default function ProductDetailsPage({
 
                 <div className="text-center">
                   <div>📦</div>
+
                   <p className="mt-1 text-[9px] font-bold text-gray-500">
                     Tracked
                   </p>
@@ -749,8 +959,11 @@ export default function ProductDetailsPage({
               </div>
 
             </div>
+
           </div>
+
         </section>
+
       </main>
 
       <Footer />
