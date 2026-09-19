@@ -2,9 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import {
-  onAuthStateChanged,
-} from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
@@ -21,9 +19,7 @@ import {
    FORMAT DATE
 ========================================================= */
 
-function formatDate(
-  value: unknown
-): string {
+function formatDate(value: unknown): string {
   if (!value) {
     return "Recently";
   }
@@ -34,26 +30,20 @@ function formatDate(
       value !== null &&
       "toDate" in value
     ) {
-      const timestamp =
-        value as {
-          toDate: () => Date;
-        };
+      const timestamp = value as {
+        toDate: () => Date;
+      };
 
       return timestamp
         .toDate()
-        .toLocaleDateString(
-          "en-IN",
-          {
-            day: "numeric",
-            month: "short",
-            year: "numeric",
-          }
-        );
+        .toLocaleDateString("en-IN", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        });
     }
 
-    return new Date(
-      String(value)
-    ).toLocaleDateString(
+    return new Date(String(value)).toLocaleDateString(
       "en-IN",
       {
         day: "numeric",
@@ -141,56 +131,49 @@ function statusClass(
 export default function MyOrdersPage() {
   const router = useRouter();
 
-  const [orders, setOrders] =
-    useState<Order[]>([]);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [error, setError] =
-    useState("");
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   /* =======================================================
      AUTH + ORDERS
   ======================================================= */
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            router.replace(
-              "/login?redirect=/account/orders"
-            );
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (user) => {
+        if (!user) {
+          router.replace(
+            "/login?redirect=/account/orders"
+          );
 
-            return;
-          }
-
-          try {
-            setLoading(true);
-            setError("");
-
-            const result =
-              await getUserOrders(
-                user.uid
-              );
-
-            setOrders(result);
-          } catch (err) {
-            console.error(
-              "Orders loading error:",
-              err
-            );
-
-            setError(
-              "Unable to load your orders."
-            );
-          } finally {
-            setLoading(false);
-          }
+          return;
         }
-      );
+
+        try {
+          setLoading(true);
+          setError("");
+
+          const result = await getUserOrders(
+            user.uid
+          );
+
+          setOrders(result);
+        } catch (err) {
+          console.error(
+            "Orders loading error:",
+            err
+          );
+
+          setError(
+            "Unable to load your orders."
+          );
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
 
     return () => {
       unsubscribe();
@@ -296,158 +279,157 @@ export default function MyOrdersPage() {
 
           <div className="space-y-4">
 
-            {orders.map(
-              (order) => {
-                const firstItem =
-                  order.items?.[0];
+            {orders.map((order) => {
+              const firstItem = order.items?.[0];
 
-                /*
-                 * IMPORTANT:
-                 * Order uses "id", not "orderId".
-                 */
+              /*
+               * Order uses "id", not "orderId".
+               */
+              const orderId = order.id;
 
-                const orderId =
-                  order.id;
+              /*
+               * Calculate total quantity from order items.
+               * Order type does not contain totalQuantity.
+               */
+              const totalQuantity =
+                order.items?.reduce(
+                  (total, item) =>
+                    total + item.quantity,
+                  0
+                ) ?? 0;
 
-                return (
-                  <Link
-                    key={orderId}
-                    href={`/account/orders/${orderId}`}
-                    className="block rounded-3xl border border-gray-200 bg-white p-4 transition hover:border-black hover:shadow-sm sm:p-5"
-                  >
+              return (
+                <Link
+                  key={orderId}
+                  href={`/account/orders/${orderId}`}
+                  className="block rounded-3xl border border-gray-200 bg-white p-4 transition hover:border-black hover:shadow-sm sm:p-5"
+                >
 
-                    {/* =======================================
-                        ORDER HEADER
-                    ======================================= */}
+                  {/* =======================================
+                      ORDER HEADER
+                  ======================================= */}
 
-                    <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
 
-                      <div>
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                          Order ID
-                        </p>
+                    <div>
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                        Order ID
+                      </p>
 
-                        <p className="mt-1 text-sm font-black">
-                          #
-                          {orderId.slice(
-                            0,
-                            12
-                          )}
-                        </p>
-                      </div>
-
-                      <span
-                        className={`rounded-full px-3 py-1.5 text-[10px] font-bold ${statusClass(
-                          order.status
-                        )}`}
-                      >
-                        {statusLabel(
-                          order.status
+                      <p className="mt-1 text-sm font-black">
+                        #
+                        {orderId.slice(
+                          0,
+                          12
                         )}
-                      </span>
+                      </p>
+                    </div>
+
+                    <span
+                      className={`rounded-full px-3 py-1.5 text-[10px] font-bold ${statusClass(
+                        order.status
+                      )}`}
+                    >
+                      {statusLabel(
+                        order.status
+                      )}
+                    </span>
+
+                  </div>
+
+                  {/* =======================================
+                      DIVIDER
+                  ======================================= */}
+
+                  <div className="my-4 border-t border-gray-100" />
+
+                  {/* =======================================
+                      ORDER CONTENT
+                  ======================================= */}
+
+                  <div className="flex gap-4">
+
+                    {/* IMAGE */}
+
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gray-100">
+
+                      {firstItem?.image ? (
+                        <img
+                          src={firstItem.image}
+                          alt={
+                            firstItem.name
+                          }
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-2xl">
+                          📦
+                        </span>
+                      )}
 
                     </div>
 
-                    {/* =======================================
-                        DIVIDER
-                    ======================================= */}
+                    {/* ORDER INFO */}
 
-                    <div className="my-4 border-t border-gray-100" />
+                    <div className="min-w-0 flex-1">
 
-                    {/* =======================================
-                        ORDER CONTENT
-                    ======================================= */}
+                      <h2 className="truncate text-sm font-black text-gray-900">
+                        {firstItem?.name ||
+                          "Order Items"}
+                      </h2>
 
-                    <div className="flex gap-4">
+                      {/* MORE ITEMS */}
 
-                      {/* IMAGE */}
-
-                      <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gray-100">
-
-                        {firstItem?.image ? (
-                          <img
-                            src={
-                              firstItem.image
-                            }
-                            alt={
-                              firstItem.name
-                            }
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          <span className="text-2xl">
-                            📦
-                          </span>
-                        )}
-
-                      </div>
-
-                      {/* ORDER INFO */}
-
-                      <div className="min-w-0 flex-1">
-
-                        <h2 className="truncate text-sm font-black text-gray-900">
-                          {firstItem?.name ||
-                            "Order Items"}
-                        </h2>
-
-                        {/* MORE ITEMS */}
-
-                        {order.items.length >
-                          1 && (
-                          <p className="mt-1 text-xs text-gray-400">
-                            +{" "}
-                            {order.items.length -
-                              1}{" "}
-                            more item
-                            {order.items.length -
-                              1 >
-                            1
-                              ? "s"
-                              : ""}
-                          </p>
-                        )}
-
-                        {/* QUANTITY + DATE */}
-
-                        <p className="mt-2 text-xs text-gray-500">
-                          {order.totalQuantity}{" "}
-                          unit
-                          {order.totalQuantity >
+                      {order.items.length > 1 && (
+                        <p className="mt-1 text-xs text-gray-400">
+                          +{" "}
+                          {order.items.length - 1}{" "}
+                          more item
+                          {order.items.length - 1 >
                           1
                             ? "s"
-                            : ""}{" "}
-                          •{" "}
-                          {formatDate(
-                            order.createdAt
-                          )}
+                            : ""}
                         </p>
+                      )}
 
-                        {/* TOTAL */}
+                      {/* QUANTITY + DATE */}
 
-                        <p className="mt-2 text-base font-black text-gray-900">
-                          ₹
-                          {order.totalAmount.toLocaleString(
-                            "en-IN"
-                          )}
-                        </p>
+                      <p className="mt-2 text-xs text-gray-500">
+                        {totalQuantity}{" "}
+                        unit
+                        {totalQuantity > 1
+                          ? "s"
+                          : ""}{" "}
+                        •{" "}
+                        {formatDate(
+                          order.createdAt
+                        )}
+                      </p>
 
-                      </div>
+                      {/* TOTAL */}
 
-                      {/* ARROW */}
-
-                      <div className="hidden items-center sm:flex">
-                        <span className="text-lg text-gray-400">
-                          →
-                        </span>
-                      </div>
+                      <p className="mt-2 text-base font-black text-gray-900">
+                        ₹
+                        {order.totalAmount.toLocaleString(
+                          "en-IN"
+                        )}
+                      </p>
 
                     </div>
 
-                  </Link>
-                );
-              }
-            )}
+                    {/* ARROW */}
+
+                    <div className="hidden items-center sm:flex">
+                      <span className="text-lg text-gray-400">
+                        →
+                      </span>
+                    </div>
+
+                  </div>
+
+                </Link>
+              );
+            })}
 
           </div>
         )}
