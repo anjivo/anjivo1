@@ -659,6 +659,8 @@ export default function NewSellerProductPage() {
 
           stock:
             Number(stock),
+
+          status: "draft",
         });
 
       console.log(
