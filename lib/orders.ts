@@ -12,7 +12,16 @@ import {
 
 import { db } from "@/lib/firebase";
 import type { CartItem } from "@/lib/cart";
-import type { ShippingAddress } from "@/lib/orders";
+
+export type ShippingAddress = {
+  fullName: string;
+  phone: string;
+  addressLine1: string;
+  addressLine2?: string;
+  city: string;
+  state: string;
+  pincode: string;
+};
 
 export type OrderStatus =
   | "pending"
@@ -65,17 +74,11 @@ function mapOrder(
   data: Record<string, unknown>
 ): Order {
   return {
-    orderId: String(
-      data.orderId ?? id
-    ),
+    orderId: String(data.orderId ?? id),
 
-    userId: String(
-      data.userId ?? ""
-    ),
+    userId: String(data.userId ?? ""),
 
-    sellerIds: Array.isArray(
-      data.sellerIds
-    )
+    sellerIds: Array.isArray(data.sellerIds)
       ? data.sellerIds.map(String)
       : [],
 
@@ -91,9 +94,7 @@ function mapOrder(
         ? "ONLINE"
         : "COD",
 
-    subtotal: Number(
-      data.subtotal ?? 0
-    ),
+    subtotal: Number(data.subtotal ?? 0),
 
     shippingCharge: Number(
       data.shippingCharge ?? 0
