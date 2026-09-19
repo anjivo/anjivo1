@@ -552,7 +552,7 @@ export async function createCustomerOrder(
       doc(
         db,
         "products",
-        cartItem.productId
+        cartItem.id
       );
 
     const productSnap =
