@@ -21,7 +21,7 @@ import {
 
 function statusLabel(
   status: Order["status"]
-) {
+): string {
   switch (status) {
     case "confirmed":
       return "Confirmed";
@@ -58,7 +58,7 @@ function statusLabel(
 
 function statusClass(
   status: Order["status"]
-) {
+): string {
   switch (status) {
     case "delivered":
       return "bg-green-100 text-green-700";
@@ -92,15 +92,12 @@ export default function OrderDetailsPage() {
   const router = useRouter();
 
   const orderId =
-    typeof params.orderId ===
-    "string"
+    typeof params.orderId === "string"
       ? params.orderId
       : "";
 
   const [order, setOrder] =
-    useState<Order | null>(
-      null
-    );
+    useState<Order | null>(null);
 
   const [loading, setLoading] =
     useState(true);
@@ -117,7 +114,9 @@ export default function OrderDetailsPage() {
       setError(
         "Invalid order ID."
       );
+
       setLoading(false);
+
       return;
     }
 
@@ -137,23 +136,11 @@ export default function OrderDetailsPage() {
             setLoading(true);
             setError("");
 
-            /*
-             * IMPORTANT:
-             * getOrderById requires both
-             * orderId and userId.
-             */
-
             const result =
               await getOrderById(
                 orderId,
                 user.uid
               );
-
-            /*
-             * getOrderById already checks
-             * whether the order belongs to
-             * the logged-in customer.
-             */
 
             if (!result) {
               setError(
@@ -179,8 +166,9 @@ export default function OrderDetailsPage() {
         }
       );
 
-    return () =>
+    return () => {
       unsubscribe();
+    };
   }, [
     orderId,
     router,
@@ -285,7 +273,7 @@ export default function OrderDetailsPage() {
             </p>
 
             <h1 className="mt-2 text-2xl font-black">
-              #{order.orderId}
+              #{order.id}
             </h1>
           </div>
 
@@ -589,6 +577,7 @@ export default function OrderDetailsPage() {
 
               </div>
             </section>
+
           </div>
         </div>
       </main>
