@@ -11,7 +11,32 @@ import {
   where,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import type { Product } from "@/types/product";
+import type { Product, WholesaleTier } from "@/types/product";
+
+export type SellerProductInput = {
+  name: string;
+  slug: string;
+  description?: string;
+
+  categoryId: string;
+  categoryName?: string;
+  subcategoryId?: string;
+
+  images: string[];
+
+  mrp: number;
+  retailPrice: number;
+  wholesalePrice: number;
+
+  moq: number;
+  wholesaleTiers: WholesaleTier[];
+
+  stock: number;
+
+  featured?: boolean;
+  bestSeller?: boolean;
+  trending?: boolean;
+};
 
 function mapProduct(
   id: string,
@@ -21,61 +46,72 @@ function mapProduct(
     id,
     name: String(data.name ?? ""),
     slug: String(data.slug ?? ""),
-    description: String(data.description ?? ""),
+    description:
+      typeof data.description === "string"
+        ? data.description
+        : "",
 
     categoryId: String(data.categoryId ?? ""),
-    categoryName: String(data.categoryName ?? ""),
+    categoryName:
+      typeof data.categoryName === "string"
+        ? data.categoryName
+        : "",
 
-    subcategoryId: data.subcategoryId
-      ? String(data.subcategoryId)
-      : undefined,
+    subcategoryId:
+      typeof data.subcategoryId === "string"
+        ? data.subcategoryId
+        : undefined,
 
     sellerId: String(data.sellerId ?? ""),
+    sellerName:
+      typeof data.sellerName === "string"
+        ? data.sellerName
+        : "",
 
-    sellerName: data.sellerName
-      ? String(data.sellerName)
-      : undefined,
-
-    sellerVerified: Boolean(data.sellerVerified),
+    sellerVerified:
+      data.sellerVerified === true,
 
     images: Array.isArray(data.images)
-      ? data.images.map(String)
+      ? data.images.filter(
+          (image): image is string =>
+            typeof image === "string"
+        )
       : [],
 
     mrp: Number(data.mrp ?? 0),
     retailPrice: Number(data.retailPrice ?? 0),
     wholesalePrice: Number(data.wholesalePrice ?? 0),
+
     moq: Number(data.moq ?? 1),
 
     wholesaleTiers: Array.isArray(data.wholesaleTiers)
-      ? data.wholesaleTiers.map((tier) => {
-          const value = tier as Record<string, unknown>;
-
-          return {
-            minQuantity: Number(
-              value.minQuantity ?? 1
-            ),
-
-            maxQuantity:
-              value.maxQuantity !== undefined
-                ? Number(value.maxQuantity)
-                : undefined,
-
-            price: Number(value.price ?? 0),
-          };
-        })
+      ? data.wholesaleTiers.map((tier) => ({
+          minQuantity: Number(
+            (tier as Record<string, unknown>).minQuantity ?? 0
+          ),
+          maxQuantity:
+            (tier as Record<string, unknown>).maxQuantity !==
+            undefined
+              ? Number(
+                  (tier as Record<string, unknown>).maxQuantity
+                )
+              : undefined,
+          price: Number(
+            (tier as Record<string, unknown>).price ?? 0
+          ),
+        }))
       : [],
 
     stock: Number(data.stock ?? 0),
 
     rating:
-      data.rating !== undefined
-        ? Number(data.rating)
+      typeof data.rating === "number"
+        ? data.rating
         : undefined,
 
     reviewsCount:
-      data.reviewsCount !== undefined
-        ? Number(data.reviewsCount)
+      typeof data.reviewsCount === "number"
+        ? data.reviewsCount
         : undefined,
 
     status:
@@ -85,41 +121,67 @@ function mapProduct(
         ? data.status
         : "draft",
 
-    featured: Boolean(data.featured),
-    bestSeller: Boolean(data.bestSeller),
-    trending: Boolean(data.trending),
+    featured: data.featured === true,
+    bestSeller: data.bestSeller === true,
+    trending: data.trending === true,
 
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
 }
 
+
 /* =========================================================
-   CREATE SELLER PRODUCT
-========================================================= */
+   CREATE PRODUCT
+   ========================================================= */
 
 export async function createSellerProduct(
   sellerId: string,
-  data: Omit<
-    Product,
-    "id" | "createdAt" | "updatedAt"
-  >
+  data: SellerProductInput
 ): Promise<string> {
-  const productsRef = collection(
-    db,
-    "products"
-  );
 
-  // Generate a new Firestore document reference
-  const productRef = doc(productsRef);
+  if (!sellerId) {
+    throw new Error("Seller ID is required.");
+  }
+
+  if (!data.name.trim()) {
+    throw new Error("Product name is required.");
+  }
+
+  if (!data.categoryId) {
+    throw new Error("Category is required.");
+  }
+
+  if (data.retailPrice <= 0) {
+    throw new Error("Retail price must be greater than zero.");
+  }
+
+  if (data.stock < 0) {
+    throw new Error("Stock cannot be negative.");
+  }
+
+  if (data.moq < 1) {
+    throw new Error("MOQ must be at least 1.");
+  }
+
+  const productRef = doc(
+    collection(db, "products")
+  );
 
   await setDoc(productRef, {
     ...data,
 
+    name: data.name.trim(),
+
     sellerId,
 
-    // New seller products always start as draft
     status: "draft",
+
+    sellerVerified: false,
+
+    featured: false,
+    bestSeller: false,
+    trending: false,
 
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -128,58 +190,71 @@ export async function createSellerProduct(
   return productRef.id;
 }
 
+
 /* =========================================================
-   GET ALL PRODUCTS OF SELLER
-========================================================= */
+   GET SELLER PRODUCTS
+   ========================================================= */
 
 export async function getSellerProducts(
   sellerId: string
 ): Promise<Product[]> {
-  const productsRef = collection(
-    db,
-    "products"
+
+  if (!sellerId) {
+    return [];
+  }
+
+  const productsQuery = query(
+    collection(db, "products"),
+    where("sellerId", "==", sellerId)
   );
 
-  const q = query(
-    productsRef,
-    where(
-      "sellerId",
-      "==",
-      sellerId
+  const snapshot = await getDocs(productsQuery);
+
+  const products = snapshot.docs.map((productDoc) =>
+    mapProduct(
+      productDoc.id,
+      productDoc.data() as Record<string, unknown>
     )
   );
 
-  const snapshot = await getDocs(q);
+  products.sort((a, b) => {
+    const aTime =
+      a.createdAt &&
+      typeof (a.createdAt as { seconds?: number }).seconds ===
+        "number"
+        ? (a.createdAt as { seconds: number }).seconds
+        : 0;
 
-  return snapshot.docs
-    .map((item) =>
-      mapProduct(
-        item.id,
-        item.data() as Record<string, unknown>
-      )
-    )
-    .sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
+    const bTime =
+      b.createdAt &&
+      typeof (b.createdAt as { seconds?: number }).seconds ===
+        "number"
+        ? (b.createdAt as { seconds: number }).seconds
+        : 0;
+
+    return bTime - aTime;
+  });
+
+  return products;
 }
+
 
 /* =========================================================
    GET SINGLE SELLER PRODUCT
-========================================================= */
+   ========================================================= */
 
 export async function getSellerProduct(
   sellerId: string,
   productId: string
 ): Promise<Product | null> {
+
   const productRef = doc(
     db,
     "products",
     productId
   );
 
-  const snapshot = await getDoc(
-    productRef
-  );
+  const snapshot = await getDoc(productRef);
 
   if (!snapshot.exists()) {
     return null;
@@ -188,7 +263,9 @@ export async function getSellerProduct(
   const data = snapshot.data();
 
   if (data.sellerId !== sellerId) {
-    return null;
+    throw new Error(
+      "You are not allowed to access this product."
+    );
   }
 
   return mapProduct(
@@ -197,51 +274,54 @@ export async function getSellerProduct(
   );
 }
 
+
 /* =========================================================
    UPDATE SELLER PRODUCT
-========================================================= */
+   ========================================================= */
 
 export async function updateSellerProduct(
   sellerId: string,
   productId: string,
-  data: Partial<Product>
+  data: Partial<SellerProductInput>
 ): Promise<void> {
+
   const productRef = doc(
     db,
     "products",
     productId
   );
 
-  const snapshot = await getDoc(
-    productRef
-  );
+  const snapshot = await getDoc(productRef);
 
   if (!snapshot.exists()) {
+    throw new Error("Product not found.");
+  }
+
+  const currentData = snapshot.data();
+
+  if (currentData.sellerId !== sellerId) {
     throw new Error(
-      "Product not found."
+      "You are not allowed to update this product."
     );
   }
 
-  if (
-    snapshot.data().sellerId !==
-    sellerId
-  ) {
-    throw new Error(
-      "You are not allowed to edit this product."
-    );
-  }
+  const safeData: Record<string, unknown> = {
+    ...data,
+  };
 
-  const {
-    id,
-    sellerId: ignoredSellerId,
-    createdAt,
-    updatedAt,
-    ...safeData
-  } = data;
+  // Never allow seller to change ownership.
+  delete safeData.sellerId;
 
-  // Keep sellerId and timestamps protected.
-  // Also don't allow seller to change status here.
-  delete (safeData as Partial<Product>).status;
+  // Never allow seller to change approval/status.
+  delete safeData.status;
+
+  // Never allow seller to change verification.
+  delete safeData.sellerVerified;
+
+  // Never allow seller to modify platform badges.
+  delete safeData.featured;
+  delete safeData.bestSeller;
+  delete safeData.trending;
 
   await updateDoc(productRef, {
     ...safeData,
@@ -249,22 +329,23 @@ export async function updateSellerProduct(
   });
 }
 
+
 /* =========================================================
-   QUICK STOCK UPDATE
-========================================================= */
+   UPDATE STOCK
+   ========================================================= */
 
 export async function updateSellerStock(
   sellerId: string,
   productId: string,
   stock: number
 ): Promise<void> {
-  if (
-    !Number.isFinite(stock) ||
-    stock < 0
-  ) {
-    throw new Error(
-      "Invalid stock quantity."
-    );
+
+  if (!Number.isFinite(stock)) {
+    throw new Error("Invalid stock value.");
+  }
+
+  if (stock < 0) {
+    throw new Error("Stock cannot be negative.");
   }
 
   const productRef = doc(
@@ -273,31 +354,19 @@ export async function updateSellerStock(
     productId
   );
 
-  const snapshot = await getDoc(
-    productRef
-  );
+  const snapshot = await getDoc(productRef);
 
   if (!snapshot.exists()) {
-    throw new Error(
-      "Product not found."
-    );
+    throw new Error("Product not found.");
   }
 
-  if (
-    snapshot.data().sellerId !==
-    sellerId
-  ) {
+  const data = snapshot.data();
+
+  if (data.sellerId !== sellerId) {
     throw new Error(
       "You are not allowed to update this product."
     );
   }
-
-  /*
-   * Seller Firestore rules currently require
-   * product status to remain unchanged.
-   *
-   * Therefore stock update changes ONLY stock.
-   */
 
   await updateDoc(productRef, {
     stock: Math.floor(stock),
@@ -305,40 +374,35 @@ export async function updateSellerStock(
   });
 }
 
+
 /* =========================================================
    DELETE SELLER PRODUCT
-========================================================= */
+   ========================================================= */
 
 export async function deleteSellerProduct(
   sellerId: string,
   productId: string
 ): Promise<void> {
+
   const productRef = doc(
     db,
     "products",
     productId
   );
 
-  const snapshot = await getDoc(
-    productRef
-  );
+  const snapshot = await getDoc(productRef);
 
   if (!snapshot.exists()) {
-    throw new Error(
-      "Product not found."
-    );
+    throw new Error("Product not found.");
   }
 
-  if (
-    snapshot.data().sellerId !==
-    sellerId
-  ) {
+  const data = snapshot.data();
+
+  if (data.sellerId !== sellerId) {
     throw new Error(
       "You are not allowed to delete this product."
     );
   }
 
-  await deleteDoc(
-    productRef
-  );
+  await deleteDoc(productRef);
 }
