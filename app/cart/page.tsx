@@ -21,103 +21,106 @@ import {
 } from "@/lib/cart";
 
 function money(value: number) {
-  return new Intl.NumberFormat(
-    "en-IN",
-    {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }
-  ).format(value);
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
 export default function CartPage() {
   const router = useRouter();
 
-  const [userId, setUserId] =
-    useState("");
+  const [userId, setUserId] = useState("");
+  const [cart, setCart] = useState<Cart | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [updating, setUpdating] = useState<string | null>(null);
+  const [error, setError] = useState("");
 
-  const [cart, setCart] =
-    useState<Cart | null>(null);
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [updating, setUpdating] =
-    useState<string | null>(null);
-
-  const [error, setError] =
-    useState("");
+  /* =======================================================
+     AUTH + LOAD CART
+  ======================================================= */
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            router.replace(
-              "/login?redirect=/cart"
-            );
-            return;
-          }
-
-          try {
-            setUserId(
-              user.uid
-            );
-
-            const result =
-              await getCart(
-                user.uid
-              );
-
-            setCart(result);
-          } catch (err) {
-            console.error(
-              "Cart loading error:",
-              err
-            );
-
-            setError(
-              err instanceof Error
-                ? err.message
-                : "Unable to load cart."
-            );
-          } finally {
-            setLoading(false);
-          }
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (user) => {
+        if (!user) {
+          router.replace("/login?redirect=/cart");
+          return;
         }
-      );
 
-    return () =>
-      unsubscribe();
+        try {
+          setLoading(true);
+          setError("");
+
+          setUserId(user.uid);
+
+          const result = await getCart(user.uid);
+
+          setCart(result);
+        } catch (err) {
+          console.error("Cart loading error:", err);
+
+          setError(
+            err instanceof Error
+              ? err.message
+              : "Unable to load cart."
+          );
+        } finally {
+          setLoading(false);
+        }
+      }
+    );
+
+    return () => unsubscribe();
   }, [router]);
 
-  const groups = useMemo(
-    () =>
-      cart
-        ? groupCartBySeller(
-            cart.items
-          )
-        : [],
-    [cart]
-  );
+  /* =======================================================
+     GROUP CART BY SELLER
+  ======================================================= */
 
-  const subtotal = useMemo(
-    () =>
-      cart
-        ? getCartSubtotal(
-            cart.items
-          )
-        : 0,
-    [cart]
-  );
+  const groups = useMemo(() => {
+    if (!cart) {
+      return [];
+    }
+
+    const grouped = groupCartBySeller(cart);
+
+    return Object.entries(grouped).map(
+      ([sellerId, items]) => ({
+        sellerId,
+        sellerName:
+          items[0]?.sellerName ||
+          "ANJIVO Seller",
+        items,
+      })
+    );
+  }, [cart]);
+
+  /* =======================================================
+     SUBTOTAL
+  ======================================================= */
+
+  const subtotal = useMemo(() => {
+    if (!cart) {
+      return 0;
+    }
+
+    return getCartSubtotal(cart.items);
+  }, [cart]);
+
+  /* =======================================================
+     CHANGE QUANTITY
+  ======================================================= */
 
   async function changeQuantity(
     item: CartItem,
     quantity: number
   ) {
-    if (!userId) return;
+    if (!userId) {
+      return;
+    }
 
     try {
       setUpdating(
@@ -146,10 +149,14 @@ export default function CartPage() {
     }
   }
 
-  async function removeItem(
-    item: CartItem
-  ) {
-    if (!userId) return;
+  /* =======================================================
+     REMOVE ITEM
+  ======================================================= */
+
+  async function removeItem(item: CartItem) {
+    if (!userId) {
+      return;
+    }
 
     try {
       setUpdating(
@@ -177,6 +184,10 @@ export default function CartPage() {
     }
   }
 
+  /* =======================================================
+     LOADING
+  ======================================================= */
+
   if (loading) {
     return (
       <div className="min-h-screen bg-[#f7f8fa]">
@@ -184,7 +195,6 @@ export default function CartPage() {
 
         <main className="mx-auto max-w-6xl px-4 py-12">
           <div className="rounded-3xl border border-gray-200 bg-white p-12 text-center">
-
             <div className="text-4xl">
               🛒
             </div>
@@ -192,7 +202,6 @@ export default function CartPage() {
             <p className="mt-4 text-sm font-bold text-gray-500">
               Loading your cart...
             </p>
-
           </div>
         </main>
 
@@ -201,15 +210,17 @@ export default function CartPage() {
     );
   }
 
+  /* =======================================================
+     EMPTY CART
+  ======================================================= */
+
   if (!cart || cart.items.length === 0) {
     return (
       <div className="min-h-screen bg-[#f7f8fa]">
         <Header />
 
         <main className="mx-auto max-w-5xl px-4 py-12">
-
           <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center sm:p-16">
-
             <div className="text-6xl">
               🛒
             </div>
@@ -229,9 +240,7 @@ export default function CartPage() {
             >
               Continue Shopping
             </Link>
-
           </div>
-
         </main>
 
         <Footer />
@@ -239,17 +248,22 @@ export default function CartPage() {
     );
   }
 
+  /* =======================================================
+     MAIN
+  ======================================================= */
+
   return (
     <div className="min-h-screen bg-[#f7f8fa]">
-
       <Header />
 
       <main className="mx-auto max-w-7xl px-4 py-6 sm:py-10">
 
+        {/* =================================================
+            PAGE HEADER
+        ================================================= */}
+
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-
           <div>
-
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400">
               ANJIVO Shopping
             </p>
@@ -262,13 +276,12 @@ export default function CartPage() {
               {cart.items.length} item
               {cart.items.length === 1
                 ? ""
-                : "s"} from{" "}
-              {groups.length} seller
+                : "s"}{" "}
+              from {groups.length} seller
               {groups.length === 1
                 ? ""
                 : "s"}
             </p>
-
           </div>
 
           <Link
@@ -277,8 +290,11 @@ export default function CartPage() {
           >
             ← Continue Shopping
           </Link>
-
         </div>
+
+        {/* =================================================
+            ERROR
+        ================================================= */}
 
         {error && (
           <div className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4">
@@ -288,245 +304,228 @@ export default function CartPage() {
           </div>
         )}
 
+        {/* =================================================
+            CONTENT
+        ================================================= */}
+
         <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_350px]">
 
-          {/* CART ITEMS */}
+          {/* =================================================
+              CART ITEMS
+          ================================================= */}
 
           <div className="space-y-5">
 
-            {groups.map(
-              (group) => (
-                <section
-                  key={
-                    group.sellerId
-                  }
-                  className="overflow-hidden rounded-3xl border border-gray-200 bg-white"
-                >
+            {groups.map((group) => (
+              <section
+                key={group.sellerId}
+                className="overflow-hidden rounded-3xl border border-gray-200 bg-white"
+              >
 
-                  <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-5 py-4">
+                {/* SELLER HEADER */}
 
-                    <div>
+                <div className="flex items-center justify-between border-b border-gray-100 bg-gray-50 px-5 py-4">
+                  <div>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                      Seller
+                    </p>
 
-                      <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                        Seller
-                      </p>
-
-                      <p className="mt-1 text-sm font-black">
-                        {group.sellerName}
-                      </p>
-
-                    </div>
-
-                    <span className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold text-gray-500">
-                      {group.items.length} item
-                      {group.items.length ===
-                      1
-                        ? ""
-                        : "s"}
-                    </span>
-
+                    <p className="mt-1 text-sm font-black">
+                      {group.sellerName}
+                    </p>
                   </div>
 
-                  <div className="divide-y divide-gray-100">
+                  <span className="rounded-full bg-white px-3 py-1.5 text-[10px] font-bold text-gray-500">
+                    {group.items.length} item
+                    {group.items.length === 1
+                      ? ""
+                      : "s"}
+                  </span>
+                </div>
 
-                    {group.items.map(
-                      (item) => {
-                        const key = `${item.sellerId}-${item.productId}`;
+                {/* ITEMS */}
 
-                        const isUpdating =
-                          updating ===
-                          key;
+                <div className="divide-y divide-gray-100">
 
-                        return (
-                          <div
-                            key={
-                              key
-                            }
-                            className="p-5"
+                  {group.items.map((item) => {
+                    const key = `${item.sellerId}-${item.productId}`;
+
+                    const isUpdating =
+                      updating === key;
+
+                    return (
+                      <div
+                        key={key}
+                        className="p-5"
+                      >
+
+                        {/* PRODUCT */}
+
+                        <div className="flex gap-4">
+
+                          {/* IMAGE */}
+
+                          <Link
+                            href={`/products/${item.slug}`}
+                            className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-gray-100 sm:h-28 sm:w-28"
                           >
-
-                            <div className="flex gap-4">
-
-                              {/* IMAGE */}
-
-                              <Link
-                                href={`/products/${item.slug}`}
-                                className="h-24 w-24 shrink-0 overflow-hidden rounded-2xl bg-gray-100 sm:h-28 sm:w-28"
-                              >
-
-                                {item.image ? (
-                                  <img
-                                    src={
-                                      item.image
-                                    }
-                                    alt={
-                                      item.name
-                                    }
-                                    className="h-full w-full object-cover"
-                                  />
-                                ) : (
-                                  <div className="flex h-full items-center justify-center text-2xl">
-                                    📦
-                                  </div>
-                                )}
-
-                              </Link>
-
-                              {/* INFO */}
-
-                              <div className="min-w-0 flex-1">
-
-                                <Link
-                                  href={`/products/${item.slug}`}
-                                  className="text-sm font-black hover:underline"
-                                >
-                                  {item.name}
-                                </Link>
-
-                                <p className="mt-1 text-[10px] uppercase tracking-wide text-gray-400">
-                                  {item.pricingType ===
-                                  "wholesale"
-                                    ? "Wholesale"
-                                    : "Retail"}
-                                </p>
-
-                                {item.pricingType ===
-                                  "wholesale" && (
-                                  <p className="mt-1 text-[10px] font-semibold text-green-600">
-                                    MOQ:{" "}
-                                    {item.moq}
-                                  </p>
-                                )}
-
-                                <div className="mt-3 flex flex-wrap items-center gap-3">
-
-                                  <p className="text-base font-black">
-                                    {money(
-                                      item.selectedPrice
-                                    )}
-                                  </p>
-
-                                  {item.mrp >
-                                    item.selectedPrice && (
-                                    <p className="text-xs text-gray-400 line-through">
-                                      {money(
-                                        item.mrp
-                                      )}
-                                    </p>
-                                  )}
-
-                                </div>
-
+                            {item.image ? (
+                              <img
+                                src={item.image}
+                                alt={item.name}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full items-center justify-center text-2xl">
+                                📦
                               </div>
+                            )}
+                          </Link>
 
-                              {/* REMOVE */}
+                          {/* INFO */}
+
+                          <div className="min-w-0 flex-1">
+                            <Link
+                              href={`/products/${item.slug}`}
+                              className="text-sm font-black hover:underline"
+                            >
+                              {item.name}
+                            </Link>
+
+                            <p className="mt-1 text-[10px] uppercase tracking-wide text-gray-400">
+                              {item.pricingType ===
+                              "wholesale"
+                                ? "Wholesale"
+                                : "Retail"}
+                            </p>
+
+                            {item.pricingType ===
+                              "wholesale" && (
+                              <p className="mt-1 text-[10px] font-semibold text-green-600">
+                                MOQ: {item.moq}
+                              </p>
+                            )}
+
+                            <div className="mt-3 flex flex-wrap items-center gap-3">
+                              <p className="text-base font-black">
+                                {money(
+                                  item.selectedPrice
+                                )}
+                              </p>
+
+                              {item.mrp >
+                                item.selectedPrice && (
+                                <p className="text-xs text-gray-400 line-through">
+                                  {money(item.mrp)}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* REMOVE */}
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              removeItem(item)
+                            }
+                            disabled={isUpdating}
+                            className="self-start text-xs font-bold text-red-500 hover:text-red-700 disabled:opacity-40"
+                          >
+                            Remove
+                          </button>
+                        </div>
+
+                        {/* QUANTITY */}
+
+                        <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+
+                          <div className="flex items-center gap-3">
+
+                            <span className="text-xs font-bold text-gray-500">
+                              Quantity
+                            </span>
+
+                            <div className="flex items-center overflow-hidden rounded-xl border border-gray-200">
+
+                              {/* MINUS */}
 
                               <button
+                                type="button"
                                 onClick={() =>
-                                  removeItem(
-                                    item
+                                  changeQuantity(
+                                    item,
+                                    item.quantity - 1
                                   )
                                 }
                                 disabled={
-                                  isUpdating
+                                  isUpdating ||
+                                  item.quantity <= 1
                                 }
-                                className="self-start text-xs font-bold text-red-500 hover:text-red-700 disabled:opacity-40"
+                                className="h-9 w-9 text-sm font-black hover:bg-gray-50 disabled:opacity-30"
                               >
-                                Remove
+                                −
+                              </button>
+
+                              {/* CURRENT */}
+
+                              <span className="flex h-9 min-w-10 items-center justify-center border-x border-gray-200 px-2 text-xs font-black">
+                                {item.quantity}
+                              </span>
+
+                              {/* PLUS */}
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  changeQuantity(
+                                    item,
+                                    item.quantity + 1
+                                  )
+                                }
+                                disabled={
+                                  isUpdating ||
+                                  (item.stock > 0 &&
+                                    item.quantity >=
+                                      item.stock)
+                                }
+                                className="h-9 w-9 text-sm font-black hover:bg-gray-50 disabled:opacity-30"
+                              >
+                                +
                               </button>
 
                             </div>
 
-                            {/* QUANTITY */}
-
-                            <div className="mt-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-
-                              <div className="flex items-center gap-3">
-
-                                <span className="text-xs font-bold text-gray-500">
-                                  Quantity
-                                </span>
-
-                                <div className="flex items-center overflow-hidden rounded-xl border border-gray-200">
-
-                                  <button
-                                    onClick={() =>
-                                      changeQuantity(
-                                        item,
-                                        item.quantity -
-                                          1
-                                      )
-                                    }
-                                    disabled={
-                                      isUpdating ||
-                                      item.quantity <=
-                                        1
-                                    }
-                                    className="h-9 w-9 text-sm font-black hover:bg-gray-50 disabled:opacity-30"
-                                  >
-                                    −
-                                  </button>
-
-                                  <span className="flex h-9 min-w-10 items-center justify-center border-x border-gray-200 px-2 text-xs font-black">
-                                    {item.quantity}
-                                  </span>
-
-                                  <button
-                                    onClick={() =>
-                                      changeQuantity(
-                                        item,
-                                        item.quantity +
-                                          1
-                                      )
-                                    }
-                                    disabled={
-                                      isUpdating ||
-                                      (
-                                        item.stock >
-                                        0 &&
-                                        item.quantity >=
-                                          item.stock
-                                      )
-                                    }
-                                    className="h-9 w-9 text-sm font-black hover:bg-gray-50 disabled:opacity-30"
-                                  >
-                                    +
-                                  </button>
-
-                                </div>
-
-                                {item.stock >
-                                  0 && (
-                                  <span className="text-[10px] text-gray-400">
-                                    {item.stock} available
-                                  </span>
-                                )}
-
-                              </div>
-
-                              <p className="text-sm font-black">
-                                {money(
-                                  item.selectedPrice *
-                                    item.quantity
-                                )}
-                              </p>
-
-                            </div>
-
+                            {item.stock > 0 && (
+                              <span className="text-[10px] text-gray-400">
+                                {item.stock} available
+                              </span>
+                            )}
                           </div>
-                        );
-                      }
-                    )}
 
-                  </div>
+                          {/* ITEM TOTAL */}
 
-                </section>
-              )
-            )}
+                          <p className="text-sm font-black">
+                            {money(
+                              item.selectedPrice *
+                                item.quantity
+                            )}
+                          </p>
+
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                </div>
+              </section>
+            ))}
 
           </div>
 
-          {/* SUMMARY */}
+          {/* =================================================
+              SUMMARY
+          ================================================= */}
 
           <aside className="lg:sticky lg:top-24 lg:h-fit">
 
@@ -564,9 +563,7 @@ export default function CartPage() {
                   </span>
 
                   <span className="font-bold">
-                    {money(
-                      subtotal
-                    )}
+                    {money(subtotal)}
                   </span>
                 </div>
 
@@ -585,17 +582,13 @@ export default function CartPage() {
               <div className="my-5 border-t border-gray-100" />
 
               <div className="flex items-center justify-between">
-
                 <span className="text-sm font-black">
                   Total
                 </span>
 
                 <span className="text-xl font-black">
-                  {money(
-                    subtotal
-                  )}
+                  {money(subtotal)}
                 </span>
-
               </div>
 
               <Link
@@ -609,30 +602,27 @@ export default function CartPage() {
                 Final shipping charges and order details
                 will be shown before payment.
               </p>
-
             </div>
 
-            <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
+            {/* SECURITY */}
 
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-white p-4">
               <p className="text-xs font-black">
                 🛡 Secure Shopping
               </p>
 
               <p className="mt-1 text-[10px] leading-4 text-gray-500">
-                Your cart can contain products from multiple
-                ANJIVO sellers.
+                Your cart can contain products from
+                multiple ANJIVO sellers.
               </p>
-
             </div>
 
           </aside>
 
         </div>
-
       </main>
 
       <Footer />
-
     </div>
   );
 }
