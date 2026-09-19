@@ -107,7 +107,7 @@ export default function CartPage() {
       return 0;
     }
 
-    return getCartSubtotal(cart.items);
+    return getCartSubtotal(cart);
   }, [cart]);
 
   /* =======================================================
@@ -348,7 +348,8 @@ export default function CartPage() {
                 <div className="divide-y divide-gray-100">
 
                   {group.items.map((item) => {
-                    const key = `${item.sellerId}-${item.productId}`;
+                    const key =
+                      `${item.sellerId}-${item.productId}`;
 
                     const isUpdating =
                       updating === key;
@@ -434,6 +435,7 @@ export default function CartPage() {
                           >
                             Remove
                           </button>
+
                         </div>
 
                         {/* QUANTITY */}
@@ -501,6 +503,7 @@ export default function CartPage() {
                                 {item.stock} available
                               </span>
                             )}
+
                           </div>
 
                           {/* ITEM TOTAL */}
@@ -513,6 +516,7 @@ export default function CartPage() {
                           </p>
 
                         </div>
+
                       </div>
                     );
                   })}
@@ -602,6 +606,7 @@ export default function CartPage() {
                 Final shipping charges and order details
                 will be shown before payment.
               </p>
+
             </div>
 
             {/* SECURITY */}
