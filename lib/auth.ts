@@ -18,94 +18,105 @@ import {
 } from "@/lib/firebase";
 
 /* =========================================================
+   TYPES
+========================================================= */
+
+export type CustomerType =
+  | "RETAIL_CUSTOMER"
+  | "WHOLESALE_CUSTOMER";
+
+export type CustomerRegistrationData = {
+  name: string;
+  email: string;
+  phone: string;
+  password: string;
+  customerType: CustomerType;
+};
+
+/* =========================================================
    REGISTER CUSTOMER
 ========================================================= */
 
 export async function registerCustomer(
-  name: string,
-  email: string,
-  password: string,
-  customerType:
-    | "RETAIL_CUSTOMER"
-    | "WHOLESALE_CUSTOMER" = "RETAIL_CUSTOMER"
+  data: CustomerRegistrationData
 ): Promise<User> {
-  const cleanName =
-    name.trim();
-
-  const cleanEmail =
-    email.trim().toLowerCase();
+  const cleanName = data.name.trim();
+  const cleanEmail = data.email.trim().toLowerCase();
+  const cleanPhone = data.phone.trim();
 
   if (!cleanName) {
-    throw new Error(
-      "Name is required."
-    );
+    throw new Error("Name is required.");
   }
 
   if (!cleanEmail) {
-    throw new Error(
-      "Email is required."
-    );
+    throw new Error("Email is required.");
   }
 
-  if (password.length < 6) {
+  if (!cleanPhone) {
+    throw new Error("Mobile number is required.");
+  }
+
+  if (data.password.length < 6) {
     throw new Error(
       "Password must be at least 6 characters."
     );
   }
 
+  /*
+   * Create Firebase Auth account
+   */
+
   const credential =
     await createUserWithEmailAndPassword(
       auth,
       cleanEmail,
-      password
+      data.password
     );
 
-  const user =
-    credential.user;
+  const user = credential.user;
 
   /*
    * Firebase Auth profile
    */
 
-  await updateProfile(
-    user,
-    {
-      displayName:
-        cleanName,
-    }
-  );
+  await updateProfile(user, {
+    displayName: cleanName,
+  });
 
   /*
    * Firestore user profile
+   *
+   * Verification fields are intentionally false.
+   * They must NOT be changed directly by the client
+   * after the verification system is implemented.
    */
 
   await setDoc(
-    doc(
-      db,
-      "users",
-      user.uid
-    ),
+    doc(db, "users", user.uid),
     {
       uid: user.uid,
 
-      name:
-        cleanName,
+      name: cleanName,
 
-      email:
-        cleanEmail,
+      email: cleanEmail,
 
-      role:
-        customerType,
+      phone: cleanPhone,
 
-      phone: "",
+      role: data.customerType,
+
+      customerType: data.customerType,
+
+      emailVerified: false,
+
+      phoneVerified: false,
+
+      accountStatus: "PENDING_VERIFICATION",
 
       photoURL: "",
 
-      createdAt:
-        serverTimestamp(),
+      createdAt: serverTimestamp(),
 
-      updatedAt:
-        serverTimestamp(),
+      updatedAt: serverTimestamp(),
     }
   );
 
