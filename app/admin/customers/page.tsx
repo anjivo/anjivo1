@@ -14,15 +14,16 @@ import {
 
 import { auth, db } from "@/lib/firebase";
 
-type CustomerType =
+type CustomerRole =
   | "RETAIL_CUSTOMER"
   | "WHOLESALE_CUSTOMER";
 
-type CustomerStatus =
+type AccountStatus =
   | "ACTIVE"
   | "PENDING_VERIFICATION"
   | "BLOCKED"
-  | "SUSPENDED";
+  | "SUSPENDED"
+  | "REJECTED";
 
 type Customer = {
   id: string;
@@ -32,206 +33,162 @@ type Customer = {
   email: string;
   phone: string;
 
-  role: string;
-  customerType: CustomerType;
+  role: CustomerRole;
 
   emailVerified: boolean;
   phoneVerified: boolean;
 
-  accountStatus: CustomerStatus;
+  accountStatus: AccountStatus;
 
-  city?: string;
-  state?: string;
-  pincode?: string;
+  photoURL: string;
+
+  customerType: string;
 
   createdAt?: unknown;
   updatedAt?: unknown;
 };
 
-type CustomerFilter =
-  | "all"
-  | "retail"
-  | "wholesale"
-  | "active"
-  | "pending"
-  | "blocked";
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
 
-/* =========================================================
-   HELPERS
-========================================================= */
+function booleanValue(value: unknown): boolean {
+  return value === true;
+}
 
-function getTimestampValue(
-  value: unknown
-): number {
+function timestampValue(value: unknown): number {
   if (!value) return 0;
 
   if (
     typeof value === "object" &&
     value !== null &&
-    "seconds" in value
+    "toMillis" in value &&
+    typeof (value as { toMillis?: unknown }).toMillis ===
+      "function"
   ) {
-    return Number(
-      (value as { seconds?: unknown }).seconds ?? 0
-    );
+    return (
+      value as { toMillis: () => number }
+    ).toMillis();
   }
 
   if (value instanceof Date) {
-    return Math.floor(
-      value.getTime() / 1000
-    );
+    return value.getTime();
+  }
+
+  if (typeof value === "string") {
+    const time = new Date(value).getTime();
+
+    return Number.isFinite(time) ? time : 0;
   }
 
   return 0;
 }
 
-function stringValue(
-  value: unknown
-): string {
-  if (
-    value === undefined ||
-    value === null
-  ) {
-    return "";
-  }
+function formatDate(value: unknown): string {
+  const millis = timestampValue(value);
 
-  return String(value);
-}
+  if (!millis) return "—";
 
-function booleanValue(
-  value: unknown
-): boolean {
-  return value === true;
+  return new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(millis));
 }
 
 function mapCustomer(
   id: string,
   data: Record<string, unknown>
-): Customer {
-  const rawType =
-    stringValue(
-      data.customerType
-    );
-
-  const customerType: CustomerType =
-    rawType ===
-    "WHOLESALE_CUSTOMER"
+): Customer | null {
+  const role =
+    data.role === "WHOLESALE_CUSTOMER"
       ? "WHOLESALE_CUSTOMER"
-      : "RETAIL_CUSTOMER";
+      : data.role === "RETAIL_CUSTOMER"
+      ? "RETAIL_CUSTOMER"
+      : null;
 
-  const rawStatus =
-    stringValue(
-      data.accountStatus
-    );
+  if (!role) return null;
 
-  let accountStatus: CustomerStatus =
-    "PENDING_VERIFICATION";
-
-  if (
-    rawStatus === "ACTIVE" ||
-    rawStatus === "BLOCKED" ||
-    rawStatus === "SUSPENDED"
-  ) {
-    accountStatus =
-      rawStatus as CustomerStatus;
-  }
+  const accountStatus =
+    data.accountStatus ===
+      "PENDING_VERIFICATION" ||
+    data.accountStatus === "BLOCKED" ||
+    data.accountStatus === "SUSPENDED" ||
+    data.accountStatus === "REJECTED"
+      ? data.accountStatus
+      : "ACTIVE";
 
   return {
     id,
 
     uid:
-      stringValue(
-        data.uid
-      ) || id,
+      stringValue(data.uid) || id,
 
     name:
-      stringValue(
-        data.name
-      ),
+      stringValue(data.name) ||
+      stringValue(data.displayName) ||
+      "Unnamed Customer",
 
-    email:
-      stringValue(
-        data.email
-      ),
+    email: stringValue(data.email),
 
     phone:
-      stringValue(
-        data.phone
-      ),
+      stringValue(data.phone) ||
+      stringValue(data.mobile),
 
-    role:
-      stringValue(
-        data.role
-      ),
+    role,
 
-    customerType,
+    emailVerified: booleanValue(
+      data.emailVerified
+    ),
 
-    emailVerified:
-      booleanValue(
-        data.emailVerified
-      ),
-
-    phoneVerified:
-      booleanValue(
-        data.phoneVerified
-      ),
+    phoneVerified: booleanValue(
+      data.phoneVerified
+    ),
 
     accountStatus,
 
-    city:
-      data.city
-        ? stringValue(data.city)
-        : undefined,
+    photoURL:
+      stringValue(data.photoURL),
 
-    state:
-      data.state
-        ? stringValue(data.state)
-        : undefined,
+    customerType:
+      stringValue(data.customerType) ||
+      role,
 
-    pincode:
-      data.pincode
-        ? stringValue(data.pincode)
-        : undefined,
-
-    createdAt:
-      data.createdAt,
-
-    updatedAt:
-      data.updatedAt,
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
   };
 }
 
-/* =========================================================
-   PAGE
-========================================================= */
-
 export default function AdminCustomersPage() {
-  const [loading, setLoading] =
-    useState(true);
-
+  const [loading, setLoading] = useState(true);
   const [authorized, setAuthorized] =
     useState(false);
 
   const [customers, setCustomers] =
     useState<Customer[]>([]);
 
-  const [filter, setFilter] =
-    useState<CustomerFilter>("all");
-
   const [search, setSearch] =
     useState("");
 
-  const [processing, setProcessing] =
-    useState<string | null>(null);
+  const [roleFilter, setRoleFilter] =
+    useState<
+      "all" | CustomerRole
+    >("all");
 
-  const [error, setError] =
-    useState("");
+  const [statusFilter, setStatusFilter] =
+    useState<
+      "all" | AccountStatus
+    >("all");
 
-  const [success, setSuccess] =
-    useState("");
+  const [verificationFilter, setVerificationFilter] =
+    useState<
+      "all" | "verified" | "unverified"
+    >("all");
 
-  /* =========================================================
-     ADMIN AUTH
-  ========================================================= */
+  const [selectedCustomer, setSelectedCustomer] =
+    useState<Customer | null>(null);
+
+  const [saving, setSaving] =
+    useState(false);
 
   useEffect(() => {
     const unsubscribe =
@@ -245,7 +202,7 @@ export default function AdminCustomersPage() {
           }
 
           try {
-            const userSnapshot =
+            const userSnap =
               await getDoc(
                 doc(
                   db,
@@ -254,16 +211,13 @@ export default function AdminCustomersPage() {
                 )
               );
 
-            if (
-              !userSnapshot.exists()
-            ) {
-              window.location.href =
-                "/";
+            if (!userSnap.exists()) {
+              window.location.href = "/";
               return;
             }
 
             const userData =
-              userSnapshot.data();
+              userSnap.data();
 
             if (
               userData.role !==
@@ -277,456 +231,265 @@ export default function AdminCustomersPage() {
             setAuthorized(true);
 
             await loadCustomers();
-          } catch (err) {
+          } catch (error) {
             console.error(
-              "Customer admin auth error:",
-              err
+              "Admin authorization error:",
+              error
             );
 
-            setError(
-              "Unable to verify admin access."
-            );
+            window.location.href = "/";
           } finally {
             setLoading(false);
           }
         }
       );
 
-    return () =>
-      unsubscribe();
+    return () => unsubscribe();
   }, []);
-
-  /* =========================================================
-     LOAD CUSTOMERS
-  ========================================================= */
 
   async function loadCustomers() {
     try {
-      setError("");
-
-      /*
-       * Deliberately no orderBy("createdAt").
-       * Older user documents may not have createdAt.
-       */
-
       const snapshot =
         await getDocs(
-          collection(
-            db,
-            "users"
-          )
+          collection(db, "users")
         );
 
       const list: Customer[] = [];
 
       snapshot.docs.forEach(
         (item) => {
-          const data =
-            item.data();
-
-          /*
-           * Only marketplace customers.
-           * ADMIN and SELLER accounts
-           * are excluded.
-           */
-
-          if (
-            data.role !==
-              "RETAIL_CUSTOMER" &&
-            data.role !==
-              "WHOLESALE_CUSTOMER"
-          ) {
-            return;
-          }
-
-          list.push(
+          const customer =
             mapCustomer(
               item.id,
-              data
-            )
-          );
+              item.data()
+            );
+
+          if (customer) {
+            list.push(customer);
+          }
         }
       );
 
       list.sort(
         (a, b) =>
-          getTimestampValue(
+          timestampValue(
             b.createdAt
           ) -
-          getTimestampValue(
+          timestampValue(
             a.createdAt
           )
       );
 
       setCustomers(list);
-    } catch (err) {
+    } catch (error) {
       console.error(
         "Load customers error:",
-        err
+        error
       );
 
-      setError(
-        "Customers load nahi ho paaye."
+      alert(
+        "Customers load nahi ho paaye. Firestore rules check karein."
       );
     }
   }
-
-  /* =========================================================
-     ACTIVATE CUSTOMER
-  ========================================================= */
-
-  async function activateCustomer(
-    customer: Customer
-  ) {
-    const confirmed =
-      window.confirm(
-        `Activate "${customer.name || customer.email}"?`
-      );
-
-    if (!confirmed) return;
-
-    try {
-      setProcessing(
-        customer.id
-      );
-
-      setError("");
-      setSuccess("");
-
-      await updateDoc(
-        doc(
-          db,
-          "users",
-          customer.uid
-        ),
-        {
-          accountStatus:
-            "ACTIVE",
-
-          updatedAt:
-            serverTimestamp(),
-        }
-      );
-
-      setCustomers(
-        (current) =>
-          current.map(
-            (item) =>
-              item.id ===
-              customer.id
-                ? {
-                    ...item,
-                    accountStatus:
-                      "ACTIVE",
-                  }
-                : item
-          )
-      );
-
-      setSuccess(
-        `${customer.name || "Customer"} is now active.`
-      );
-    } catch (err) {
-      console.error(
-        "Activate customer error:",
-        err
-      );
-
-      setError(
-        "Customer activate nahi ho saka."
-      );
-    } finally {
-      setProcessing(null);
-    }
-  }
-
-  /* =========================================================
-     BLOCK CUSTOMER
-  ========================================================= */
-
-  async function blockCustomer(
-    customer: Customer
-  ) {
-    const confirmed =
-      window.confirm(
-        `Block "${customer.name || customer.email}"?\n\nThe customer will not be treated as an active marketplace account.`
-      );
-
-    if (!confirmed) return;
-
-    try {
-      setProcessing(
-        customer.id
-      );
-
-      setError("");
-      setSuccess("");
-
-      await updateDoc(
-        doc(
-          db,
-          "users",
-          customer.uid
-        ),
-        {
-          accountStatus:
-            "BLOCKED",
-
-          updatedAt:
-            serverTimestamp(),
-        }
-      );
-
-      setCustomers(
-        (current) =>
-          current.map(
-            (item) =>
-              item.id ===
-              customer.id
-                ? {
-                    ...item,
-                    accountStatus:
-                      "BLOCKED",
-                  }
-                : item
-          )
-      );
-
-      setSuccess(
-        `${customer.name || "Customer"} has been blocked.`
-      );
-    } catch (err) {
-      console.error(
-        "Block customer error:",
-        err
-      );
-
-      setError(
-        "Customer block nahi ho saka."
-      );
-    } finally {
-      setProcessing(null);
-    }
-  }
-
-  /* =========================================================
-     SUSPEND CUSTOMER
-  ========================================================= */
-
-  async function suspendCustomer(
-    customer: Customer
-  ) {
-    const confirmed =
-      window.confirm(
-        `Suspend "${customer.name || customer.email}"?`
-      );
-
-    if (!confirmed) return;
-
-    try {
-      setProcessing(
-        customer.id
-      );
-
-      setError("");
-      setSuccess("");
-
-      await updateDoc(
-        doc(
-          db,
-          "users",
-          customer.uid
-        ),
-        {
-          accountStatus:
-            "SUSPENDED",
-
-          updatedAt:
-            serverTimestamp(),
-        }
-      );
-
-      setCustomers(
-        (current) =>
-          current.map(
-            (item) =>
-              item.id ===
-              customer.id
-                ? {
-                    ...item,
-                    accountStatus:
-                      "SUSPENDED",
-                  }
-                : item
-          )
-      );
-
-      setSuccess(
-        `${customer.name || "Customer"} has been suspended.`
-      );
-    } catch (err) {
-      console.error(
-        "Suspend customer error:",
-        err
-      );
-
-      setError(
-        "Customer suspend nahi ho saka."
-      );
-    } finally {
-      setProcessing(null);
-    }
-  }
-
-  /* =========================================================
-     FILTER
-  ========================================================= */
 
   const filteredCustomers =
     useMemo(() => {
-      const searchText =
-        search
-          .trim()
-          .toLowerCase();
+      const query =
+        search.trim().toLowerCase();
 
       return customers.filter(
         (customer) => {
-          let matchesFilter =
-            true;
-
-          if (
-            filter === "retail"
-          ) {
-            matchesFilter =
-              customer.customerType ===
-              "RETAIL_CUSTOMER";
-          }
-
-          if (
-            filter === "wholesale"
-          ) {
-            matchesFilter =
-              customer.customerType ===
-              "WHOLESALE_CUSTOMER";
-          }
-
-          if (
-            filter === "active"
-          ) {
-            matchesFilter =
-              customer.accountStatus ===
-              "ACTIVE";
-          }
-
-          if (
-            filter === "pending"
-          ) {
-            matchesFilter =
-              customer.accountStatus ===
-              "PENDING_VERIFICATION";
-          }
-
-          if (
-            filter === "blocked"
-          ) {
-            matchesFilter =
-              customer.accountStatus ===
-              "BLOCKED";
-          }
-
-          const searchableText = [
-            customer.name,
-            customer.email,
-            customer.phone,
-            customer.city,
-            customer.state,
-            customer.pincode,
-            customer.uid,
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase();
-
           const matchesSearch =
-            !searchText ||
-            searchableText.includes(
-              searchText
-            );
+            !query ||
+            customer.name
+              .toLowerCase()
+              .includes(query) ||
+            customer.email
+              .toLowerCase()
+              .includes(query) ||
+            customer.phone
+              .toLowerCase()
+              .includes(query) ||
+            customer.uid
+              .toLowerCase()
+              .includes(query);
+
+          const matchesRole =
+            roleFilter === "all" ||
+            customer.role ===
+              roleFilter;
+
+          const matchesStatus =
+            statusFilter === "all" ||
+            customer.accountStatus ===
+              statusFilter;
+
+          const fullyVerified =
+            customer.emailVerified &&
+            customer.phoneVerified;
+
+          const matchesVerification =
+            verificationFilter ===
+              "all" ||
+            (verificationFilter ===
+              "verified" &&
+              fullyVerified) ||
+            (verificationFilter ===
+              "unverified" &&
+              !fullyVerified);
 
           return (
-            matchesFilter &&
-            matchesSearch
+            matchesSearch &&
+            matchesRole &&
+            matchesStatus &&
+            matchesVerification
           );
         }
       );
     }, [
       customers,
-      filter,
       search,
+      roleFilter,
+      statusFilter,
+      verificationFilter,
     ]);
 
-  /* =========================================================
-     COUNTS
-  ========================================================= */
+  const stats = useMemo(() => {
+    const total =
+      customers.length;
 
-  const counts =
-    useMemo(() => {
-      return {
-        all:
-          customers.length,
+    const retail =
+      customers.filter(
+        (item) =>
+          item.role ===
+          "RETAIL_CUSTOMER"
+      ).length;
 
-        retail:
-          customers.filter(
-            (customer) =>
-              customer.customerType ===
-              "RETAIL_CUSTOMER"
-          ).length,
+    const wholesale =
+      customers.filter(
+        (item) =>
+          item.role ===
+          "WHOLESALE_CUSTOMER"
+      ).length;
 
-        wholesale:
-          customers.filter(
-            (customer) =>
-              customer.customerType ===
-              "WHOLESALE_CUSTOMER"
-          ).length,
+    const active =
+      customers.filter(
+        (item) =>
+          item.accountStatus ===
+          "ACTIVE"
+      ).length;
 
-        active:
-          customers.filter(
-            (customer) =>
-              customer.accountStatus ===
-              "ACTIVE"
-          ).length,
+    const pending =
+      customers.filter(
+        (item) =>
+          item.accountStatus ===
+          "PENDING_VERIFICATION"
+      ).length;
 
-        pending:
-          customers.filter(
-            (customer) =>
-              customer.accountStatus ===
-              "PENDING_VERIFICATION"
-          ).length,
+    const blocked =
+      customers.filter(
+        (item) =>
+          item.accountStatus ===
+          "BLOCKED"
+      ).length;
 
-        blocked:
-          customers.filter(
-            (customer) =>
-              customer.accountStatus ===
-              "BLOCKED"
-          ).length,
-      };
-    }, [customers]);
+    const suspended =
+      customers.filter(
+        (item) =>
+          item.accountStatus ===
+          "SUSPENDED"
+      ).length;
 
-  /* =========================================================
-     LOADING
-  ========================================================= */
+    const verified =
+      customers.filter(
+        (item) =>
+          item.emailVerified &&
+          item.phoneVerified
+      ).length;
+
+    return {
+      total,
+      retail,
+      wholesale,
+      active,
+      pending,
+      blocked,
+      suspended,
+      verified,
+    };
+  }, [customers]);
+
+  async function updateAccountStatus(
+    customer: Customer,
+    status: AccountStatus
+  ) {
+    const actionLabel =
+      status === "BLOCKED"
+        ? "block"
+        : status === "ACTIVE"
+        ? "activate"
+        : status === "SUSPENDED"
+        ? "suspend"
+        : "update";
+
+    const confirmed =
+      window.confirm(
+        `Kya aap ${customer.name} ka account ${actionLabel} karna chahte hain?`
+      );
+
+    if (!confirmed) return;
+
+    setSaving(true);
+
+    try {
+      await updateDoc(
+        doc(
+          db,
+          "users",
+          customer.uid
+        ),
+        {
+          accountStatus: status,
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      await loadCustomers();
+
+      if (
+        selectedCustomer?.uid ===
+        customer.uid
+      ) {
+        setSelectedCustomer({
+          ...customer,
+          accountStatus: status,
+        });
+      }
+    } catch (error) {
+      console.error(
+        "Update customer status error:",
+        error
+      );
+
+      alert(
+        "Customer status update nahi ho saka."
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-[#f5f6f8]">
-        <div className="mx-auto max-w-7xl px-4 py-20 text-center">
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+        <div className="text-center">
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
 
-          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
-
-          <p className="mt-4 text-sm font-bold text-gray-500">
-            Loading Customer Management...
+          <p className="mt-4 text-sm text-slate-600">
+            Loading customers...
           </p>
-
         </div>
       </main>
     );
@@ -736,643 +499,822 @@ export default function AdminCustomersPage() {
     return null;
   }
 
-  /* =========================================================
-     UI
-  ========================================================= */
-
   return (
-    <main className="min-h-screen bg-[#f5f6f8]">
-
-      {/* HEADER */}
-
-      <header className="border-b bg-white">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-
-          <Link href="/">
-            <img
-              src="/logo/anjivo-logo.png"
-              alt="ANJIVO"
-              className="h-10 w-auto"
-            />
-          </Link>
-
-          <div className="flex flex-wrap gap-2">
-
+    <main className="min-h-screen bg-slate-50">
+      <header className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 sm:px-6 lg:px-8">
+          <div className="flex items-center gap-4">
             <Link
               href="/admin"
-              className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+              className="shrink-0"
             >
-              Admin Dashboard
+              <img
+                src="/logo/anjivo-logo.png"
+                alt="ANJIVO"
+                className="h-10 w-auto object-contain"
+              />
             </Link>
 
+            <div className="hidden border-l pl-4 sm:block">
+              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                Admin Panel
+              </p>
+
+              <h1 className="text-lg font-bold text-slate-900">
+                Customers
+              </h1>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
             <Link
-              href="/admin/sellers"
-              className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+              href="/admin"
+              className="hidden rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 sm:block"
             >
-              Sellers
+              Admin Home
             </Link>
 
             <button
-              type="button"
-              onClick={() =>
-                loadCustomers()
-              }
-              className="rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white"
+              onClick={loadCustomers}
+              className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
               ↻ Refresh
             </button>
-
           </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
-
-        {/* TITLE */}
-
-        <div>
-
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-gray-400">
-            ADMIN / CUSTOMERS
+      <div className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+        <div className="mb-6">
+          <p className="text-sm font-semibold text-indigo-600">
+            Users & Customers
           </p>
 
-          <h1 className="mt-2 text-3xl font-black tracking-tight text-gray-900">
+          <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
             Customer Management
-          </h1>
+          </h2>
 
-          <p className="mt-2 text-sm text-gray-500">
-            Retail aur wholesale customers
-            ko manage karein.
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+            Retail aur wholesale customers ke accounts,
+            verification aur account status ko centrally manage karein.
           </p>
-
         </div>
 
-        {/* ALERTS */}
-
-        {success && (
-          <div className="mt-6 rounded-2xl border border-green-200 bg-green-50 p-4">
-            <p className="text-sm font-bold text-green-700">
-              ✓ {success}
-            </p>
-          </div>
-        )}
-
-        {error && (
-          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-bold text-red-700">
-              {error}
-            </p>
-          </div>
-        )}
-
-        {/* STATS */}
-
-        <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-
-          <CustomerCount
-            label="All"
-            count={counts.all}
-            active={
-              filter === "all"
-            }
-            onClick={() =>
-              setFilter("all")
-            }
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
+          <StatCard
+            label="Total"
+            value={stats.total}
+            icon="👥"
           />
 
-          <CustomerCount
+          <StatCard
             label="Retail"
-            count={counts.retail}
-            active={
-              filter === "retail"
-            }
-            onClick={() =>
-              setFilter("retail")
-            }
+            value={stats.retail}
+            icon="🛒"
           />
 
-          <CustomerCount
+          <StatCard
             label="Wholesale"
-            count={
-              counts.wholesale
-            }
-            active={
-              filter ===
-              "wholesale"
-            }
-            onClick={() =>
-              setFilter(
-                "wholesale"
-              )
-            }
+            value={stats.wholesale}
+            icon="📦"
           />
 
-          <CustomerCount
+          <StatCard
             label="Active"
-            count={counts.active}
-            active={
-              filter === "active"
-            }
-            onClick={() =>
-              setFilter("active")
-            }
+            value={stats.active}
+            icon="🟢"
           />
 
-          <CustomerCount
+          <StatCard
             label="Pending"
-            count={counts.pending}
-            active={
-              filter === "pending"
-            }
-            onClick={() =>
-              setFilter("pending")
-            }
+            value={stats.pending}
+            icon="🟡"
           />
 
-          <CustomerCount
+          <StatCard
             label="Blocked"
-            count={counts.blocked}
-            active={
-              filter === "blocked"
-            }
-            onClick={() =>
-              setFilter("blocked")
-            }
+            value={stats.blocked}
+            icon="🚫"
           />
 
-        </div>
-
-        {/* SEARCH */}
-
-        <div className="mt-5 rounded-2xl border border-gray-200 bg-white p-3">
-
-          <input
-            value={search}
-            onChange={(event) =>
-              setSearch(
-                event.target.value
-              )
-            }
-            placeholder="Search name, email, mobile, city, pincode or customer ID..."
-            className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+          <StatCard
+            label="Suspended"
+            value={stats.suspended}
+            icon="⏸️"
           />
 
+          <StatCard
+            label="Verified"
+            value={stats.verified}
+            icon="✓"
+          />
         </div>
 
-        {/* LIST */}
+        <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-100 p-4">
+            <div className="grid gap-3 xl:grid-cols-[1fr_190px_190px_200px_auto]">
+              <SearchBox
+                value={search}
+                onChange={setSearch}
+              />
 
-        <div className="mt-6 overflow-hidden rounded-3xl border border-gray-200 bg-white">
+              <SelectBox
+                value={roleFilter}
+                onChange={(value) =>
+                  setRoleFilter(
+                    value as
+                      | "all"
+                      | CustomerRole
+                  )
+                }
+                options={[
+                  ["all", "All Customers"],
+                  [
+                    "RETAIL_CUSTOMER",
+                    "Retail",
+                  ],
+                  [
+                    "WHOLESALE_CUSTOMER",
+                    "Wholesale",
+                  ],
+                ]}
+              />
+
+              <SelectBox
+                value={statusFilter}
+                onChange={(value) =>
+                  setStatusFilter(
+                    value as
+                      | "all"
+                      | AccountStatus
+                  )
+                }
+                options={[
+                  ["all", "All Status"],
+                  ["ACTIVE", "Active"],
+                  [
+                    "PENDING_VERIFICATION",
+                    "Pending",
+                  ],
+                  [
+                    "BLOCKED",
+                    "Blocked",
+                  ],
+                  [
+                    "SUSPENDED",
+                    "Suspended",
+                  ],
+                  [
+                    "REJECTED",
+                    "Rejected",
+                  ],
+                ]}
+              />
+
+              <SelectBox
+                value={
+                  verificationFilter
+                }
+                onChange={(value) =>
+                  setVerificationFilter(
+                    value as
+                      | "all"
+                      | "verified"
+                      | "unverified"
+                  )
+                }
+                options={[
+                  ["all", "All Verification"],
+                  [
+                    "verified",
+                    "Fully Verified",
+                  ],
+                  [
+                    "unverified",
+                    "Not Fully Verified",
+                  ],
+                ]}
+              />
+
+              <button
+                onClick={loadCustomers}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                ↻ Refresh
+              </button>
+            </div>
+          </div>
 
           {filteredCustomers.length ===
           0 ? (
-            <div className="p-14 text-center">
-
-              <div className="text-5xl">
-                👤
-              </div>
-
-              <h2 className="mt-4 text-lg font-black">
-                No customers found
-              </h2>
-
-              <p className="mt-2 text-sm text-gray-500">
-                Search ya filter change
-                karke try karein.
-              </p>
-
-            </div>
+            <EmptyState
+              title="No customers found"
+              description={
+                customers.length === 0
+                  ? "Abhi users collection mein koi retail ya wholesale customer nahi mila."
+                  : "Current filters ke according koi customer nahi mila."
+              }
+            />
           ) : (
-            <div className="divide-y divide-gray-100">
-
+            <div className="divide-y divide-slate-100">
               {filteredCustomers.map(
                 (customer) => (
                   <CustomerRow
-                    key={
-                      customer.id
-                    }
-                    customer={
-                      customer
-                    }
-                    processing={
-                      processing ===
-                      customer.id
-                    }
-                    onActivate={() =>
-                      activateCustomer(
+                    key={customer.id}
+                    customer={customer}
+                    onOpen={() =>
+                      setSelectedCustomer(
                         customer
                       )
                     }
                     onBlock={() =>
-                      blockCustomer(
-                        customer
+                      updateAccountStatus(
+                        customer,
+                        "BLOCKED"
                       )
                     }
-                    onSuspend={() =>
-                      suspendCustomer(
-                        customer
+                    onActivate={() =>
+                      updateAccountStatus(
+                        customer,
+                        "ACTIVE"
                       )
                     }
                   />
                 )
               )}
-
             </div>
           )}
-
-        </div>
-
+        </section>
       </div>
+
+      {selectedCustomer && (
+        <CustomerDetailsModal
+          customer={
+            selectedCustomer
+          }
+          saving={saving}
+          onClose={() =>
+            setSelectedCustomer(
+              null
+            )
+          }
+          onBlock={() =>
+            updateAccountStatus(
+              selectedCustomer,
+              "BLOCKED"
+            )
+          }
+          onActivate={() =>
+            updateAccountStatus(
+              selectedCustomer,
+              "ACTIVE"
+            )
+          }
+          onSuspend={() =>
+            updateAccountStatus(
+              selectedCustomer,
+              "SUSPENDED"
+            )
+          }
+        />
+      )}
     </main>
   );
 }
 
-/* =========================================================
-   COUNT
-========================================================= */
-
-function CustomerCount({
+function StatCard({
   label,
-  count,
-  active,
-  onClick,
+  value,
+  icon,
 }: {
   label: string;
-  count: number;
-  active: boolean;
-  onClick: () => void;
+  value: number;
+  icon: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-2xl border p-4 text-left transition ${
-        active
-          ? "border-black bg-black text-white"
-          : "border-gray-200 bg-white hover:border-gray-400"
-      }`}
-    >
-      <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
-        {label}
-      </p>
-
-      <p className="mt-1 text-2xl font-black">
-        {count.toLocaleString(
-          "en-IN"
-        )}
-      </p>
-    </button>
-  );
-}
-
-/* =========================================================
-   CUSTOMER ROW
-========================================================= */
-
-function CustomerRow({
-  customer,
-  processing,
-  onActivate,
-  onBlock,
-  onSuspend,
-}: {
-  customer: Customer;
-  processing: boolean;
-  onActivate: () => void;
-  onBlock: () => void;
-  onSuspend: () => void;
-}) {
-  const verificationCount =
-    [
-      customer.emailVerified,
-      customer.phoneVerified,
-    ].filter(Boolean).length;
-
-  return (
-    <div className="p-5 sm:p-6">
-
-      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-
-        {/* CUSTOMER */}
-
-        <div className="min-w-0">
-
-          <div className="flex flex-wrap items-center gap-2">
-
-            <h2 className="text-lg font-black text-gray-900">
-              {customer.name ||
-                "Unnamed Customer"}
-            </h2>
-
-            <CustomerTypeBadge
-              type={
-                customer.customerType
-              }
-            />
-
-            <StatusBadge
-              status={
-                customer.accountStatus
-              }
-            />
-
-          </div>
-
-          <div className="mt-3 flex flex-wrap gap-2">
-
-            <InfoBadge>
-              📧{" "}
-              {customer.email ||
-                "No email"}
-            </InfoBadge>
-
-            <InfoBadge>
-              📱{" "}
-              {customer.phone ||
-                "No mobile"}
-            </InfoBadge>
-
-            {customer.city && (
-              <InfoBadge>
-                📍{" "}
-                {customer.city}
-                {customer.state
-                  ? `, ${customer.state}`
-                  : ""}
-              </InfoBadge>
-            )}
-
-          </div>
-
-          {/* VERIFICATION */}
-
-          <div className="mt-5">
-
-            <div className="flex items-center justify-between">
-
-              <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
-                Verification
-              </p>
-
-              <p className="text-[10px] font-bold text-gray-500">
-                {verificationCount}/2
-                verified
-              </p>
-
-            </div>
-
-            <div className="mt-2 flex flex-wrap gap-2">
-
-              <VerificationBadge
-                label="Email"
-                verified={
-                  customer.emailVerified
-                }
-              />
-
-              <VerificationBadge
-                label="Mobile"
-                verified={
-                  customer.phoneVerified
-                }
-              />
-
-            </div>
-
-          </div>
-
-          {/* DETAILS */}
-
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-
-            <DetailBox
-              label="Customer Type"
-              value={
-                customer.customerType ===
-                "WHOLESALE_CUSTOMER"
-                  ? "Wholesale"
-                  : "Retail"
-              }
-            />
-
-            <DetailBox
-              label="City"
-              value={
-                customer.city ||
-                "Not provided"
-              }
-            />
-
-            <DetailBox
-              label="State"
-              value={
-                customer.state ||
-                "Not provided"
-              }
-            />
-
-            <DetailBox
-              label="Pincode"
-              value={
-                customer.pincode ||
-                "Not provided"
-              }
-            />
-
-          </div>
-
-          <p className="mt-4 break-all text-[9px] text-gray-400">
-            Customer ID:{" "}
-            {customer.uid}
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-medium text-slate-500">
+            {label}
           </p>
 
-        </div>
-
-        {/* ACTIONS */}
-
-        <div className="flex shrink-0 flex-col gap-2 xl:w-44">
-
-          {customer.accountStatus !==
-            "ACTIVE" && (
-            <button
-              type="button"
-              disabled={processing}
-              onClick={
-                onActivate
-              }
-              className="rounded-xl bg-green-600 px-4 py-3 text-xs font-black text-white disabled:opacity-50"
-            >
-              {processing
-                ? "Processing..."
-                : "✓ Activate"}
-            </button>
-          )}
-
-          {customer.accountStatus !==
-            "BLOCKED" && (
-            <button
-              type="button"
-              disabled={processing}
-              onClick={
-                onBlock
-              }
-              className="rounded-xl bg-red-600 px-4 py-3 text-xs font-black text-white disabled:opacity-50"
-            >
-              {processing
-                ? "Processing..."
-                : "Block Customer"}
-            </button>
-          )}
-
-          {customer.accountStatus !==
-            "SUSPENDED" &&
-            customer.accountStatus !==
-              "BLOCKED" && (
-              <button
-                type="button"
-                disabled={
-                  processing
-                }
-                onClick={
-                  onSuspend
-                }
-                className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-xs font-black text-orange-700 disabled:opacity-50"
-              >
-                Suspend
-              </button>
+          <p className="mt-2 text-xl font-bold text-slate-900">
+            {value.toLocaleString(
+              "en-IN"
             )}
-
+          </p>
         </div>
 
+        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-base">
+          {icon}
+        </div>
       </div>
     </div>
   );
 }
 
-/* =========================================================
-   TYPE BADGE
-========================================================= */
-
-function CustomerTypeBadge({
-  type,
+function SearchBox({
+  value,
+  onChange,
 }: {
-  type: CustomerType;
+  value: string;
+  onChange: (
+    value: string
+  ) => void;
+}) {
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+        🔎
+      </span>
+
+      <input
+        value={value}
+        onChange={(event) =>
+          onChange(
+            event.target.value
+          )
+        }
+        placeholder="Search name, email, mobile, UID..."
+        className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-100"
+      />
+    </div>
+  );
+}
+
+function SelectBox({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (
+    value: string
+  ) => void;
+  options: [string, string][];
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) =>
+        onChange(
+          event.target.value
+        )
+      }
+      className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 outline-none focus:border-slate-400"
+    >
+      {options.map(
+        ([optionValue, label]) => (
+          <option
+            key={optionValue}
+            value={optionValue}
+          >
+            {label}
+          </option>
+        )
+      )}
+    </select>
+  );
+}
+
+function CustomerRow({
+  customer,
+  onOpen,
+  onBlock,
+  onActivate,
+}: {
+  customer: Customer;
+  onOpen: () => void;
+  onBlock: () => void;
+  onActivate: () => void;
+}) {
+  const fullyVerified =
+    customer.emailVerified &&
+    customer.phoneVerified;
+
+  return (
+    <div className="p-4 sm:p-5">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 gap-4">
+          <Avatar
+            name={customer.name}
+            photoURL={
+              customer.photoURL
+            }
+          />
+
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-bold text-slate-900">
+                {customer.name}
+              </h3>
+
+              <AccountStatusBadge
+                status={
+                  customer.accountStatus
+                }
+              />
+
+              <RoleBadge
+                role={
+                  customer.role
+                }
+              />
+
+              {fullyVerified && (
+                <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[11px] font-bold text-emerald-700">
+                  ✓ Verified
+                </span>
+              )}
+            </div>
+
+            <div className="mt-2 grid gap-1 text-sm text-slate-500 sm:grid-cols-2">
+              <span>
+                ✉️{" "}
+                {customer.email ||
+                  "Email not available"}
+              </span>
+
+              <span>
+                📱{" "}
+                {customer.phone ||
+                  "Mobile not available"}
+              </span>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <InfoBadge
+                label={
+                  customer.role ===
+                  "WHOLESALE_CUSTOMER"
+                    ? "Wholesale Customer"
+                    : "Retail Customer"
+                }
+              />
+
+              <InfoBadge
+                label={`Joined ${formatDate(
+                  customer.createdAt
+                )}`}
+              />
+
+              <InfoBadge
+                label={`UID: ${customer.uid}`}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 xl:justify-end">
+          <button
+            onClick={onOpen}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            👁 View
+          </button>
+
+          {customer.accountStatus ===
+          "BLOCKED" ? (
+            <button
+              onClick={onActivate}
+              className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+            >
+              ✓ Activate
+            </button>
+          ) : (
+            <button
+              onClick={onBlock}
+              className="rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100"
+            >
+              🚫 Block
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Avatar({
+  name,
+  photoURL,
+}: {
+  name: string;
+  photoURL: string;
+}) {
+  const initial =
+    name.trim().charAt(0).toUpperCase() ||
+    "U";
+
+  return (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-900 text-sm font-bold text-white">
+      {photoURL ? (
+        <img
+          src={photoURL}
+          alt={name}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        initial
+      )}
+    </div>
+  );
+}
+
+function RoleBadge({
+  role,
+}: {
+  role: CustomerRole;
 }) {
   const wholesale =
-    type ===
-    "WHOLESALE_CUSTOMER";
+    role === "WHOLESALE_CUSTOMER";
 
   return (
     <span
-      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${
+      className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
         wholesale
-          ? "bg-purple-100 text-purple-700"
+          ? "bg-indigo-100 text-indigo-700"
           : "bg-blue-100 text-blue-700"
       }`}
     >
       {wholesale
-        ? "WHOLESALE"
-        : "RETAIL"}
+        ? "Wholesale"
+        : "Retail"}
     </span>
   );
 }
 
-/* =========================================================
-   STATUS
-========================================================= */
-
-function StatusBadge({
+function AccountStatusBadge({
   status,
 }: {
-  status: CustomerStatus;
+  status: AccountStatus;
 }) {
   const styles: Record<
-    CustomerStatus,
+    AccountStatus,
     string
   > = {
     ACTIVE:
-      "bg-green-100 text-green-700",
-
+      "bg-emerald-100 text-emerald-700",
     PENDING_VERIFICATION:
-      "bg-yellow-100 text-yellow-700",
-
+      "bg-amber-100 text-amber-700",
     BLOCKED:
       "bg-red-100 text-red-700",
-
     SUSPENDED:
       "bg-orange-100 text-orange-700",
+    REJECTED:
+      "bg-red-100 text-red-700",
   };
 
   const labels: Record<
-    CustomerStatus,
+    AccountStatus,
     string
   > = {
-    ACTIVE: "ACTIVE",
-
+    ACTIVE: "Active",
     PENDING_VERIFICATION:
-      "PENDING",
-
-    BLOCKED: "BLOCKED",
-
-    SUSPENDED: "SUSPENDED",
+      "Pending",
+    BLOCKED: "Blocked",
+    SUSPENDED: "Suspended",
+    REJECTED: "Rejected",
   };
 
   return (
     <span
-      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${styles[status]}`}
+      className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${styles[status]}`}
     >
       {labels[status]}
     </span>
   );
 }
 
-/* =========================================================
-   VERIFICATION
-========================================================= */
-
-function VerificationBadge({
+function InfoBadge({
   label,
-  verified,
 }: {
   label: string;
-  verified: boolean;
 }) {
   return (
-    <span
-      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${
-        verified
-          ? "bg-green-100 text-green-700"
-          : "bg-gray-100 text-gray-500"
-      }`}
-    >
-      {verified
-        ? "✓"
-        : "○"}{" "}
+    <span className="max-w-full rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600">
       {label}
     </span>
   );
 }
 
-/* =========================================================
-   INFO
-========================================================= */
-
-function InfoBadge({
-  children,
+function CustomerDetailsModal({
+  customer,
+  saving,
+  onClose,
+  onBlock,
+  onActivate,
+  onSuspend,
 }: {
-  children: React.ReactNode;
+  customer: Customer;
+  saving: boolean;
+  onClose: () => void;
+  onBlock: () => void;
+  onActivate: () => void;
+  onSuspend: () => void;
 }) {
+  const fullyVerified =
+    customer.emailVerified &&
+    customer.phoneVerified;
+
   return (
-    <span className="rounded-lg bg-gray-100 px-2.5 py-1.5 text-[10px] font-bold text-gray-600">
-      {children}
-    </span>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">
+      <div className="flex max-h-[94vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 sm:px-6">
+          <div className="flex items-center gap-3">
+            <Avatar
+              name={customer.name}
+              photoURL={
+                customer.photoURL
+              }
+            />
+
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wider text-indigo-600">
+                Customer Profile
+              </p>
+
+              <h2 className="text-xl font-bold text-slate-900">
+                {customer.name}
+              </h2>
+            </div>
+          </div>
+
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50"
+          >
+            ×
+          </button>
+        </div>
+
+        <div className="overflow-y-auto p-5 sm:p-6">
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center gap-2">
+              <RoleBadge
+                role={customer.role}
+              />
+
+              <AccountStatusBadge
+                status={
+                  customer.accountStatus
+                }
+              />
+
+              {fullyVerified && (
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-700">
+                  ✓ Fully Verified
+                </span>
+              )}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <DetailCard
+                label="Full Name"
+                value={customer.name}
+              />
+
+              <DetailCard
+                label="Email"
+                value={
+                  customer.email ||
+                  "Not available"
+                }
+              />
+
+              <DetailCard
+                label="Mobile"
+                value={
+                  customer.phone ||
+                  "Not available"
+                }
+              />
+
+              <DetailCard
+                label="Customer Type"
+                value={
+                  customer.role ===
+                  "WHOLESALE_CUSTOMER"
+                    ? "Wholesale Customer"
+                    : "Retail Customer"
+                }
+              />
+
+              <DetailCard
+                label="Account Status"
+                value={
+                  customer.accountStatus
+                }
+              />
+
+              <DetailCard
+                label="Joined"
+                value={formatDate(
+                  customer.createdAt
+                )}
+              />
+
+              <DetailCard
+                label="Email Verification"
+                value={
+                  customer.emailVerified
+                    ? "Verified"
+                    : "Not Verified"
+                }
+              />
+
+              <DetailCard
+                label="Mobile Verification"
+                value={
+                  customer.phoneVerified
+                    ? "Verified"
+                    : "Not Verified"
+                }
+              />
+
+              <DetailCard
+                label="User ID"
+                value={customer.uid}
+              />
+            </div>
+
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Account Actions
+              </h3>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {customer.accountStatus !==
+                  "ACTIVE" && (
+                  <button
+                    onClick={
+                      onActivate
+                    }
+                    disabled={saving}
+                    className="rounded-xl bg-emerald-100 px-4 py-2.5 text-sm font-semibold text-emerald-700 hover:bg-emerald-200 disabled:opacity-50"
+                  >
+                    ✓ Activate
+                  </button>
+                )}
+
+                {customer.accountStatus !==
+                  "BLOCKED" && (
+                  <button
+                    onClick={onBlock}
+                    disabled={saving}
+                    className="rounded-xl bg-red-100 px-4 py-2.5 text-sm font-semibold text-red-700 hover:bg-red-200 disabled:opacity-50"
+                  >
+                    🚫 Block
+                  </button>
+                )}
+
+                {customer.accountStatus !==
+                  "SUSPENDED" && (
+                  <button
+                    onClick={
+                      onSuspend
+                    }
+                    disabled={saving}
+                    className="rounded-xl bg-orange-100 px-4 py-2.5 text-sm font-semibold text-orange-700 hover:bg-orange-200 disabled:opacity-50"
+                  >
+                    ⏸ Suspend
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-sm font-bold text-amber-800">
+                Security
+              </p>
+
+              <p className="mt-1 text-xs leading-5 text-amber-700">
+                Customer ka password, Firebase Auth credentials
+                ya role is page se directly modify nahi kiya ja raha.
+                Account status changes ko Firestore security rules
+                se admin-only enforce karna zaroori hai.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex justify-end border-t border-slate-200 bg-slate-50 px-5 py-4 sm:px-6">
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
-/* =========================================================
-   DETAIL
-========================================================= */
-
-function DetailBox({
+function DetailCard({
   label,
   value,
 }: {
@@ -1380,16 +1322,38 @@ function DetailBox({
   value: string;
 }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3">
-
-      <p className="text-[9px] font-black uppercase tracking-wide text-gray-400">
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
         {label}
       </p>
 
-      <p className="mt-1 break-all text-xs font-bold text-gray-700">
+      <p className="mt-1 break-words text-sm font-semibold text-slate-800">
         {value}
       </p>
+    </div>
+  );
+}
 
+function EmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center px-6 py-20 text-center">
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-2xl">
+        👥
+      </div>
+
+      <h3 className="mt-4 text-lg font-bold text-slate-900">
+        {title}
+      </h3>
+
+      <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">
+        {description}
+      </p>
     </div>
   );
 }
