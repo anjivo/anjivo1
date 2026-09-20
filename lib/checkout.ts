@@ -72,17 +72,13 @@ export type SellerCheckoutGroup = {
 
 export type CheckoutSummary = {
   items: ValidatedCheckoutItem[];
-
   sellerGroups: SellerCheckoutGroup[];
 
   subtotal: number;
-
   retailSubtotal: number;
-
   wholesaleSubtotal: number;
 
   totalItems: number;
-
   sellerCount: number;
 
   errors: CheckoutError[];
@@ -93,17 +89,14 @@ type FirestoreProduct = {
 
   name: string;
   slug: string;
-
   description?: string;
 
   categoryId: string;
   categoryName?: string;
-
   subcategoryId?: string;
 
   sellerId: string;
   sellerName?: string;
-
   sellerVerified?: boolean;
 
   images: string[];
@@ -210,11 +203,13 @@ function mapProduct(
 
         return {
           minQuantity,
+
           ...(maxQuantity > 0
             ? {
                 maxQuantity,
               }
             : {}),
+
           price,
         };
       })
@@ -487,6 +482,9 @@ export function validateCheckoutItem(
   error?:
     | CheckoutError;
 } {
+  /*
+   * Product must exist.
+   */
   if (!product) {
     return {
       error: {
@@ -505,6 +503,9 @@ export function validateCheckoutItem(
     };
   }
 
+  /*
+   * Only active products can be purchased.
+   */
   if (
     product.status !==
     "active"
@@ -526,6 +527,9 @@ export function validateCheckoutItem(
     };
   }
 
+  /*
+   * Seller information must exist.
+   */
   if (
     !cartItem.sellerId ||
     !product.sellerId
@@ -547,6 +551,10 @@ export function validateCheckoutItem(
     };
   }
 
+  /*
+   * Seller in browser cart must match
+   * the current Firestore seller.
+   */
   if (
     cartItem.sellerId !==
     product.sellerId
@@ -568,11 +576,17 @@ export function validateCheckoutItem(
     };
   }
 
+  /*
+   * Read quantity ONCE.
+   */
   const quantity =
     numberValue(
       cartItem.quantity
     );
 
+  /*
+   * Quantity must be a positive integer.
+   */
   if (
     !validateQuantity(
       quantity
@@ -595,55 +609,12 @@ export function validateCheckoutItem(
     };
   }
 
-   if (
-    product.status !==
-    "active"
-  ) {
-    return {
-      error: {
-        code:
-          "PRODUCT_INACTIVE",
-
-        productId:
-          product.id,
-
-        sellerId:
-          product.sellerId,
-
-        message:
-          "This product is currently unavailable.",
-      },
-    };
-  }
-
-  const quantity =
-    numberValue(
-      cartItem.quantity
-    );
-
+  /*
+   * Product must have stock.
+   */
   if (
-    !validateQuantity(
-      quantity
-    )
+    product.stock <= 0
   ) {
-    return {
-      error: {
-        code:
-          "INVALID_QUANTITY",
-
-        productId:
-          product.id,
-
-        sellerId:
-          product.sellerId,
-
-        message:
-          "Product quantity is invalid.",
-      },
-    };
-  }
-
-  if (product.stock <= 0) {
     return {
       error: {
         code:
@@ -660,6 +631,11 @@ export function validateCheckoutItem(
       },
     };
   }
+
+  /*
+   * Requested quantity cannot exceed
+   * current Firestore stock.
+   */
   if (
     quantity >
     product.stock
@@ -681,10 +657,16 @@ export function validateCheckoutItem(
     };
   }
 
+  /*
+   * Wholesale-specific validation.
+   */
   if (
     cartItem.pricingType ===
     "wholesale"
   ) {
+    /*
+     * MOQ validation.
+     */
     if (
       quantity <
       product.moq
@@ -706,6 +688,10 @@ export function validateCheckoutItem(
       };
     }
 
+    /*
+     * Wholesale pricing configuration
+     * must be valid.
+     */
     if (
       !validateWholesaleConfiguration(
         product
@@ -729,6 +715,11 @@ export function validateCheckoutItem(
     }
   }
 
+  /*
+   * Calculate current price from Firestore.
+   *
+   * Browser cart price is never trusted.
+   */
   const currentPrice =
     getCurrentCheckoutPrice(
       product,
@@ -736,6 +727,9 @@ export function validateCheckoutItem(
       quantity
     );
 
+  /*
+   * Price must be valid.
+   */
   if (
     currentPrice <= 0
   ) {
@@ -757,9 +751,11 @@ export function validateCheckoutItem(
   }
 
   /*
-   * The price stored in local/browser cart is NOT trusted.
-   * We compare it only to tell the customer that the price
-   * has changed.
+   * The price stored in the browser cart
+   * is NOT trusted.
+   *
+   * We compare it only to tell the customer
+   * if the price has changed.
    */
   const browserPrice =
     numberValue(
@@ -790,10 +786,17 @@ export function validateCheckoutItem(
     };
   }
 
+  /*
+   * Prefer the current Firestore image.
+   * Fall back to cart image if needed.
+   */
   const image =
     product.images?.[0] ||
     cartItem.image;
 
+  /*
+   * Return the trusted/validated item.
+   */
   return {
     item: {
       productId:
@@ -858,6 +861,9 @@ export function validateCheckoutItem(
 export async function validateCheckoutCart(
   cartItems: CartItem[]
 ): Promise<CheckoutSummary> {
+  /*
+   * Empty cart.
+   */
   if (
     !Array.isArray(
       cartItems
@@ -891,11 +897,17 @@ export async function validateCheckoutCart(
     };
   }
 
+  /*
+   * Product IDs from cart.
+   */
   const productIds =
     cartItems.map(
       (item) => item.id
     );
 
+  /*
+   * Get current Firestore products.
+   */
   const products =
     await getCheckoutProducts(
       productIds
@@ -909,6 +921,9 @@ export async function validateCheckoutCart(
     CheckoutError[] =
     [];
 
+  /*
+   * Validate every cart item.
+   */
   for (
     const cartItem of cartItems
   ) {
@@ -938,6 +953,9 @@ export async function validateCheckoutCart(
     }
   }
 
+  /*
+   * Group items seller-wise.
+   */
   const sellerMap =
     new Map<
       string,
@@ -990,6 +1008,9 @@ export async function validateCheckoutCart(
       sellerMap.values()
     );
 
+  /*
+   * Overall subtotal.
+   */
   const subtotal =
     validItems.reduce(
       (sum, item) =>
@@ -997,6 +1018,9 @@ export async function validateCheckoutCart(
       0
     );
 
+  /*
+   * Retail subtotal.
+   */
   const retailSubtotal =
     validItems
       .filter(
@@ -1010,6 +1034,9 @@ export async function validateCheckoutCart(
         0
       );
 
+  /*
+   * Wholesale subtotal.
+   */
   const wholesaleSubtotal =
     validItems
       .filter(
@@ -1023,6 +1050,9 @@ export async function validateCheckoutCart(
         0
       );
 
+  /*
+   * Total quantity.
+   */
   const totalItems =
     validItems.reduce(
       (sum, item) =>
@@ -1052,8 +1082,8 @@ export async function validateCheckoutCart(
 }
 
 /**
- * Returns only the items that are safe to continue
- * with after validation.
+ * Returns only the items that are safe
+ * to continue with after validation.
  */
 export async function getValidatedCheckoutItems(
   cartItems: CartItem[]
@@ -1088,7 +1118,8 @@ export async function canProceedToCheckout(
 }
 
 /**
- * Utility for displaying a clean message to the customer.
+ * Utility for displaying a clean
+ * customer-facing error message.
  */
 export function getCheckoutErrorMessage(
   error: CheckoutError
