@@ -1,13 +1,10 @@
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
-  query,
-  where,
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
+
 import {
   CartItem,
   getWholesalePrice,
@@ -142,7 +139,9 @@ function numberValue(
     return value;
   }
 
-  if (typeof value === "string") {
+  if (
+    typeof value === "string"
+  ) {
     const parsed = Number(value);
 
     return Number.isFinite(parsed)
@@ -175,8 +174,7 @@ function mapProduct(
     rawTiers
       .map((raw) => {
         if (
-          typeof raw !==
-            "object" ||
+          typeof raw !== "object" ||
           raw === null
         ) {
           return null;
@@ -369,24 +367,31 @@ export async function getCheckoutProducts(
   await Promise.all(
     uniqueIds.map(
       async (productId) => {
-        const snapshot =
-          await getDoc(
-            doc(
-              db,
-              "products",
-              productId
-            )
-          );
+        try {
+          const snapshot =
+            await getDoc(
+              doc(
+                db,
+                "products",
+                productId
+              )
+            );
 
-        if (
-          snapshot.exists()
-        ) {
-          result.set(
-            productId,
-            mapProduct(
-              snapshot.id,
-              snapshot.data()
-            )
+          if (
+            snapshot.exists()
+          ) {
+            result.set(
+              productId,
+              mapProduct(
+                snapshot.id,
+                snapshot.data()
+              )
+            );
+          }
+        } catch (error) {
+          console.error(
+            `Failed to load checkout product ${productId}:`,
+            error
           );
         }
       }
@@ -416,27 +421,11 @@ export function getCurrentCheckoutPrice(
 
   return getWholesalePrice(
     {
-      id: product.id,
-      sellerId:
-        product.sellerId,
-      name: product.name,
-      slug: product.slug,
-      mrp: product.mrp,
-      retailPrice:
-        product.retailPrice,
       wholesalePrice:
         product.wholesalePrice,
+
       wholesaleTiers:
         product.wholesaleTiers,
-      quantity,
-      selectedPrice:
-        product.wholesalePrice,
-      pricingType:
-        "wholesale",
-      stock:
-        product.stock,
-      moq:
-        product.moq,
     },
     quantity
   );
@@ -494,6 +483,7 @@ export function validateCheckoutItem(
 ): {
   item?:
     | ValidatedCheckoutItem;
+
   error?:
     | CheckoutError;
 } {
@@ -502,10 +492,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "PRODUCT_NOT_FOUND",
+
         productId:
           cartItem.id,
+
         sellerId:
           cartItem.sellerId,
+
         message:
           "Product is no longer available.",
       },
@@ -520,10 +513,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "PRODUCT_INACTIVE",
+
         productId:
           product.id,
+
         sellerId:
           product.sellerId,
+
         message:
           "This product is currently unavailable.",
       },
@@ -538,10 +534,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "SELLER_MISMATCH",
+
         productId:
           product.id,
+
         sellerId:
           cartItem.sellerId,
+
         message:
           "Seller information is missing.",
       },
@@ -556,10 +555,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "SELLER_MISMATCH",
+
         productId:
           product.id,
+
         sellerId:
           cartItem.sellerId,
+
         message:
           "Seller information does not match the current product.",
       },
@@ -580,10 +582,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "INVALID_QUANTITY",
+
         productId:
           product.id,
+
         sellerId:
           product.sellerId,
+
         message:
           "Product quantity is invalid.",
       },
@@ -599,10 +604,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "OUT_OF_STOCK",
+
         productId:
           product.id,
+
         sellerId:
           product.sellerId,
+
         message:
           "This product is out of stock.",
       },
@@ -617,10 +625,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "INSUFFICIENT_STOCK",
+
         productId:
           product.id,
+
         sellerId:
           product.sellerId,
+
         message:
           `Only ${product.stock} units are currently available.`,
       },
@@ -639,10 +650,13 @@ export function validateCheckoutItem(
         error: {
           code:
             "MOQ_NOT_MET",
+
           productId:
             product.id,
+
           sellerId:
             product.sellerId,
+
           message:
             `Minimum wholesale quantity is ${product.moq}.`,
         },
@@ -658,10 +672,13 @@ export function validateCheckoutItem(
         error: {
           code:
             "INVALID_WHOLESALE_PRICE",
+
           productId:
             product.id,
+
           sellerId:
             product.sellerId,
+
           message:
             "Wholesale pricing is not configured correctly.",
         },
@@ -683,10 +700,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "INVALID_WHOLESALE_PRICE",
+
         productId:
           product.id,
+
         sellerId:
           product.sellerId,
+
         message:
           "Current product price is invalid.",
       },
@@ -714,10 +734,13 @@ export function validateCheckoutItem(
       error: {
         code:
           "PRICE_CHANGED",
+
         productId:
           product.id,
+
         sellerId:
           product.sellerId,
+
         message:
           `${product.name} price has changed. Please review your cart.`,
       },
@@ -800,16 +823,24 @@ export async function validateCheckoutCart(
   ) {
     return {
       items: [],
+
       sellerGroups: [],
+
       subtotal: 0,
+
       retailSubtotal: 0,
+
       wholesaleSubtotal: 0,
+
       totalItems: 0,
+
       sellerCount: 0,
+
       errors: [
         {
           code:
             "EMPTY_CART",
+
           message:
             "Your cart is empty.",
         },
@@ -827,13 +858,17 @@ export async function validateCheckoutCart(
       productIds
     );
 
-  const validItems: ValidatedCheckoutItem[] =
+  const validItems:
+    ValidatedCheckoutItem[] =
     [];
 
-  const errors: CheckoutError[] =
+  const errors:
+    CheckoutError[] =
     [];
 
-  for (const cartItem of cartItems) {
+  for (
+    const cartItem of cartItems
+  ) {
     const product =
       products.get(
         cartItem.id
@@ -849,6 +884,7 @@ export async function validateCheckoutCart(
       errors.push(
         result.error
       );
+
       continue;
     }
 
@@ -865,7 +901,9 @@ export async function validateCheckoutCart(
       SellerCheckoutGroup
     >();
 
-  for (const item of validItems) {
+  for (
+    const item of validItems
+  ) {
     const existing =
       sellerMap.get(
         item.sellerId
@@ -1001,7 +1039,8 @@ export async function canProceedToCheckout(
   return (
     result.items.length >
       0 &&
-    result.errors.length === 0
+    result.errors.length ===
+      0
   );
 }
 
