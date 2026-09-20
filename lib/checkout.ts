@@ -595,11 +595,55 @@ export function validateCheckoutItem(
     };
   }
 
-  if (
-    product.stock <= 0 ||
-    product.status ===
-      "out_of_stock"
+   if (
+    product.status !==
+    "active"
   ) {
+    return {
+      error: {
+        code:
+          "PRODUCT_INACTIVE",
+
+        productId:
+          product.id,
+
+        sellerId:
+          product.sellerId,
+
+        message:
+          "This product is currently unavailable.",
+      },
+    };
+  }
+
+  const quantity =
+    numberValue(
+      cartItem.quantity
+    );
+
+  if (
+    !validateQuantity(
+      quantity
+    )
+  ) {
+    return {
+      error: {
+        code:
+          "INVALID_QUANTITY",
+
+        productId:
+          product.id,
+
+        sellerId:
+          product.sellerId,
+
+        message:
+          "Product quantity is invalid.",
+      },
+    };
+  }
+
+  if (product.stock <= 0) {
     return {
       error: {
         code:
@@ -616,7 +660,6 @@ export function validateCheckoutItem(
       },
     };
   }
-
   if (
     quantity >
     product.stock
