@@ -1,858 +1,1138 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
-  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  deleteUser,
+  updateProfile,
 } from "firebase/auth";
 import {
   doc,
-  getDoc,
+  serverTimestamp,
+  setDoc,
 } from "firebase/firestore";
-import { useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import { auth, db } from "@/lib/firebase";
-import {
-  createSellerApplication,
-} from "@/lib/sellers";
+
+type BusinessType =
+  | "INDIVIDUAL"
+  | "PROPRIETORSHIP"
+  | "PARTNERSHIP"
+  | "LLP"
+  | "PRIVATE_LIMITED";
+
+const categories = [
+  "Fashion & Clothing",
+  "Beauty & Cosmetics",
+  "Jewellery & Accessories",
+  "Home & Kitchen",
+  "Electronics",
+  "Mobile & Accessories",
+  "Toys & Games",
+  "Grocery & Food",
+  "Footwear",
+  "Health & Personal Care",
+  "Stationery & Office",
+  "Automobile Accessories",
+  "Furniture",
+  "Sports & Fitness",
+  "Other",
+];
 
 export default function SellerRegisterPage() {
   const router = useRouter();
 
-  const [userId, setUserId] =
-    useState("");
+  const [step, setStep] = useState(1);
 
-  const [email, setEmail] =
-    useState("");
-
-  const [loading, setLoading] =
-    useState(true);
-
-  const [saving, setSaving] =
-    useState(false);
-
-  const [error, setError] =
-    useState("");
-
-  const [success, setSuccess] =
-    useState("");
-
-  const [businessName, setBusinessName] =
-    useState("");
-
-  const [ownerName, setOwnerName] =
-    useState("");
-
-  const [phone, setPhone] =
-    useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [ownerName, setOwnerName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const [businessType, setBusinessType] =
-    useState<
-      | "INDIVIDUAL"
-      | "PROPRIETORSHIP"
-      | "PARTNERSHIP"
-      | "LLP"
-      | "PRIVATE_LIMITED"
-    >("INDIVIDUAL");
+    useState<BusinessType>("PROPRIETORSHIP");
 
-  const [category, setCategory] =
-    useState("");
+  const [category, setCategory] = useState("");
 
-  const [address, setAddress] =
-    useState("");
+  const [address, setAddress] = useState("");
+  const [city, setCity] = useState("");
+  const [state, setState] = useState("");
+  const [pincode, setPincode] = useState("");
 
-  const [city, setCity] =
-    useState("");
+  const [gstNumber, setGstNumber] = useState("");
+  const [panNumber, setPanNumber] = useState("");
 
-  const [state, setState] =
-    useState("");
+  const [bankAccountName, setBankAccountName] = useState("");
+  const [bankAccountNumber, setBankAccountNumber] = useState("");
+  const [ifscCode, setIfscCode] = useState("");
 
-  const [pincode, setPincode] =
-    useState("");
+  const [agreeTerms, setAgreeTerms] = useState(false);
 
-  const [gstNumber, setGstNumber] =
-    useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
-  const [panNumber, setPanNumber] =
-    useState("");
-
-  const [bankAccountName, setBankAccountName] =
-    useState("");
-
-  const [bankAccountNumber, setBankAccountNumber] =
-    useState("");
-
-  const [ifscCode, setIfscCode] =
-    useState("");
-
-  useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            router.replace(
-              "/login?redirect=/seller/register"
-            );
-            return;
-          }
-
-          try {
-            const userRef = doc(
-              db,
-              "users",
-              user.uid
-            );
-
-            const snapshot =
-              await getDoc(userRef);
-
-            if (snapshot.exists()) {
-              const data =
-                snapshot.data();
-
-              if (
-                data.role === "SELLER"
-              ) {
-                setError(
-                  "You already have a seller account."
-                );
-              }
-            }
-
-            setUserId(user.uid);
-            setEmail(
-              user.email || ""
-            );
-          } catch (err) {
-            console.error(err);
-
-            setError(
-              "Unable to load account."
-            );
-          } finally {
-            setLoading(false);
-          }
-        }
-      );
-
-    return () => unsubscribe();
-  }, [router]);
-
-  function validate() {
-    if (!businessName.trim()) {
-      return "Business name is required.";
-    }
-
-    if (!ownerName.trim()) {
-      return "Owner name is required.";
-    }
-
-    if (
-      !/^[6-9]\d{9}$/.test(
-        phone
-      )
-    ) {
-      return "Enter a valid 10-digit mobile number.";
-    }
-
-    if (!category.trim()) {
-      return "Please select your business category.";
-    }
-
-    if (!address.trim()) {
-      return "Business address is required.";
-    }
-
-    if (!city.trim()) {
-      return "City is required.";
-    }
-
-    if (!state.trim()) {
-      return "State is required.";
-    }
-
-    if (
-      !/^\d{6}$/.test(
-        pincode
-      )
-    ) {
-      return "Enter a valid 6-digit pincode.";
-    }
-
-    if (
-      gstNumber.trim() &&
-      !/^[0-9A-Z]{15}$/.test(
-        gstNumber
-          .trim()
-          .toUpperCase()
-      )
-    ) {
-      return "Enter a valid GSTIN.";
-    }
-
-    if (
-      panNumber.trim() &&
-      !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(
-        panNumber
-          .trim()
-          .toUpperCase()
-      )
-    ) {
-      return "Enter a valid PAN number.";
-    }
-
-    if (
-      bankAccountNumber.trim() &&
-      bankAccountNumber.trim()
-        .length < 6
-    ) {
-      return "Enter a valid bank account number.";
-    }
-
-    if (
-      ifscCode.trim() &&
-      !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(
-        ifscCode
-          .trim()
-          .toUpperCase()
-      )
-    ) {
-      return "Enter a valid IFSC code.";
-    }
-
-    return "";
+  function cleanPhone(value: string) {
+    return value.replace(/\D/g, "").slice(0, 10);
   }
 
-  async function handleSubmit(
-    event: React.FormEvent
-  ) {
+  function cleanPincode(value: string) {
+    return value.replace(/\D/g, "").slice(0, 6);
+  }
+
+  function cleanPAN(value: string) {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+  }
+
+  function cleanGST(value: string) {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 15);
+  }
+
+  function validateStep(currentStep: number): boolean {
+    setError("");
+
+    if (currentStep === 1) {
+      if (!businessName.trim()) {
+        setError("Business name is required.");
+        return false;
+      }
+
+      if (!ownerName.trim()) {
+        setError("Owner name is required.");
+        return false;
+      }
+
+      if (!/^[6-9]\d{9}$/.test(phone)) {
+        setError("Please enter a valid 10-digit Indian mobile number.");
+        return false;
+      }
+
+      if (!email.trim()) {
+        setError("Email address is required.");
+        return false;
+      }
+
+      if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+        setError("Please enter a valid email address.");
+        return false;
+      }
+
+      if (password.length < 6) {
+        setError("Password must be at least 6 characters.");
+        return false;
+      }
+
+      if (password !== confirmPassword) {
+        setError("Passwords do not match.");
+        return false;
+      }
+
+      if (!category) {
+        setError("Please select your main business category.");
+        return false;
+      }
+
+      return true;
+    }
+
+    if (currentStep === 2) {
+      if (!address.trim()) {
+        setError("Business address is required.");
+        return false;
+      }
+
+      if (!city.trim()) {
+        setError("City is required.");
+        return false;
+      }
+
+      if (!state.trim()) {
+        setError("State is required.");
+        return false;
+      }
+
+      if (!/^\d{6}$/.test(pincode)) {
+        setError("Please enter a valid 6-digit pincode.");
+        return false;
+      }
+
+      return true;
+    }
+
+    if (currentStep === 3) {
+      if (gstNumber && !/^[0-9A-Z]{15}$/.test(gstNumber)) {
+        setError("Please enter a valid 15-character GSTIN.");
+        return false;
+      }
+
+      if (panNumber && !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(panNumber)) {
+        setError("Please enter a valid PAN number.");
+        return false;
+      }
+
+      return true;
+    }
+
+    if (currentStep === 4) {
+      if (bankAccountName && bankAccountName.trim().length < 2) {
+        setError("Please enter a valid account holder name.");
+        return false;
+      }
+
+      if (
+        bankAccountNumber &&
+        bankAccountNumber.trim().length < 6
+      ) {
+        setError("Please enter a valid bank account number.");
+        return false;
+      }
+
+      if (
+        ifscCode &&
+        !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode)
+      ) {
+        setError("Please enter a valid IFSC code.");
+        return false;
+      }
+
+      if (!agreeTerms) {
+        setError(
+          "Please accept the Seller Terms & Conditions."
+        );
+        return false;
+      }
+
+      return true;
+    }
+
+    return true;
+  }
+
+  function nextStep() {
+    if (!validateStep(step)) return;
+
+    setStep((current) => Math.min(current + 1, 4));
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  function previousStep() {
+    setError("");
+    setStep((current) => Math.max(current - 1, 1));
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (!validateStep(4)) return;
+
+    setLoading(true);
     setError("");
     setSuccess("");
 
-    const validationError =
-      validate();
-
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-
-    if (!userId) {
-      setError(
-        "Please login first."
-      );
-      return;
-    }
+    let createdUserId = "";
 
     try {
-      setSaving(true);
+      const cleanEmail = email.trim().toLowerCase();
+      const cleanOwnerName = ownerName.trim();
+      const cleanBusinessName = businessName.trim();
+      const cleanPhone = `+91${phone}`;
 
-      const sellerId =
-        await createSellerApplication({
-          userId,
+      /*
+       * STEP 1
+       * Create Firebase Authentication account.
+       */
+      const credential =
+        await createUserWithEmailAndPassword(
+          auth,
+          cleanEmail,
+          password
+        );
 
-          businessName:
-            businessName.trim(),
+      const user = credential.user;
+      createdUserId = user.uid;
 
-          ownerName:
-            ownerName.trim(),
+      /*
+       * Display name in Firebase Authentication.
+       */
+      await updateProfile(user, {
+        displayName: cleanOwnerName,
+      });
 
-          phone: phone.trim(),
+      /*
+       * STEP 2
+       * Create user profile.
+       *
+       * IMPORTANT:
+       * We DO NOT give SELLER role here.
+       * Admin approval will be required later.
+       */
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        name: cleanOwnerName,
+        email: cleanEmail,
+        phone: cleanPhone,
 
-          email: email
-            .trim()
-            .toLowerCase(),
+        role: "RETAIL_CUSTOMER",
 
-          businessType,
+        customerType: "RETAIL_CUSTOMER",
 
-          category:
-            category.trim(),
+        sellerApplicationStatus: "PENDING",
+        sellerApplicationId: user.uid,
 
-          address:
-            address.trim(),
+        emailVerified: false,
+        phoneVerified: false,
 
-          city: city.trim(),
+        accountStatus: "PENDING_VERIFICATION",
 
-          state: state.trim(),
+        photoURL: "",
 
-          pincode:
-            pincode.trim(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
-          gstNumber:
-            gstNumber
-              .trim()
-              .toUpperCase(),
+      /*
+       * STEP 3
+       * Create seller application.
+       */
+      await setDoc(doc(db, "sellers", user.uid), {
+        userId: user.uid,
 
-          panNumber:
-            panNumber
-              .trim()
-              .toUpperCase(),
+        businessName: cleanBusinessName,
+        ownerName: cleanOwnerName,
 
-          bankAccountName:
-            bankAccountName.trim(),
+        phone: cleanPhone,
+        email: cleanEmail,
 
-          bankAccountNumber:
-            bankAccountNumber.trim(),
+        businessType,
+        category,
 
-          ifscCode:
-            ifscCode
-              .trim()
-              .toUpperCase(),
+        address: address.trim(),
+        city: city.trim(),
+        state: state.trim(),
+        pincode,
 
-          status: "pending",
-        });
+        gstNumber: gstNumber.trim(),
+        panNumber: panNumber.trim(),
 
-      console.log(
-        "Seller application:",
-        sellerId
-      );
+        bankAccountName: bankAccountName.trim(),
+        bankAccountNumber: bankAccountNumber.trim(),
+        ifscCode: ifscCode.trim().toUpperCase(),
+
+        status: "pending",
+
+        sellerVerified: false,
+        emailVerified: false,
+        phoneVerified: false,
+
+        gstVerified: false,
+        bankVerified: false,
+        panVerified: false,
+
+        adminApproved: false,
+
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
 
       setSuccess(
-        "Seller application submitted successfully."
+        "Seller application successfully submitted."
       );
 
+      /*
+       * Give Firebase a moment to finish writing,
+       * then move to seller application status.
+       */
       setTimeout(() => {
-        router.push(
-          "/seller/application"
-        );
-      }, 800);
-    } catch (err) {
-      console.error(err);
+        router.replace("/seller/application");
+      }, 1500);
+    } catch (err: unknown) {
+      console.error("Seller registration error:", err);
 
-      setError(
-        "Unable to submit application. Please try again."
-      );
+      /*
+       * If account was created but Firestore application
+       * failed, try to remove the newly created account.
+       *
+       * This is only a best-effort rollback.
+       */
+      if (createdUserId && auth.currentUser?.uid === createdUserId) {
+        try {
+          await deleteUser(auth.currentUser);
+        } catch (deleteError) {
+          console.error(
+            "Rollback user deletion failed:",
+            deleteError
+          );
+        }
+      }
+
+      const firebaseError = err as {
+        code?: string;
+        message?: string;
+      };
+
+      if (
+        firebaseError.code ===
+        "auth/email-already-in-use"
+      ) {
+        setError(
+          "This email is already registered. Please login and continue your seller application."
+        );
+      } else if (
+        firebaseError.code === "auth/weak-password"
+      ) {
+        setError(
+          "Password is too weak. Please use at least 6 characters."
+        );
+      } else if (
+        firebaseError.code === "auth/invalid-email"
+      ) {
+        setError(
+          "Please enter a valid email address."
+        );
+      } else if (
+        firebaseError.code ===
+        "auth/operation-not-allowed"
+      ) {
+        setError(
+          "Email/Password registration is not enabled in Firebase Authentication."
+        );
+      } else if (
+        firebaseError.code ===
+        "permission-denied"
+      ) {
+        setError(
+          "Permission denied by Firebase. Please check Firestore rules."
+        );
+      } else {
+        setError(
+          firebaseError.message ||
+            "Seller registration failed. Please try again."
+        );
+      }
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#f7f8fa]">
-        <Header />
-
-        <main className="mx-auto max-w-4xl px-4 py-16">
-          <div className="rounded-3xl border border-gray-200 bg-white p-10 text-center">
-            ⏳ Loading...
-          </div>
-        </main>
-
-        <Footer />
-      </div>
-    );
-  }
+  const stepTitles = [
+    "Account & Business",
+    "Business Address",
+    "KYC Details",
+    "Bank & Submit",
+  ];
 
   return (
-    <div className="min-h-screen bg-[#f7f8fa]">
-
+    <main className="min-h-screen bg-slate-50">
       <Header />
 
-      <main className="mx-auto max-w-4xl px-4 py-6 sm:py-10">
+      <div className="border-b bg-white">
+        <div className="mx-auto max-w-6xl px-4 py-5">
+          <div className="flex items-center gap-3">
+            <img
+              src="/logo/anjivo-logo.png"
+              alt="ANJIVO"
+              className="h-10 w-auto"
+            />
 
-        <div className="mb-6">
+            <div>
+              <h1 className="text-xl font-bold text-slate-900">
+                Become an ANJIVO Seller
+              </h1>
 
-          <Link
-            href="/"
-            className="text-xs font-bold text-gray-400 hover:text-black"
-          >
-            ← Home
-          </Link>
+              <p className="text-sm text-slate-500">
+                Register your business and start selling
+                on ANJIVO.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
 
-          <h1 className="mt-3 text-3xl font-black">
-            Become an ANJIVO Seller
-          </h1>
+      <section className="mx-auto max-w-6xl px-4 py-8">
+        {/* Progress */}
+        <div className="mb-8 rounded-2xl border bg-white p-5 shadow-sm">
+          <div className="grid grid-cols-4 gap-2">
+            {stepTitles.map((title, index) => {
+              const number = index + 1;
+              const active = number === step;
+              const completed = number < step;
 
-          <p className="mt-1 text-sm text-gray-500">
-            Register your business and start selling on ANJIVO.
-          </p>
+              return (
+                <div
+                  key={title}
+                  className="relative"
+                >
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={[
+                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold",
+                        completed
+                          ? "bg-green-600 text-white"
+                          : active
+                          ? "bg-slate-900 text-white"
+                          : "bg-slate-100 text-slate-500",
+                      ].join(" ")}
+                    >
+                      {completed ? "✓" : number}
+                    </div>
 
+                    <div className="hidden sm:block">
+                      <p
+                        className={[
+                          "text-xs font-semibold",
+                          active
+                            ? "text-slate-900"
+                            : "text-slate-500",
+                        ].join(" ")}
+                      >
+                        STEP {number}
+                      </p>
+
+                      <p
+                        className={[
+                          "text-sm",
+                          active
+                            ? "font-semibold text-slate-900"
+                            : "text-slate-500",
+                        ].join(" ")}
+                      >
+                        {title}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-5 h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-slate-900 transition-all duration-300"
+              style={{
+                width: `${step * 25}%`,
+              }}
+            />
+          </div>
         </div>
 
-        {error && (
-          <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">
-            {error}
-          </div>
-        )}
-
-        {success && (
-          <div className="mb-5 rounded-2xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">
-            {success}
-          </div>
-        )}
-
+        {/* Main Form */}
         <form
           onSubmit={handleSubmit}
-          className="space-y-5"
+          className="space-y-6"
         >
+          {/* STEP 1 */}
+          {step === 1 && (
+            <section className="rounded-2xl border bg-white p-5 shadow-sm sm:p-7">
+              <div className="mb-6">
+                <p className="text-sm font-semibold text-slate-500">
+                  STEP 1
+                </p>
 
-          {/* BUSINESS */}
-          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+                <h2 className="mt-1 text-2xl font-bold text-slate-900">
+                  Account & Business Information
+                </h2>
 
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              Step 1
-            </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Create your seller account and tell us
+                  about your business.
+                </p>
+              </div>
 
-            <h2 className="mt-1 text-xl font-black">
-              Business Information
-            </h2>
-
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-
-              <div className="sm:col-span-2">
-                <label className="mb-2 block text-xs font-bold">
-                  Business Name *
-                </label>
-
-                <input
+              <div className="grid gap-5 md:grid-cols-2">
+                <Field
+                  label="Business Name"
+                  required
                   value={businessName}
-                  onChange={(e) =>
-                    setBusinessName(
-                      e.target.value
-                    )
-                  }
-                  placeholder="Your business / shop name"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  onChange={setBusinessName}
+                  placeholder="Enter your business name"
                 />
-              </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Owner Name *
-                </label>
-
-                <input
+                <Field
+                  label="Owner / Contact Person Name"
+                  required
                   value={ownerName}
-                  onChange={(e) =>
-                    setOwnerName(
-                      e.target.value
-                    )
-                  }
-                  placeholder="Owner / authorized person"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  onChange={setOwnerName}
+                  placeholder="Enter owner name"
                 />
-              </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Mobile Number *
-                </label>
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Mobile Number
+                    <span className="ml-1 text-red-500">
+                      *
+                    </span>
+                  </label>
 
-                <input
-                  type="tel"
-                  maxLength={10}
-                  value={phone}
-                  onChange={(e) =>
-                    setPhone(
-                      e.target.value.replace(
-                        /\D/g,
-                        ""
-                      )
-                    )
-                  }
-                  placeholder="10-digit mobile"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                />
-              </div>
+                  <div className="flex overflow-hidden rounded-xl border bg-white">
+                    <span className="flex items-center border-r bg-slate-50 px-3 text-sm font-semibold text-slate-600">
+                      +91
+                    </span>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Email
-                </label>
+                    <input
+                      type="tel"
+                      value={phone}
+                      onChange={(e) =>
+                        setPhone(
+                          cleanPhone(e.target.value)
+                        )
+                      }
+                      placeholder="10 digit mobile number"
+                      className="w-full px-4 py-3 text-sm outline-none"
+                      maxLength={10}
+                    />
+                  </div>
+                </div>
 
-                <input
+                <Field
+                  label="Email Address"
+                  required
                   type="email"
                   value={email}
-                  disabled
-                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500 outline-none"
+                  onChange={setEmail}
+                  placeholder="business@example.com"
                 />
-              </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Business Type *
-                </label>
-
-                <select
-                  value={businessType}
-                  onChange={(e) =>
-                    setBusinessType(
-                      e.target.value as
-                        | "INDIVIDUAL"
-                        | "PROPRIETORSHIP"
-                        | "PARTNERSHIP"
-                        | "LLP"
-                        | "PRIVATE_LIMITED"
-                    )
-                  }
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:border-black"
-                >
-                  <option value="INDIVIDUAL">
-                    Individual
-                  </option>
-
-                  <option value="PROPRIETORSHIP">
-                    Proprietorship
-                  </option>
-
-                  <option value="PARTNERSHIP">
-                    Partnership
-                  </option>
-
-                  <option value="LLP">
-                    LLP
-                  </option>
-
-                  <option value="PRIVATE_LIMITED">
-                    Private Limited
-                  </option>
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Main Product Category *
-                </label>
-
-                <select
-                  value={category}
-                  onChange={(e) =>
-                    setCategory(
-                      e.target.value
-                    )
-                  }
-                  className="w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:border-black"
-                >
-                  <option value="">
-                    Select Category
-                  </option>
-
-                  <option value="Fashion">
-                    Fashion
-                  </option>
-
-                  <option value="Beauty">
-                    Beauty & Cosmetics
-                  </option>
-
-                  <option value="Electronics">
-                    Electronics
-                  </option>
-
-                  <option value="Toys">
-                    Toys
-                  </option>
-
-                  <option value="Home">
-                    Home & Kitchen
-                  </option>
-
-                  <option value="Grocery">
-                    Grocery
-                  </option>
-
-                  <option value="Jewellery">
-                    Jewellery
-                  </option>
-
-                  <option value="Other">
-                    Other
-                  </option>
-                </select>
-              </div>
-
-            </div>
-
-          </section>
-
-          {/* ADDRESS */}
-          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              Step 2
-            </p>
-
-            <h2 className="mt-1 text-xl font-black">
-              Business Address
-            </h2>
-
-            <div className="mt-6 space-y-4">
-
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Full Address *
-                </label>
-
-                <textarea
-                  value={address}
-                  onChange={(e) =>
-                    setAddress(
-                      e.target.value
-                    )
-                  }
-                  rows={3}
-                  placeholder="Shop / office / warehouse address"
-                  className="w-full resize-none rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                <Field
+                  label="Create Password"
+                  required
+                  type="password"
+                  value={password}
+                  onChange={setPassword}
+                  placeholder="Minimum 6 characters"
                 />
-              </div>
 
-              <div className="grid gap-4 sm:grid-cols-3">
+                <Field
+                  label="Confirm Password"
+                  required
+                  type="password"
+                  value={confirmPassword}
+                  onChange={setConfirmPassword}
+                  placeholder="Re-enter password"
+                />
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold">
-                    City *
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Business Type
+                    <span className="ml-1 text-red-500">
+                      *
+                    </span>
                   </label>
 
-                  <input
-                    value={city}
+                  <select
+                    value={businessType}
                     onChange={(e) =>
-                      setCity(
-                        e.target.value
+                      setBusinessType(
+                        e.target.value as BusinessType
                       )
                     }
-                    placeholder="City"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
+                    className="w-full rounded-xl border bg-white px-4 py-3 text-sm outline-none"
+                  >
+                    <option value="INDIVIDUAL">
+                      Individual
+                    </option>
+
+                    <option value="PROPRIETORSHIP">
+                      Proprietorship
+                    </option>
+
+                    <option value="PARTNERSHIP">
+                      Partnership
+                    </option>
+
+                    <option value="LLP">
+                      LLP
+                    </option>
+
+                    <option value="PRIVATE_LIMITED">
+                      Private Limited
+                    </option>
+                  </select>
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-xs font-bold">
-                    State *
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Main Product Category
+                    <span className="ml-1 text-red-500">
+                      *
+                    </span>
                   </label>
 
-                  <input
-                    value={state}
+                  <select
+                    value={category}
                     onChange={(e) =>
-                      setState(
-                        e.target.value
-                      )
+                      setCategory(e.target.value)
                     }
-                    placeholder="State"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
+                    className="w-full rounded-xl border bg-white px-4 py-3 text-sm outline-none"
+                  >
+                    <option value="">
+                      Select category
+                    </option>
+
+                    {categories.map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-
-                <div>
-                  <label className="mb-2 block text-xs font-bold">
-                    Pincode *
-                  </label>
-
-                  <input
-                    value={pincode}
-                    maxLength={6}
-                    onChange={(e) =>
-                      setPincode(
-                        e.target.value.replace(
-                          /\D/g,
-                          ""
-                        )
-                      )
-                    }
-                    placeholder="6-digit pincode"
-                    className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-                  />
-                </div>
-
               </div>
 
-            </div>
+              <InfoBox>
+                Your seller account will remain under
+                verification until ANJIVO completes the
+                required checks.
+              </InfoBox>
+            </section>
+          )}
 
-          </section>
+          {/* STEP 2 */}
+          {step === 2 && (
+            <section className="rounded-2xl border bg-white p-5 shadow-sm sm:p-7">
+              <div className="mb-6">
+                <p className="text-sm font-semibold text-slate-500">
+                  STEP 2
+                </p>
 
-          {/* KYC */}
-          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+                <h2 className="mt-1 text-2xl font-bold text-slate-900">
+                  Business Address
+                </h2>
 
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              Step 3
-            </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Enter the address associated with your
+                  business.
+                </p>
+              </div>
 
-            <h2 className="mt-1 text-xl font-black">
-              Business KYC
-            </h2>
+              <div className="grid gap-5 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <label className="mb-2 block text-sm font-semibold text-slate-700">
+                    Full Business Address
+                    <span className="ml-1 text-red-500">
+                      *
+                    </span>
+                  </label>
 
-            <p className="mt-1 text-xs text-gray-400">
-              These details will be used for seller verification.
-            </p>
+                  <textarea
+                    value={address}
+                    onChange={(e) =>
+                      setAddress(e.target.value)
+                    }
+                    rows={4}
+                    placeholder="Shop / office / warehouse address"
+                    className="w-full rounded-xl border px-4 py-3 text-sm outline-none"
+                  />
+                </div>
 
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                <Field
+                  label="City"
+                  required
+                  value={city}
+                  onChange={setCity}
+                  placeholder="Enter city"
+                />
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  GSTIN
-                  <span className="ml-1 font-normal text-gray-400">
-                    (Optional)
-                  </span>
-                </label>
+                <Field
+                  label="State"
+                  required
+                  value={state}
+                  onChange={setState}
+                  placeholder="Enter state"
+                />
 
-                <input
-                  value={gstNumber}
-                  maxLength={15}
-                  onChange={(e) =>
-                    setGstNumber(
-                      e.target.value
-                        .toUpperCase()
+                <Field
+                  label="Pincode"
+                  required
+                  value={pincode}
+                  onChange={(value) =>
+                    setPincode(
+                      cleanPincode(value)
                     )
                   }
-                  placeholder="15-character GSTIN"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase outline-none focus:border-black"
+                  placeholder="6 digit pincode"
+                  maxLength={6}
                 />
               </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  PAN Number
-                  <span className="ml-1 font-normal text-gray-400">
-                    (Optional)
-                  </span>
-                </label>
+              <InfoBox>
+                This address may be used for seller
+                verification, pickup and business records.
+              </InfoBox>
+            </section>
+          )}
 
-                <input
+          {/* STEP 3 */}
+          {step === 3 && (
+            <section className="rounded-2xl border bg-white p-5 shadow-sm sm:p-7">
+              <div className="mb-6">
+                <p className="text-sm font-semibold text-slate-500">
+                  STEP 3
+                </p>
+
+                <h2 className="mt-1 text-2xl font-bold text-slate-900">
+                  KYC & Tax Details
+                </h2>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  Provide your PAN and GST information
+                  where applicable.
+                </p>
+              </div>
+
+              <div className="grid gap-5 md:grid-cols-2">
+                <Field
+                  label="PAN Number"
                   value={panNumber}
-                  maxLength={10}
-                  onChange={(e) =>
-                    setPanNumber(
-                      e.target.value
-                        .toUpperCase()
-                    )
+                  onChange={(value) =>
+                    setPanNumber(cleanPAN(value))
                   }
                   placeholder="ABCDE1234F"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase outline-none focus:border-black"
+                  maxLength={10}
+                />
+
+                <Field
+                  label="GSTIN"
+                  value={gstNumber}
+                  onChange={(value) =>
+                    setGstNumber(cleanGST(value))
+                  }
+                  placeholder="15 character GSTIN"
+                  maxLength={15}
                 />
               </div>
 
-            </div>
+              <div className="mt-6 grid gap-4 md:grid-cols-3">
+                <VerificationCard
+                  title="PAN Verification"
+                  text="Verification will be completed by ANJIVO."
+                />
 
-          </section>
+                <VerificationCard
+                  title="GST Verification"
+                  text="GST details will be checked where applicable."
+                />
 
-          {/* BANK */}
-          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+                <VerificationCard
+                  title="Business Review"
+                  text="Final seller approval is done by ANJIVO."
+                />
+              </div>
 
-            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              Step 4
-            </p>
+              <InfoBox>
+                Do not enter incorrect or someone else&apos;s
+                KYC details. Verification will be required
+                before seller approval.
+              </InfoBox>
+            </section>
+          )}
 
-            <h2 className="mt-1 text-xl font-black">
-              Bank Details
-            </h2>
+          {/* STEP 4 */}
+          {step === 4 && (
+            <section className="rounded-2xl border bg-white p-5 shadow-sm sm:p-7">
+              <div className="mb-6">
+                <p className="text-sm font-semibold text-slate-500">
+                  STEP 4
+                </p>
 
-            <p className="mt-1 text-xs text-gray-400">
-              Used later for seller payouts.
-            </p>
+                <h2 className="mt-1 text-2xl font-bold text-slate-900">
+                  Bank Details & Submit
+                </h2>
 
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                <p className="mt-1 text-sm text-slate-500">
+                  Add your bank account for future
+                  marketplace settlements.
+                </p>
+              </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Account Holder Name
-                </label>
-
-                <input
+              <div className="grid gap-5 md:grid-cols-2">
+                <Field
+                  label="Account Holder Name"
                   value={bankAccountName}
-                  onChange={(e) =>
-                    setBankAccountName(
-                      e.target.value
-                    )
-                  }
-                  placeholder="As per bank account"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  onChange={setBankAccountName}
+                  placeholder="Name as per bank account"
                 />
-              </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  Account Number
-                </label>
-
-                <input
-                  type="password"
+                <Field
+                  label="Bank Account Number"
                   value={bankAccountNumber}
-                  onChange={(e) =>
+                  onChange={(value) =>
                     setBankAccountNumber(
-                      e.target.value.replace(
-                        /\D/g,
-                        ""
-                      )
+                      value.replace(/\D/g, "")
                     )
                   }
-                  placeholder="Bank account number"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  placeholder="Enter account number"
                 />
-              </div>
 
-              <div>
-                <label className="mb-2 block text-xs font-bold">
-                  IFSC Code
-                </label>
-
-                <input
+                <Field
+                  label="IFSC Code"
                   value={ifscCode}
-                  maxLength={11}
-                  onChange={(e) =>
+                  onChange={(value) =>
                     setIfscCode(
-                      e.target.value
+                      value
                         .toUpperCase()
+                        .replace(
+                          /[^A-Z0-9]/g,
+                          ""
+                        )
+                        .slice(0, 11)
                     )
                   }
-                  placeholder="ABCD0123456"
-                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase outline-none focus:border-black"
+                  placeholder="SBIN0000000"
+                  maxLength={11}
                 />
               </div>
 
+              <div className="mt-7 rounded-2xl border border-amber-200 bg-amber-50 p-5">
+                <h3 className="font-bold text-amber-900">
+                  Seller verification
+                </h3>
+
+                <ul className="mt-3 space-y-2 text-sm text-amber-800">
+                  <li>✓ Email verification required</li>
+                  <li>✓ Mobile OTP verification required</li>
+                  <li>✓ KYC verification</li>
+                  <li>✓ Bank verification</li>
+                  <li>✓ ANJIVO admin approval</li>
+                </ul>
+              </div>
+
+              <label className="mt-6 flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={agreeTerms}
+                  onChange={(e) =>
+                    setAgreeTerms(e.target.checked)
+                  }
+                  className="mt-1 h-4 w-4"
+                />
+
+                <span className="text-sm text-slate-600">
+                  I confirm that the information provided
+                  by me is accurate and I agree to ANJIVO
+                  Seller Terms & Conditions and marketplace
+                  policies.
+                </span>
+              </label>
+            </section>
+          )}
+
+          {/* Error */}
+          {error && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+              {error}
+            </div>
+          )}
+
+          {/* Success */}
+          {success && (
+            <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-medium text-green-700">
+              {success}
+            </div>
+          )}
+
+          {/* Navigation */}
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              {step > 1 && (
+                <button
+                  type="button"
+                  onClick={previousStep}
+                  disabled={loading}
+                  className="w-full rounded-xl border bg-white px-6 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 sm:w-auto"
+                >
+                  ← Previous
+                </button>
+              )}
             </div>
 
-          </section>
-
-          {/* SUBMIT */}
-          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-
-            <div className="rounded-2xl bg-gray-50 p-4">
-
-              <p className="text-xs font-black">
-                Seller Verification
-              </p>
-
-              <p className="mt-1 text-[10px] leading-5 text-gray-500">
-                After submission, your application will remain
-                <strong> pending </strong>
-                until an ANJIVO admin reviews and approves it.
-              </p>
-
-            </div>
-
-            <div className="mt-5 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-
-              <Link
-                href="/"
-                className="rounded-xl border border-gray-200 px-6 py-3 text-center text-sm font-bold"
+            {step < 4 ? (
+              <button
+                type="button"
+                onClick={nextStep}
+                disabled={loading}
+                className="w-full rounded-xl bg-slate-900 px-7 py-3 text-sm font-bold text-white hover:bg-slate-800 sm:w-auto"
               >
-                Cancel
-              </Link>
-
+                Continue →
+              </button>
+            ) : (
               <button
                 type="submit"
-                disabled={saving}
-                className="rounded-xl bg-black px-7 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={loading}
+                className="w-full rounded-xl bg-slate-900 px-7 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
               >
-                {saving
-                  ? "Submitting..."
+                {loading
+                  ? "Creating Seller Account..."
                   : "Submit Seller Application"}
               </button>
-
-            </div>
-
-          </section>
-
+            )}
+          </div>
         </form>
 
-      </main>
+        {/* Trust section */}
+        <div className="mt-8 grid gap-4 sm:grid-cols-3">
+          <TrustCard
+            icon="🔐"
+            title="Secure Account"
+            text="Your account information is securely stored."
+          />
+
+          <TrustCard
+            icon="✓"
+            title="Verification"
+            text="Seller applications are reviewed before approval."
+          />
+
+          <TrustCard
+            icon="💳"
+            title="Marketplace Payments"
+            text="Approved sellers can receive marketplace settlements."
+          />
+        </div>
+      </section>
 
       <Footer />
+    </main>
+  );
+}
 
+/* ---------------------------------------------
+   Reusable Field
+--------------------------------------------- */
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  required = false,
+  maxLength,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+  required?: boolean;
+  maxLength?: number;
+}) {
+  return (
+    <div>
+      <label className="mb-2 block text-sm font-semibold text-slate-700">
+        {label}
+
+        {required && (
+          <span className="ml-1 text-red-500">
+            *
+          </span>
+        )}
+      </label>
+
+      <input
+        type={type}
+        value={value}
+        onChange={(e) =>
+          onChange(e.target.value)
+        }
+        placeholder={placeholder}
+        maxLength={maxLength}
+        className="w-full rounded-xl border bg-white px-4 py-3 text-sm outline-none transition focus:border-slate-900 focus:ring-2 focus:ring-slate-100"
+      />
+    </div>
+  );
+}
+
+/* ---------------------------------------------
+   Info Box
+--------------------------------------------- */
+
+function InfoBox({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="mt-6 rounded-xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-800">
+      <div className="flex gap-3">
+        <span className="text-lg">ℹ️</span>
+        <p>{children}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------
+   Verification Card
+--------------------------------------------- */
+
+function VerificationCard({
+  title,
+  text,
+}: {
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="rounded-xl border bg-slate-50 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-sm shadow-sm">
+          ✓
+        </span>
+
+        <h3 className="text-sm font-bold text-slate-900">
+          {title}
+        </h3>
+      </div>
+
+      <p className="text-xs leading-5 text-slate-500">
+        {text}
+      </p>
+    </div>
+  );
+}
+
+/* ---------------------------------------------
+   Trust Card
+--------------------------------------------- */
+
+function TrustCard({
+  icon,
+  title,
+  text,
+}: {
+  icon: string;
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white p-5 shadow-sm">
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-lg">
+          {icon}
+        </div>
+
+        <div>
+          <h3 className="font-bold text-slate-900">
+            {title}
+          </h3>
+
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            {text}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
