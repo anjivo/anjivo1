@@ -447,122 +447,92 @@ export default function AdminWholesalePage() {
 
   async function loadOrders() {
     try {
-      const snapshot =
-        await getDocs(
-          collection(
-            db,
-            "orders"
-          )
+      const snapshot = await getDocs(
+        collection(db, "orders")
+      );
+
+      const wholesaleDocs = snapshot.docs.filter((item) => {
+        const data = item.data();
+
+        const rawItems = Array.isArray(data.items)
+          ? data.items
+          : [];
+
+        const items = rawItems.map(
+          (raw) =>
+            raw as Record<string, unknown>
         );
 
+        return items.some(
+          (orderItem) =>
+            orderItem.pricingType === "wholesale"
+        );
+      });
+
       const list: WholesaleOrder[] =
-        snapshot.docs
-          .map((item) => {
-            const data =
-              item.data();
+        wholesaleDocs.map((item) => {
+          const data = item.data();
 
-            const rawItems =
-              Array.isArray(
-                data.items
-              )
-                ? data.items
-                : [];
+          const rawItems = Array.isArray(data.items)
+            ? data.items
+            : [];
 
-            const items =
-              rawItems.map(
-                (raw) =>
-                  raw as Record<
-                    string,
-                    unknown
-                  >
-              );
-
-            const hasWholesale =
-              items.some(
-                (item) =>
-                  item.pricingType ===
-                  "wholesale"
-              );
-
-            if (!hasWholesale) {
-              return null;
-            }
-
-            const sellerIds =
-              new Set(
-                items
-                  .map(
-                    (item) =>
-                      stringValue(
-                        item.sellerId
-                      )
-                  )
-                  .filter(Boolean)
-              );
-
-            return {
-              id: item.id,
-
-              customerName:
-                stringValue(
-                  data.customerName ||
-                    data.name
-                ),
-
-              customerPhone:
-                stringValue(
-                  data.customerPhone ||
-                    data.phone
-                ),
-
-              total:
-                numberValue(
-                  data.total ||
-                    data.grandTotal
-                ),
-
-              status:
-                stringValue(
-                  data.status
-                ) ||
-                "pending",
-
-              paymentStatus:
-                stringValue(
-                  data.paymentStatus
-                ) ||
-                "pending",
-
-              items:
-                items.length,
-
-              sellerCount:
-                sellerIds.size,
-
-              createdAt:
-                data.createdAt,
-            };
-          })
-          .filter(
-            (
-              order
-            ): order is WholesaleOrder =>
-              order !== null
+          const items = rawItems.map(
+            (raw) =>
+              raw as Record<string, unknown>
           );
+
+          const sellerIds = new Set(
+            items
+              .map((orderItem) =>
+                stringValue(orderItem.sellerId)
+              )
+              .filter(Boolean)
+          );
+
+          return {
+            id: item.id,
+
+            customerName: stringValue(
+              data.customerName ||
+                data.name
+            ),
+
+            customerPhone: stringValue(
+              data.customerPhone ||
+                data.phone
+            ),
+
+            total: numberValue(
+              data.total ||
+                data.grandTotal
+            ),
+
+            status:
+              stringValue(data.status) ||
+              "pending",
+
+            paymentStatus:
+              stringValue(
+                data.paymentStatus
+              ) || "pending",
+
+            items: items.length,
+
+            sellerCount: sellerIds.size,
+
+            createdAt:
+              data.createdAt,
+          };
+        });
 
       list.sort(
         (a, b) =>
-          timestampValue(
-            b.createdAt
-          ) -
-          timestampValue(
-            a.createdAt
-          )
+          timestampValue(b.createdAt) -
+          timestampValue(a.createdAt)
       );
 
-      setWholesaleOrders(
-        list
-      );
+      setWholesaleOrders(list);
     } catch (err) {
       console.error(
         "Wholesale orders error:",
