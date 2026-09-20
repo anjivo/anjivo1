@@ -1,37 +1,42 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-
+import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   doc,
   getDoc,
   getDocs,
-  orderBy,
-  query,
+  serverTimestamp,
   updateDoc,
-  where,
 } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
 
 import { auth, db } from "@/lib/firebase";
+
+type SellerStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "blocked";
 
 type Seller = {
   id: string;
   userId: string;
-  businessName?: string;
-  ownerName?: string;
-  email?: string;
-  phone?: string;
 
-  businessType?: string;
-  category?: string;
+  businessName: string;
+  ownerName: string;
 
-  address?: string;
-  city?: string;
-  state?: string;
-  pincode?: string;
+  email: string;
+  phone: string;
+
+  businessType: string;
+  category: string;
+
+  address: string;
+  city: string;
+  state: string;
+  pincode: string;
 
   gstNumber?: string;
   panNumber?: string;
@@ -40,369 +45,889 @@ type Seller = {
   bankAccountNumber?: string;
   ifscCode?: string;
 
-  status?: string;
-  sellerVerified?: boolean;
+  status: SellerStatus;
 
-  emailVerified?: boolean;
-  phoneVerified?: boolean;
-  gstVerified?: boolean;
-  panVerified?: boolean;
-  bankVerified?: boolean;
+  sellerVerified: boolean;
 
-  adminApproved?: boolean;
-  accountStatus?: string;
+  emailVerified: boolean;
+  phoneVerified: boolean;
+  gstVerified: boolean;
+  panVerified: boolean;
+  bankVerified: boolean;
 
-  createdAt?: {
-    seconds?: number;
-  };
+  adminApproved: boolean;
+  accountStatus: string;
+
+  createdAt?: unknown;
+  updatedAt?: unknown;
 };
 
-type FilterType =
+type SellerFilter =
   | "all"
   | "pending"
   | "approved"
   | "rejected"
   | "blocked";
 
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function getTimestampValue(
+  value: unknown
+): number {
+  if (!value) return 0;
+
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "seconds" in value
+  ) {
+    return Number(
+      (value as { seconds?: unknown })
+        .seconds ?? 0
+    );
+  }
+
+  if (value instanceof Date) {
+    return Math.floor(
+      value.getTime() / 1000
+    );
+  }
+
+  return 0;
+}
+
+function stringValue(
+  value: unknown
+): string {
+  return value === undefined ||
+    value === null
+    ? ""
+    : String(value);
+}
+
+function booleanValue(
+  value: unknown
+): boolean {
+  return value === true;
+}
+
+function mapSeller(
+  id: string,
+  data: Record<string, unknown>
+): Seller {
+  const rawStatus =
+    stringValue(data.status);
+
+  let status: SellerStatus =
+    "pending";
+
+  if (
+    rawStatus === "approved" ||
+    rawStatus === "rejected" ||
+    rawStatus === "blocked"
+  ) {
+    status =
+      rawStatus as SellerStatus;
+  }
+
+  return {
+    id,
+
+    userId: stringValue(
+      data.userId
+    ),
+
+    businessName: stringValue(
+      data.businessName
+    ),
+
+    ownerName: stringValue(
+      data.ownerName
+    ),
+
+    email: stringValue(
+      data.email
+    ),
+
+    phone: stringValue(
+      data.phone
+    ),
+
+    businessType: stringValue(
+      data.businessType
+    ),
+
+    category: stringValue(
+      data.category
+    ),
+
+    address: stringValue(
+      data.address
+    ),
+
+    city: stringValue(
+      data.city
+    ),
+
+    state: stringValue(
+      data.state
+    ),
+
+    pincode: stringValue(
+      data.pincode
+    ),
+
+    gstNumber:
+      data.gstNumber
+        ? stringValue(
+            data.gstNumber
+          )
+        : undefined,
+
+    panNumber:
+      data.panNumber
+        ? stringValue(
+            data.panNumber
+          )
+        : undefined,
+
+    bankAccountName:
+      data.bankAccountName
+        ? stringValue(
+            data.bankAccountName
+          )
+        : undefined,
+
+    bankAccountNumber:
+      data.bankAccountNumber
+        ? stringValue(
+            data.bankAccountNumber
+          )
+        : undefined,
+
+    ifscCode:
+      data.ifscCode
+        ? stringValue(
+            data.ifscCode
+          )
+        : undefined,
+
+    status,
+
+    sellerVerified:
+      booleanValue(
+        data.sellerVerified
+      ),
+
+    emailVerified:
+      booleanValue(
+        data.emailVerified
+      ),
+
+    phoneVerified:
+      booleanValue(
+        data.phoneVerified
+      ),
+
+    gstVerified:
+      booleanValue(
+        data.gstVerified
+      ),
+
+    panVerified:
+      booleanValue(
+        data.panVerified
+      ),
+
+    bankVerified:
+      booleanValue(
+        data.bankVerified
+      ),
+
+    adminApproved:
+      booleanValue(
+        data.adminApproved
+      ),
+
+    accountStatus:
+      stringValue(
+        data.accountStatus
+      ),
+
+    createdAt:
+      data.createdAt,
+
+    updatedAt:
+      data.updatedAt,
+  };
+}
+
+/* =========================================================
+   PAGE
+========================================================= */
+
 export default function AdminSellersPage() {
-  const router = useRouter();
+  const [loading, setLoading] =
+    useState(true);
 
-  const [loading, setLoading] = useState(true);
-  const [loadingSellers, setLoadingSellers] = useState(false);
-  const [authorized, setAuthorized] = useState(false);
+  const [authorized, setAuthorized] =
+    useState(false);
 
-  const [sellers, setSellers] = useState<Seller[]>([]);
-  const [selectedSeller, setSelectedSeller] = useState<Seller | null>(null);
+  const [sellers, setSellers] =
+    useState<Seller[]>([]);
 
-  const [filter, setFilter] = useState<FilterType>("all");
-  const [search, setSearch] = useState("");
+  const [filter, setFilter] =
+    useState<SellerFilter>(
+      "all"
+    );
 
-  const [actionLoading, setActionLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [search, setSearch] =
+    useState("");
+
+  const [processing, setProcessing] =
+    useState<string | null>(null);
+
+  const [error, setError] =
+    useState("");
+
+  const [success, setSuccess] =
+    useState("");
+
+  /* =========================================================
+     ADMIN AUTH
+  ========================================================= */
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        router.replace("/login?redirect=/admin/sellers");
-        return;
-      }
+    const unsubscribe =
+      onAuthStateChanged(
+        auth,
+        async (user) => {
+          if (!user) {
+            window.location.href =
+              "/login?redirect=/admin/sellers";
+            return;
+          }
 
-      try {
-        const userSnap = await getDoc(doc(db, "users", user.uid));
+          try {
+            setError("");
 
-        if (!userSnap.exists()) {
-          router.replace("/");
-          return;
+            const userSnapshot =
+              await getDoc(
+                doc(
+                  db,
+                  "users",
+                  user.uid
+                )
+              );
+
+            if (
+              !userSnapshot.exists()
+            ) {
+              window.location.href =
+                "/";
+              return;
+            }
+
+            const userData =
+              userSnapshot.data();
+
+            if (
+              userData.role !==
+              "ADMIN"
+            ) {
+              window.location.href =
+                "/account";
+              return;
+            }
+
+            setAuthorized(true);
+
+            await loadSellers();
+          } catch (err) {
+            console.error(
+              "Admin seller auth error:",
+              err
+            );
+
+            setError(
+              "Unable to verify admin access."
+            );
+          } finally {
+            setLoading(false);
+          }
         }
+      );
 
-        const userData = userSnap.data();
+    return () =>
+      unsubscribe();
+  }, []);
 
-        if (userData.role !== "ADMIN") {
-          router.replace("/");
-          return;
-        }
-
-        setAuthorized(true);
-        await loadSellers();
-      } catch (err) {
-        console.error(err);
-        setError("Admin access verify nahi ho saka.");
-      } finally {
-        setLoading(false);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [router]);
+  /* =========================================================
+     LOAD SELLERS
+  ========================================================= */
 
   async function loadSellers() {
-    setLoadingSellers(true);
-    setError("");
-
     try {
-      const sellersQuery = query(
-        collection(db, "sellers"),
-        orderBy("createdAt", "desc")
+      setError("");
+
+      /*
+       * No orderBy("createdAt") here.
+       *
+       * This keeps the page compatible with
+       * older seller documents where createdAt
+       * may be missing.
+       */
+      const snapshot =
+        await getDocs(
+          collection(
+            db,
+            "sellers"
+          )
+        );
+
+      const list: Seller[] =
+        snapshot.docs.map(
+          (item) =>
+            mapSeller(
+              item.id,
+              item.data()
+            )
+        );
+
+      list.sort(
+        (a, b) =>
+          getTimestampValue(
+            b.createdAt
+          ) -
+          getTimestampValue(
+            a.createdAt
+          )
       );
 
-      const snapshot = await getDocs(sellersQuery);
-
-      const sellerList: Seller[] = snapshot.docs.map((sellerDoc) => ({
-        id: sellerDoc.id,
-        ...(sellerDoc.data() as Omit<Seller, "id">),
-      }));
-
-      setSellers(sellerList);
+      setSellers(list);
     } catch (err) {
-      console.error(err);
-      setError(
-        "Seller applications load nahi ho paayi. Firestore index ya permissions check karein."
+      console.error(
+        "Load sellers error:",
+        err
       );
-    } finally {
-      setLoadingSellers(false);
+
+      setError(
+        "Seller applications load nahi ho paaye."
+      );
     }
   }
 
-  const filteredSellers = useMemo(() => {
-    const searchText = search.trim().toLowerCase();
+  /* =========================================================
+     APPROVE SELLER
+  ========================================================= */
 
-    return sellers.filter((seller) => {
-      const status = seller.status?.toLowerCase() || "pending";
-
-      const matchesFilter =
-        filter === "all" ||
-        status === filter;
-
-      if (!matchesFilter) return false;
-
-      if (!searchText) return true;
-
-      return (
-        seller.businessName?.toLowerCase().includes(searchText) ||
-        seller.ownerName?.toLowerCase().includes(searchText) ||
-        seller.email?.toLowerCase().includes(searchText) ||
-        seller.phone?.toLowerCase().includes(searchText) ||
-        seller.city?.toLowerCase().includes(searchText)
+  async function approveSeller(
+    seller: Seller
+  ) {
+    const confirmed =
+      window.confirm(
+        `Approve seller "${seller.businessName}"?\n\nAfter approval, this seller can access the seller marketplace features according to Firestore permissions.`
       );
-    });
-  }, [sellers, filter, search]);
 
-  const stats = useMemo(() => {
-    return {
-      total: sellers.length,
+    if (!confirmed) return;
+
+    try {
+      setProcessing(seller.id);
+      setError("");
+      setSuccess("");
+
+      const sellerRef =
+        doc(
+          db,
+          "sellers",
+          seller.id
+        );
+
+      const userRef =
+        doc(
+          db,
+          "users",
+          seller.userId
+        );
+
+      /*
+       * Seller document
+       */
+
+      await updateDoc(
+        sellerRef,
+        {
+          status: "approved",
+
+          sellerVerified:
+            true,
+
+          adminApproved:
+            true,
+
+          accountStatus:
+            "ACTIVE",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      /*
+       * User document
+       *
+       * Only admin can change these protected
+       * role/application fields according to
+       * the intended Firestore rules.
+       */
+
+      await updateDoc(
+        userRef,
+        {
+          role: "SELLER",
+
+          sellerApplicationStatus:
+            "APPROVED",
+
+          accountStatus:
+            "ACTIVE",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      setSellers(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === seller.id
+                ? {
+                    ...item,
+                    status:
+                      "approved",
+                    sellerVerified:
+                      true,
+                    adminApproved:
+                      true,
+                    accountStatus:
+                      "ACTIVE",
+                  }
+                : item
+          )
+      );
+
+      setSuccess(
+        `${seller.businessName} has been approved successfully.`
+      );
+    } catch (err) {
+      console.error(
+        "Approve seller error:",
+        err
+      );
+
+      setError(
+        "Seller approval failed. Check Firestore rules and seller/user documents."
+      );
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  /* =========================================================
+     REJECT SELLER
+  ========================================================= */
+
+  async function rejectSeller(
+    seller: Seller
+  ) {
+    const confirmed =
+      window.confirm(
+        `Reject seller application for "${seller.businessName}"?`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setProcessing(seller.id);
+      setError("");
+      setSuccess("");
+
+      await updateDoc(
+        doc(
+          db,
+          "sellers",
+          seller.id
+        ),
+        {
+          status: "rejected",
+
+          sellerVerified:
+            false,
+
+          adminApproved:
+            false,
+
+          accountStatus:
+            "REJECTED",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      await updateDoc(
+        doc(
+          db,
+          "users",
+          seller.userId
+        ),
+        {
+          sellerApplicationStatus:
+            "REJECTED",
+
+          accountStatus:
+            "REJECTED",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      setSellers(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === seller.id
+                ? {
+                    ...item,
+                    status:
+                      "rejected",
+                    sellerVerified:
+                      false,
+                    adminApproved:
+                      false,
+                    accountStatus:
+                      "REJECTED",
+                  }
+                : item
+          )
+      );
+
+      setSuccess(
+        `${seller.businessName} application rejected.`
+      );
+    } catch (err) {
+      console.error(
+        "Reject seller error:",
+        err
+      );
+
+      setError(
+        "Seller rejection failed."
+      );
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  /* =========================================================
+     BLOCK SELLER
+  ========================================================= */
+
+  async function blockSeller(
+    seller: Seller
+  ) {
+    const confirmed =
+      window.confirm(
+        `Block seller "${seller.businessName}"?\n\nThe seller account will no longer be treated as an approved seller.`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setProcessing(seller.id);
+      setError("");
+      setSuccess("");
+
+      await updateDoc(
+        doc(
+          db,
+          "sellers",
+          seller.id
+        ),
+        {
+          status: "blocked",
+
+          sellerVerified:
+            false,
+
+          adminApproved:
+            false,
+
+          accountStatus:
+            "BLOCKED",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      await updateDoc(
+        doc(
+          db,
+          "users",
+          seller.userId
+        ),
+        {
+          accountStatus:
+            "BLOCKED",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      setSellers(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === seller.id
+                ? {
+                    ...item,
+                    status:
+                      "blocked",
+                    sellerVerified:
+                      false,
+                    adminApproved:
+                      false,
+                    accountStatus:
+                      "BLOCKED",
+                  }
+                : item
+          )
+      );
+
+      setSuccess(
+        `${seller.businessName} has been blocked.`
+      );
+    } catch (err) {
+      console.error(
+        "Block seller error:",
+        err
+      );
+
+      setError(
+        "Seller block failed."
+      );
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  /* =========================================================
+     UNBLOCK SELLER
+  ========================================================= */
+
+  async function unblockSeller(
+    seller: Seller
+  ) {
+    const confirmed =
+      window.confirm(
+        `Unblock "${seller.businessName}"?`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setProcessing(seller.id);
+      setError("");
+      setSuccess("");
+
+      await updateDoc(
+        doc(
+          db,
+          "sellers",
+          seller.id
+        ),
+        {
+          status: "approved",
+
+          sellerVerified:
+            true,
+
+          adminApproved:
+            true,
+
+          accountStatus:
+            "ACTIVE",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      await updateDoc(
+        doc(
+          db,
+          "users",
+          seller.userId
+        ),
+        {
+          role: "SELLER",
+
+          sellerApplicationStatus:
+            "APPROVED",
+
+          accountStatus:
+            "ACTIVE",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      setSellers(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id === seller.id
+                ? {
+                    ...item,
+                    status:
+                      "approved",
+                    sellerVerified:
+                      true,
+                    adminApproved:
+                      true,
+                    accountStatus:
+                      "ACTIVE",
+                  }
+                : item
+          )
+      );
+
+      setSuccess(
+        `${seller.businessName} has been unblocked.`
+      );
+    } catch (err) {
+      console.error(
+        "Unblock seller error:",
+        err
+      );
+
+      setError(
+        "Seller unblock failed."
+      );
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  /* =========================================================
+     SEARCH / FILTER
+  ========================================================= */
+
+  const filteredSellers =
+    useMemo(() => {
+      const searchText =
+        search
+          .trim()
+          .toLowerCase();
+
+      return sellers.filter(
+        (seller) => {
+          const matchesFilter =
+            filter === "all" ||
+            seller.status ===
+              filter;
+
+          const searchableText = [
+            seller.businessName,
+            seller.ownerName,
+            seller.email,
+            seller.phone,
+            seller.city,
+            seller.state,
+            seller.category,
+            seller.gstNumber,
+            seller.panNumber,
+            seller.userId,
+          ]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+
+          const matchesSearch =
+            !searchText ||
+            searchableText.includes(
+              searchText
+            );
+
+          return (
+            matchesFilter &&
+            matchesSearch
+          );
+        }
+      );
+    }, [
+      sellers,
+      filter,
+      search,
+    ]);
+
+  /* =========================================================
+     COUNTS
+  ========================================================= */
+
+  const counts = useMemo(
+    () => ({
+      all: sellers.length,
+
       pending: sellers.filter(
-        (seller) => seller.status === "pending"
+        (seller) =>
+          seller.status ===
+          "pending"
       ).length,
+
       approved: sellers.filter(
-        (seller) => seller.status === "approved"
+        (seller) =>
+          seller.status ===
+          "approved"
       ).length,
+
       rejected: sellers.filter(
-        (seller) => seller.status === "rejected"
+        (seller) =>
+          seller.status ===
+          "rejected"
       ).length,
+
       blocked: sellers.filter(
-        (seller) => seller.status === "blocked"
+        (seller) =>
+          seller.status ===
+          "blocked"
       ).length,
-    };
-  }, [sellers]);
+    }),
+    [sellers]
+  );
 
-  async function approveSeller() {
-    if (!selectedSeller) return;
-
-    const confirmed = window.confirm(
-      `Approve seller "${selectedSeller.businessName || selectedSeller.ownerName}"?`
-    );
-
-    if (!confirmed) return;
-
-    setActionLoading(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const sellerRef = doc(db, "sellers", selectedSeller.userId);
-      const userRef = doc(db, "users", selectedSeller.userId);
-
-      await updateDoc(sellerRef, {
-        status: "approved",
-        sellerVerified: true,
-        adminApproved: true,
-        accountStatus: "ACTIVE",
-        updatedAt: new Date(),
-      });
-
-      await updateDoc(userRef, {
-        role: "SELLER",
-        accountStatus: "ACTIVE",
-        sellerApplicationStatus: "APPROVED",
-        updatedAt: new Date(),
-      });
-
-      setMessage("Seller successfully approved.");
-
-      setSelectedSeller(null);
-
-      await loadSellers();
-    } catch (err) {
-      console.error(err);
-      setError(
-        "Seller approve nahi ho saka. Firestore rules aur admin account check karein."
-      );
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function rejectSeller() {
-    if (!selectedSeller) return;
-
-    const confirmed = window.confirm(
-      `Reject seller "${selectedSeller.businessName || selectedSeller.ownerName}"?`
-    );
-
-    if (!confirmed) return;
-
-    setActionLoading(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const sellerRef = doc(db, "sellers", selectedSeller.userId);
-      const userRef = doc(db, "users", selectedSeller.userId);
-
-      await updateDoc(sellerRef, {
-        status: "rejected",
-        sellerVerified: false,
-        adminApproved: false,
-        accountStatus: "REJECTED",
-        updatedAt: new Date(),
-      });
-
-      await updateDoc(userRef, {
-        sellerApplicationStatus: "REJECTED",
-        accountStatus: "REJECTED",
-        updatedAt: new Date(),
-      });
-
-      setMessage("Seller application rejected.");
-
-      setSelectedSeller(null);
-
-      await loadSellers();
-    } catch (err) {
-      console.error(err);
-      setError("Seller reject nahi ho saka.");
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function blockSeller() {
-    if (!selectedSeller) return;
-
-    const confirmed = window.confirm(
-      `Block seller "${selectedSeller.businessName || selectedSeller.ownerName}"?`
-    );
-
-    if (!confirmed) return;
-
-    setActionLoading(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const sellerRef = doc(db, "sellers", selectedSeller.userId);
-      const userRef = doc(db, "users", selectedSeller.userId);
-
-      await updateDoc(sellerRef, {
-        status: "blocked",
-        sellerVerified: false,
-        adminApproved: false,
-        accountStatus: "BLOCKED",
-        updatedAt: new Date(),
-      });
-
-      await updateDoc(userRef, {
-        accountStatus: "BLOCKED",
-        updatedAt: new Date(),
-      });
-
-      setMessage("Seller blocked successfully.");
-
-      setSelectedSeller(null);
-
-      await loadSellers();
-    } catch (err) {
-      console.error(err);
-      setError("Seller block nahi ho saka.");
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function restoreSeller() {
-    if (!selectedSeller) return;
-
-    const confirmed = window.confirm(
-      `Restore seller "${selectedSeller.businessName || selectedSeller.ownerName}"?`
-    );
-
-    if (!confirmed) return;
-
-    setActionLoading(true);
-    setError("");
-    setMessage("");
-
-    try {
-      const sellerRef = doc(db, "sellers", selectedSeller.userId);
-      const userRef = doc(db, "users", selectedSeller.userId);
-
-      await updateDoc(sellerRef, {
-        status: "approved",
-        sellerVerified: true,
-        adminApproved: true,
-        accountStatus: "ACTIVE",
-        updatedAt: new Date(),
-      });
-
-      await updateDoc(userRef, {
-        role: "SELLER",
-        accountStatus: "ACTIVE",
-        sellerApplicationStatus: "APPROVED",
-        updatedAt: new Date(),
-      });
-
-      setMessage("Seller restored successfully.");
-
-      setSelectedSeller(null);
-
-      await loadSellers();
-    } catch (err) {
-      console.error(err);
-      setError("Seller restore nahi ho saka.");
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  function statusBadge(status?: string) {
-    switch (status) {
-      case "approved":
-        return "bg-green-100 text-green-700";
-
-      case "rejected":
-        return "bg-red-100 text-red-700";
-
-      case "blocked":
-        return "bg-gray-200 text-gray-700";
-
-      default:
-        return "bg-yellow-100 text-yellow-700";
-    }
-  }
-
-  function formatStatus(status?: string) {
-    if (!status) return "Pending";
-
-    return status.charAt(0).toUpperCase() + status.slice(1);
-  }
-
-  function maskAccountNumber(account?: string) {
-    if (!account) return "Not provided";
-
-    if (account.length <= 4) return account;
-
-    return "••••••" + account.slice(-4);
-  }
+  /* =========================================================
+     LOADING
+  ========================================================= */
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="h-10 w-10 rounded-full border-4 border-gray-200 border-t-black animate-spin mx-auto" />
-          <p className="mt-4 text-gray-600">
-            Admin panel loading...
+      <main className="min-h-screen bg-[#f5f6f8]">
+        <div className="mx-auto max-w-7xl px-4 py-20 text-center">
+
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
+
+          <p className="mt-4 text-sm font-bold text-gray-500">
+            Loading Seller Management...
           </p>
+
         </div>
       </main>
     );
@@ -412,563 +937,726 @@ export default function AdminSellersPage() {
     return null;
   }
 
+  /* =========================================================
+     UI
+  ========================================================= */
+
   return (
-    <main className="min-h-screen bg-gray-50">
+    <main className="min-h-screen bg-[#f5f6f8]">
+
       {/* HEADER */}
-      <header className="sticky top-0 z-30 bg-white border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
+
+      <header className="border-b bg-white">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
+
+          <Link href="/">
             <img
               src="/logo/anjivo-logo.png"
               alt="ANJIVO"
-              className="h-10 w-auto object-contain"
+              className="h-10 w-auto"
             />
+          </Link>
 
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                Seller Management
-              </h1>
+          <div className="flex flex-wrap gap-2">
 
-              <p className="text-xs text-gray-500">
-                Admin Seller Applications
-              </p>
-            </div>
+            <Link
+              href="/admin"
+              className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+            >
+              Admin Dashboard
+            </Link>
+
+            <Link
+              href="/admin/products"
+              className="rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white"
+            >
+              Products
+            </Link>
+
           </div>
-
-          <button
-            onClick={() => router.push("/admin")}
-            className="rounded-xl border px-4 py-2 text-sm font-semibold hover:bg-gray-50"
-          >
-            Admin Dashboard
-          </button>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        {/* MESSAGES */}
-        {message && (
-          <div className="mb-5 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            {message}
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
+
+        {/* TITLE */}
+
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+
+          <div>
+
+            <p className="text-xs font-black uppercase tracking-[0.2em] text-gray-400">
+              ADMIN / SELLERS
+            </p>
+
+            <h1 className="mt-2 text-3xl font-black tracking-tight text-gray-900">
+              Seller Management
+            </h1>
+
+            <p className="mt-2 text-sm text-gray-500">
+              Review seller applications,
+              KYC status, approvals and
+              account access.
+            </p>
+
+          </div>
+
+          <button
+            type="button"
+            onClick={() =>
+              loadSellers()
+            }
+            className="rounded-xl border border-gray-200 bg-white px-4 py-3 text-xs font-bold hover:border-black"
+          >
+            ↻ Refresh Sellers
+          </button>
+
+        </div>
+
+        {/* ALERTS */}
+
+        {success && (
+          <div className="mt-6 rounded-2xl border border-green-200 bg-green-50 p-4">
+            <p className="text-sm font-bold text-green-700">
+              ✓ {success}
+            </p>
           </div>
         )}
 
         {error && (
-          <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4">
+            <p className="text-sm font-bold text-red-700">
+              {error}
+            </p>
           </div>
         )}
 
         {/* STATS */}
-        <section className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-6">
-          <StatCard
-            title="Total"
-            value={stats.total}
-            active={filter === "all"}
-            onClick={() => setFilter("all")}
+
+        <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+
+          <SellerCount
+            label="All Sellers"
+            count={counts.all}
+            active={
+              filter === "all"
+            }
+            onClick={() =>
+              setFilter("all")
+            }
           />
 
-          <StatCard
-            title="Pending"
-            value={stats.pending}
-            active={filter === "pending"}
-            onClick={() => setFilter("pending")}
+          <SellerCount
+            label="Pending"
+            count={counts.pending}
+            active={
+              filter === "pending"
+            }
+            onClick={() =>
+              setFilter(
+                "pending"
+              )
+            }
           />
 
-          <StatCard
-            title="Approved"
-            value={stats.approved}
-            active={filter === "approved"}
-            onClick={() => setFilter("approved")}
+          <SellerCount
+            label="Approved"
+            count={counts.approved}
+            active={
+              filter === "approved"
+            }
+            onClick={() =>
+              setFilter(
+                "approved"
+              )
+            }
           />
 
-          <StatCard
-            title="Rejected"
-            value={stats.rejected}
-            active={filter === "rejected"}
-            onClick={() => setFilter("rejected")}
+          <SellerCount
+            label="Rejected"
+            count={counts.rejected}
+            active={
+              filter === "rejected"
+            }
+            onClick={() =>
+              setFilter(
+                "rejected"
+              )
+            }
           />
 
-          <StatCard
-            title="Blocked"
-            value={stats.blocked}
-            active={filter === "blocked"}
-            onClick={() => setFilter("blocked")}
+          <SellerCount
+            label="Blocked"
+            count={counts.blocked}
+            active={
+              filter === "blocked"
+            }
+            onClick={() =>
+              setFilter(
+                "blocked"
+              )
+            }
           />
-        </section>
+
+        </div>
 
         {/* SEARCH */}
-        <section className="bg-white border rounded-2xl p-4 mb-6">
-          <div className="flex flex-col md:flex-row gap-3">
-            <input
-              type="text"
-              placeholder="Search business, owner, email, phone or city..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="flex-1 rounded-xl border px-4 py-3 outline-none focus:ring-2 focus:ring-black"
-            />
 
-            <button
-              onClick={loadSellers}
-              disabled={loadingSellers}
-              className="rounded-xl bg-black text-white px-5 py-3 font-semibold disabled:opacity-50"
-            >
-              {loadingSellers ? "Refreshing..." : "Refresh"}
-            </button>
-          </div>
-        </section>
+        <div className="mt-5 rounded-2xl border border-gray-200 bg-white p-3">
+
+          <input
+            value={search}
+            onChange={(event) =>
+              setSearch(
+                event.target.value
+              )
+            }
+            placeholder="Search business, owner, phone, email, GST, PAN, city or seller ID..."
+            className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+          />
+
+        </div>
 
         {/* SELLER LIST */}
-        <section className="bg-white border rounded-2xl overflow-hidden">
-          <div className="px-5 py-4 border-b">
-            <h2 className="font-bold text-gray-900">
-              Seller Applications
-            </h2>
 
-            <p className="text-sm text-gray-500 mt-1">
-              {filteredSellers.length} application(s)
-            </p>
-          </div>
+        <div className="mt-6 overflow-hidden rounded-3xl border border-gray-200 bg-white">
 
-          {loadingSellers ? (
-            <div className="p-10 text-center text-gray-500">
-              Loading sellers...
-            </div>
-          ) : filteredSellers.length === 0 ? (
-            <div className="p-10 text-center">
-              <div className="text-4xl mb-3">📋</div>
+          {filteredSellers.length ===
+          0 ? (
+            <div className="p-14 text-center">
 
-              <h3 className="font-semibold text-gray-900">
-                No seller applications
-              </h3>
+              <div className="text-5xl">
+                🏪
+              </div>
 
-              <p className="text-sm text-gray-500 mt-1">
-                Selected filter ke according koi seller nahi mila.
+              <h2 className="mt-4 text-lg font-black">
+                No sellers found
+              </h2>
+
+              <p className="mt-2 text-sm text-gray-500">
+                Try another search or
+                filter.
               </p>
+
             </div>
           ) : (
-            <div className="divide-y">
-              {filteredSellers.map((seller) => (
-                <div
-                  key={seller.id}
-                  className="p-5 hover:bg-gray-50 transition"
-                >
-                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-5">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h3 className="font-bold text-gray-900">
-                          {seller.businessName || "Business Name Not Provided"}
-                        </h3>
+            <div className="divide-y divide-gray-100">
 
-                        <span
-                          className={`px-2.5 py-1 rounded-full text-xs font-semibold ${statusBadge(
-                            seller.status
-                          )}`}
-                        >
-                          {formatStatus(seller.status)}
-                        </span>
-                      </div>
+              {filteredSellers.map(
+                (seller) => (
+                  <SellerRow
+                    key={seller.id}
+                    seller={seller}
+                    processing={
+                      processing ===
+                      seller.id
+                    }
+                    onApprove={() =>
+                      approveSeller(
+                        seller
+                      )
+                    }
+                    onReject={() =>
+                      rejectSeller(
+                        seller
+                      )
+                    }
+                    onBlock={() =>
+                      blockSeller(
+                        seller
+                      )
+                    }
+                    onUnblock={() =>
+                      unblockSeller(
+                        seller
+                      )
+                    }
+                  />
+                )
+              )}
 
-                      <p className="text-sm text-gray-600 mt-2">
-                        Owner:{" "}
-                        <span className="font-medium">
-                          {seller.ownerName || "—"}
-                        </span>
-                      </p>
-
-                      <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-gray-500 mt-1">
-                        <span>{seller.phone || "No phone"}</span>
-                        <span>{seller.email || "No email"}</span>
-                        <span>
-                          {seller.city || "—"},{" "}
-                          {seller.state || "—"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => setSelectedSeller(seller)}
-                      className="shrink-0 rounded-xl bg-black text-white px-5 py-3 text-sm font-semibold hover:opacity-90"
-                    >
-                      Review Application
-                    </button>
-                  </div>
-                </div>
-              ))}
             </div>
           )}
-        </section>
-      </div>
 
-      {/* DETAIL MODAL */}
-      {selectedSeller && (
-        <div className="fixed inset-0 z-50 bg-black/50 p-4 overflow-y-auto">
-          <div className="min-h-full flex items-center justify-center">
-            <div className="w-full max-w-3xl bg-white rounded-2xl shadow-2xl overflow-hidden">
-              {/* MODAL HEADER */}
-              <div className="border-b px-5 py-4 flex items-center justify-between gap-4">
-                <div>
-                  <h2 className="text-xl font-bold">
-                    Seller Application
-                  </h2>
-
-                  <p className="text-sm text-gray-500 mt-1">
-                    {selectedSeller.businessName || "Business"}
-                  </p>
-                </div>
-
-                <button
-                  onClick={() => setSelectedSeller(null)}
-                  className="h-9 w-9 rounded-full border hover:bg-gray-50"
-                >
-                  ×
-                </button>
-              </div>
-
-              <div className="p-5 space-y-6">
-                {/* BASIC DETAILS */}
-                <DetailSection title="Business Information">
-                  <Detail
-                    label="Business Name"
-                    value={selectedSeller.businessName}
-                  />
-
-                  <Detail
-                    label="Owner Name"
-                    value={selectedSeller.ownerName}
-                  />
-
-                  <Detail
-                    label="Business Type"
-                    value={selectedSeller.businessType}
-                  />
-
-                  <Detail
-                    label="Category"
-                    value={selectedSeller.category}
-                  />
-
-                  <Detail
-                    label="Email"
-                    value={selectedSeller.email}
-                  />
-
-                  <Detail
-                    label="Phone"
-                    value={selectedSeller.phone}
-                  />
-                </DetailSection>
-
-                {/* ADDRESS */}
-                <DetailSection title="Business Address">
-                  <div className="md:col-span-2">
-                    <Detail
-                      label="Address"
-                      value={selectedSeller.address}
-                    />
-                  </div>
-
-                  <Detail
-                    label="City"
-                    value={selectedSeller.city}
-                  />
-
-                  <Detail
-                    label="State"
-                    value={selectedSeller.state}
-                  />
-
-                  <Detail
-                    label="Pincode"
-                    value={selectedSeller.pincode}
-                  />
-                </DetailSection>
-
-                {/* KYC */}
-                <DetailSection title="KYC / Tax Information">
-                  <Detail
-                    label="GST Number"
-                    value={selectedSeller.gstNumber}
-                  />
-
-                  <Detail
-                    label="GST Verification"
-                    value={
-                      selectedSeller.gstVerified
-                        ? "Verified"
-                        : "Pending"
-                    }
-                    verified={selectedSeller.gstVerified}
-                  />
-
-                  <Detail
-                    label="PAN Number"
-                    value={selectedSeller.panNumber}
-                  />
-
-                  <Detail
-                    label="PAN Verification"
-                    value={
-                      selectedSeller.panVerified
-                        ? "Verified"
-                        : "Pending"
-                    }
-                    verified={selectedSeller.panVerified}
-                  />
-                </DetailSection>
-
-                {/* BANK */}
-                <DetailSection title="Bank Information">
-                  <Detail
-                    label="Account Name"
-                    value={selectedSeller.bankAccountName}
-                  />
-
-                  <Detail
-                    label="Account Number"
-                    value={maskAccountNumber(
-                      selectedSeller.bankAccountNumber
-                    )}
-                  />
-
-                  <Detail
-                    label="IFSC"
-                    value={selectedSeller.ifscCode}
-                  />
-
-                  <Detail
-                    label="Bank Verification"
-                    value={
-                      selectedSeller.bankVerified
-                        ? "Verified"
-                        : "Pending"
-                    }
-                    verified={selectedSeller.bankVerified}
-                  />
-                </DetailSection>
-
-                {/* VERIFICATION */}
-                <DetailSection title="Verification Status">
-                  <VerificationItem
-                    label="Email"
-                    verified={selectedSeller.emailVerified}
-                  />
-
-                  <VerificationItem
-                    label="Mobile"
-                    verified={selectedSeller.phoneVerified}
-                  />
-
-                  <VerificationItem
-                    label="GST"
-                    verified={selectedSeller.gstVerified}
-                  />
-
-                  <VerificationItem
-                    label="PAN"
-                    verified={selectedSeller.panVerified}
-                  />
-
-                  <VerificationItem
-                    label="Bank"
-                    verified={selectedSeller.bankVerified}
-                  />
-                </DetailSection>
-
-                {/* CURRENT STATUS */}
-                <div className="rounded-xl bg-gray-50 border p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs text-gray-500">
-                        Current Application Status
-                      </p>
-
-                      <p className="font-bold text-gray-900 mt-1">
-                        {formatStatus(selectedSeller.status)}
-                      </p>
-                    </div>
-
-                    <span
-                      className={`px-3 py-1.5 rounded-full text-xs font-semibold ${statusBadge(
-                        selectedSeller.status
-                      )}`}
-                    >
-                      {formatStatus(selectedSeller.status)}
-                    </span>
-                  </div>
-                </div>
-
-                {/* ACTIONS */}
-                <div className="border-t pt-5">
-                  <p className="text-sm font-semibold text-gray-900 mb-3">
-                    Admin Actions
-                  </p>
-
-                  <div className="flex flex-col sm:flex-row gap-3">
-                    {selectedSeller.status !== "approved" && (
-                      <button
-                        onClick={approveSeller}
-                        disabled={actionLoading}
-                        className="flex-1 rounded-xl bg-green-600 text-white px-4 py-3 font-semibold disabled:opacity-50"
-                      >
-                        {actionLoading
-                          ? "Processing..."
-                          : "✓ Approve Seller"}
-                      </button>
-                    )}
-
-                    {selectedSeller.status !== "rejected" && (
-                      <button
-                        onClick={rejectSeller}
-                        disabled={actionLoading}
-                        className="flex-1 rounded-xl bg-red-600 text-white px-4 py-3 font-semibold disabled:opacity-50"
-                      >
-                        {actionLoading
-                          ? "Processing..."
-                          : "✕ Reject"}
-                      </button>
-                    )}
-
-                    {selectedSeller.status !== "blocked" && (
-                      <button
-                        onClick={blockSeller}
-                        disabled={actionLoading}
-                        className="flex-1 rounded-xl bg-gray-800 text-white px-4 py-3 font-semibold disabled:opacity-50"
-                      >
-                        {actionLoading
-                          ? "Processing..."
-                          : "Block Seller"}
-                      </button>
-                    )}
-
-                    {selectedSeller.status === "blocked" && (
-                      <button
-                        onClick={restoreSeller}
-                        disabled={actionLoading}
-                        className="flex-1 rounded-xl bg-green-600 text-white px-4 py-3 font-semibold disabled:opacity-50"
-                      >
-                        {actionLoading
-                          ? "Processing..."
-                          : "Restore Seller"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800">
-                  <strong>Important:</strong> Seller approval ke baad
-                  hi seller ko ANJIVO marketplace par seller role aur
-                  product-management access milega.
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
-      )}
+
+      </div>
     </main>
   );
 }
 
-function StatCard({
-  title,
-  value,
+/* =========================================================
+   COUNT CARD
+========================================================= */
+
+function SellerCount({
+  label,
+  count,
   active,
   onClick,
 }: {
-  title: string;
-  value: number;
+  label: string;
+  count: number;
   active: boolean;
   onClick: () => void;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`text-left rounded-2xl border p-4 transition ${
+      className={`rounded-2xl border p-4 text-left transition ${
         active
-          ? "bg-black text-white border-black"
-          : "bg-white hover:bg-gray-50"
+          ? "border-black bg-black text-white"
+          : "border-gray-200 bg-white hover:border-gray-400"
       }`}
     >
-      <p
-        className={`text-xs ${
-          active ? "text-gray-300" : "text-gray-500"
-        }`}
-      >
-        {title}
+      <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+        {label}
       </p>
 
-      <p className="text-2xl font-bold mt-1">{value}</p>
+      <p className="mt-1 text-2xl font-black">
+        {count.toLocaleString(
+          "en-IN"
+        )}
+      </p>
     </button>
   );
 }
 
-function DetailSection({
-  title,
+/* =========================================================
+   SELLER ROW
+========================================================= */
+
+function SellerRow({
+  seller,
+  processing,
+  onApprove,
+  onReject,
+  onBlock,
+  onUnblock,
+}: {
+  seller: Seller;
+  processing: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+  onBlock: () => void;
+  onUnblock: () => void;
+}) {
+  const verificationCount = [
+    seller.emailVerified,
+    seller.phoneVerified,
+    seller.gstVerified,
+    seller.panVerified,
+    seller.bankVerified,
+  ].filter(Boolean).length;
+
+  return (
+    <div className="p-5 sm:p-6">
+
+      <div className="flex flex-col gap-6 xl:flex-row xl:justify-between">
+
+        {/* BASIC INFO */}
+
+        <div className="min-w-0">
+
+          <div className="flex flex-wrap items-center gap-2">
+
+            <h2 className="text-lg font-black text-gray-900">
+              {seller.businessName ||
+                "Unnamed Business"}
+            </h2>
+
+            <SellerStatusBadge
+              status={
+                seller.status
+              }
+            />
+
+          </div>
+
+          <p className="mt-1 text-sm text-gray-500">
+            Owner:{" "}
+            <span className="font-bold text-gray-700">
+              {seller.ownerName ||
+                "—"}
+            </span>
+          </p>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+
+            <InfoBadge>
+              📧{" "}
+              {seller.email ||
+                "No email"}
+            </InfoBadge>
+
+            <InfoBadge>
+              📱{" "}
+              {seller.phone ||
+                "No phone"}
+            </InfoBadge>
+
+            <InfoBadge>
+              📍{" "}
+              {seller.city ||
+                "—"}
+              {seller.state
+                ? `, ${seller.state}`
+                : ""}
+            </InfoBadge>
+
+            <InfoBadge>
+              {seller.businessType ||
+                "Business"}
+            </InfoBadge>
+
+            <InfoBadge>
+              {seller.category ||
+                "Category not set"}
+            </InfoBadge>
+
+          </div>
+
+          {/* KYC */}
+
+          <div className="mt-5">
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+
+              <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+                Verification
+              </p>
+
+              <p className="text-[10px] font-bold text-gray-500">
+                {verificationCount}/5
+                verified
+              </p>
+
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+
+              <VerificationBadge
+                label="Email"
+                verified={
+                  seller.emailVerified
+                }
+              />
+
+              <VerificationBadge
+                label="Mobile"
+                verified={
+                  seller.phoneVerified
+                }
+              />
+
+              <VerificationBadge
+                label="GST"
+                verified={
+                  seller.gstVerified
+                }
+              />
+
+              <VerificationBadge
+                label="PAN"
+                verified={
+                  seller.panVerified
+                }
+              />
+
+              <VerificationBadge
+                label="Bank"
+                verified={
+                  seller.bankVerified
+                }
+              />
+
+            </div>
+
+          </div>
+
+          {/* DOCUMENT DETAILS */}
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+
+            <DocumentBox
+              label="GST"
+              value={
+                seller.gstNumber ||
+                "Not provided"
+              }
+            />
+
+            <DocumentBox
+              label="PAN"
+              value={
+                seller.panNumber ||
+                "Not provided"
+              }
+            />
+
+            <DocumentBox
+              label="Pincode"
+              value={
+                seller.pincode ||
+                "—"
+              }
+            />
+
+            <DocumentBox
+              label="Account"
+              value={
+                seller.accountStatus ||
+                "—"
+              }
+            />
+
+          </div>
+
+          {/* ADDRESS */}
+
+          <div className="mt-4 rounded-2xl bg-gray-50 p-4">
+
+            <p className="text-[9px] font-black uppercase tracking-wide text-gray-400">
+              Business Address
+            </p>
+
+            <p className="mt-1 text-xs font-semibold text-gray-700">
+              {seller.address ||
+                "Address not provided"}
+              {seller.city
+                ? `, ${seller.city}`
+                : ""}
+              {seller.state
+                ? `, ${seller.state}`
+                : ""}
+              {seller.pincode
+                ? ` - ${seller.pincode}`
+                : ""}
+            </p>
+
+          </div>
+
+          <p className="mt-3 break-all text-[9px] text-gray-400">
+            Seller ID:{" "}
+            {seller.id}
+          </p>
+
+        </div>
+
+        {/* ACTIONS */}
+
+        <div className="flex shrink-0 flex-col gap-3 xl:w-52">
+
+          {seller.status ===
+            "pending" && (
+            <>
+              <button
+                type="button"
+                disabled={
+                  processing
+                }
+                onClick={
+                  onApprove
+                }
+                className="rounded-xl bg-green-600 px-4 py-3 text-xs font-black text-white disabled:opacity-50"
+              >
+                {processing
+                  ? "Processing..."
+                  : "✓ Approve Seller"}
+              </button>
+
+              <button
+                type="button"
+                disabled={
+                  processing
+                }
+                onClick={
+                  onReject
+                }
+                className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-black text-red-600 disabled:opacity-50"
+              >
+                Reject Application
+              </button>
+            </>
+          )}
+
+          {seller.status ===
+            "approved" && (
+            <button
+              type="button"
+              disabled={
+                processing
+              }
+              onClick={
+                onBlock
+              }
+              className="rounded-xl bg-red-600 px-4 py-3 text-xs font-black text-white disabled:opacity-50"
+            >
+              {processing
+                ? "Processing..."
+                : "Block Seller"}
+            </button>
+          )}
+
+          {seller.status ===
+            "rejected" && (
+            <>
+              <button
+                type="button"
+                disabled={
+                  processing
+                }
+                onClick={
+                  onApprove
+                }
+                className="rounded-xl bg-green-600 px-4 py-3 text-xs font-black text-white disabled:opacity-50"
+              >
+                {processing
+                  ? "Processing..."
+                  : "Approve Seller"}
+              </button>
+            </>
+          )}
+
+          {seller.status ===
+            "blocked" && (
+            <button
+              type="button"
+              disabled={
+                processing
+              }
+              onClick={
+                onUnblock
+              }
+              className="rounded-xl bg-black px-4 py-3 text-xs font-black text-white disabled:opacity-50"
+            >
+              {processing
+                ? "Processing..."
+                : "Unblock Seller"}
+            </button>
+          )}
+
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+/* =========================================================
+   DOCUMENT BOX
+========================================================= */
+
+function DocumentBox({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3">
+
+      <p className="text-[9px] font-black uppercase tracking-wide text-gray-400">
+        {label}
+      </p>
+
+      <p className="mt-1 break-all text-xs font-bold text-gray-700">
+        {value}
+      </p>
+
+    </div>
+  );
+}
+
+/* =========================================================
+   INFO BADGE
+========================================================= */
+
+function InfoBadge({
   children,
 }: {
-  title: string;
   children: React.ReactNode;
 }) {
   return (
-    <section>
-      <h3 className="font-bold text-gray-900 mb-3">
-        {title}
-      </h3>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {children}
-      </div>
-    </section>
+    <span className="rounded-lg bg-gray-100 px-2.5 py-1.5 text-[10px] font-bold text-gray-600">
+      {children}
+    </span>
   );
 }
 
-function Detail({
-  label,
-  value,
-  verified,
-}: {
-  label: string;
-  value?: string;
-  verified?: boolean;
-}) {
-  return (
-    <div className="rounded-xl border bg-gray-50 p-3">
-      <p className="text-xs text-gray-500">{label}</p>
+/* =========================================================
+   VERIFICATION BADGE
+========================================================= */
 
-      <p
-        className={`text-sm font-semibold mt-1 ${
-          verified === true
-            ? "text-green-700"
-            : "text-gray-900"
-        }`}
-      >
-        {value || "Not provided"}
-      </p>
-    </div>
-  );
-}
-
-function VerificationItem({
+function VerificationBadge({
   label,
   verified,
 }: {
   label: string;
-  verified?: boolean;
+  verified: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between rounded-xl border p-3">
-      <span className="text-sm font-medium text-gray-700">
-        {label}
-      </span>
+    <span
+      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${
+        verified
+          ? "bg-green-100 text-green-700"
+          : "bg-gray-100 text-gray-500"
+      }`}
+    >
+      {verified
+        ? "✓"
+        : "○"}{" "}
+      {label}
+    </span>
+  );
+}
 
-      {verified ? (
-        <span className="text-xs font-bold text-green-700 bg-green-100 px-2.5 py-1 rounded-full">
-          ✓ Verified
-        </span>
-      ) : (
-        <span className="text-xs font-bold text-yellow-700 bg-yellow-100 px-2.5 py-1 rounded-full">
-          Pending
-        </span>
-      )}
-    </div>
+/* =========================================================
+   STATUS BADGE
+========================================================= */
+
+function SellerStatusBadge({
+  status,
+}: {
+  status: SellerStatus;
+}) {
+  const styles: Record<
+    SellerStatus,
+    string
+  > = {
+    pending:
+      "bg-yellow-100 text-yellow-700",
+
+    approved:
+      "bg-green-100 text-green-700",
+
+    rejected:
+      "bg-red-100 text-red-700",
+
+    blocked:
+      "bg-gray-200 text-gray-700",
+  };
+
+  const labels: Record<
+    SellerStatus,
+    string
+  > = {
+    pending: "PENDING",
+
+    approved: "APPROVED",
+
+    rejected: "REJECTED",
+
+    blocked: "BLOCKED",
+  };
+
+  return (
+    <span
+      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${styles[status]}`}
+    >
+      {labels[status]}
+    </span>
   );
 }
