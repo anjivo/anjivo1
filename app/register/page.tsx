@@ -34,6 +34,22 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  function handleSellerSelection() {
+    setError("");
+    setRegistrationType("SELLER");
+  }
+
+  function handleBuyerSelection() {
+    setError("");
+    setRegistrationType("BUYER");
+  }
+
+  function cleanPhone(value: string) {
+    return value
+      .replace(/\D/g, "")
+      .slice(0, 10);
+  }
+
   async function handleSubmit(
     event: FormEvent<HTMLFormElement>
   ) {
@@ -41,12 +57,30 @@ export default function RegisterPage() {
 
     setError("");
 
+    /*
+     * This form is only for BUYER registration.
+     * Seller registration has its own dedicated page.
+     */
+    if (registrationType !== "BUYER") {
+      router.push("/seller/register");
+      return;
+    }
+
     const cleanName = name.trim();
     const cleanEmail = email.trim().toLowerCase();
     const cleanPhone = phone.replace(/\D/g, "");
 
+    /* -----------------------------------------
+       VALIDATION
+    ----------------------------------------- */
+
     if (!cleanName) {
       setError("Please enter your full name.");
+      return;
+    }
+
+    if (cleanName.length < 2) {
+      setError("Please enter a valid name.");
       return;
     }
 
@@ -55,7 +89,11 @@ export default function RegisterPage() {
       return;
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    if (
+      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(
+        cleanEmail
+      )
+    ) {
       setError("Please enter a valid email address.");
       return;
     }
@@ -79,14 +117,15 @@ export default function RegisterPage() {
       return;
     }
 
-    if (registrationType === "SELLER") {
-      router.push("/seller/register");
-      return;
-    }
-
     try {
       setLoading(true);
 
+      /*
+       * Create Firebase customer account.
+       *
+       * The role/customerType is determined here
+       * from the buyer selection.
+       */
       await registerCustomer({
         name: cleanName,
         email: cleanEmail,
@@ -96,13 +135,16 @@ export default function RegisterPage() {
       });
 
       /*
-       * Verification page will handle:
+       * Next:
        * Email verification
        * Mobile OTP verification
        */
-      router.push("/verify");
+      router.replace("/verify");
     } catch (err: unknown) {
-      console.error("Registration error:", err);
+      console.error(
+        "Buyer registration error:",
+        err
+      );
 
       if (
         err &&
@@ -114,31 +156,50 @@ export default function RegisterPage() {
             err as {
               code?: string;
             }
-          ).code
+          ).code || ""
         );
 
-        if (
-          code === "auth/email-already-in-use"
-        ) {
-          setError(
-            "This email is already registered. Please login instead."
-          );
-        } else if (
-          code === "auth/invalid-email"
-        ) {
-          setError(
-            "Please enter a valid email address."
-          );
-        } else if (
-          code === "auth/weak-password"
-        ) {
-          setError(
-            "Password is too weak. Please use a stronger password."
-          );
-        } else {
-          setError(
-            "Registration failed. Please try again."
-          );
+        switch (code) {
+          case "auth/email-already-in-use":
+            setError(
+              "This email is already registered. Please login instead."
+            );
+            break;
+
+          case "auth/invalid-email":
+            setError(
+              "Please enter a valid email address."
+            );
+            break;
+
+          case "auth/weak-password":
+            setError(
+              "Password is too weak. Please use at least 6 characters."
+            );
+            break;
+
+          case "auth/operation-not-allowed":
+            setError(
+              "Email/Password registration is currently disabled in Firebase."
+            );
+            break;
+
+          case "auth/network-request-failed":
+            setError(
+              "Network error. Please check your internet connection and try again."
+            );
+            break;
+
+          case "permission-denied":
+            setError(
+              "Firebase permission denied. Please check Firestore rules."
+            );
+            break;
+
+          default:
+            setError(
+              "Registration failed. Please try again."
+            );
         }
       } else if (err instanceof Error) {
         setError(err.message);
@@ -155,7 +216,10 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen bg-[#f7f8fa] text-gray-950">
 
-      {/* HEADER */}
+      {/* =========================================
+          HEADER
+      ========================================= */}
+
       <header className="border-b border-gray-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
 
@@ -184,12 +248,16 @@ export default function RegisterPage() {
         </div>
       </header>
 
-      {/* MAIN */}
+      {/* =========================================
+          MAIN
+      ========================================= */}
+
       <main className="px-4 py-8 sm:py-12">
 
         <div className="mx-auto max-w-lg">
 
           {/* TITLE */}
+
           <div className="text-center">
 
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-black text-2xl">
@@ -201,12 +269,16 @@ export default function RegisterPage() {
             </h1>
 
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-500">
-              Create your ANJIVO account and start buying or selling.
+              Create your ANJIVO account and start
+              buying or selling.
             </p>
 
           </div>
 
-          {/* BUY / SELL SELECTOR */}
+          {/* =========================================
+              BUY / SELL SELECTOR
+          ========================================= */}
+
           <div className="mt-7">
 
             <p className="mb-3 text-xs font-black uppercase tracking-wider text-gray-500">
@@ -215,18 +287,17 @@ export default function RegisterPage() {
 
             <div className="grid gap-3 sm:grid-cols-2">
 
-              {/* BUY */}
+              {/* BUYER */}
+
               <button
                 type="button"
-                onClick={() => {
-                  setRegistrationType("BUYER");
-                  setError("");
-                }}
+                onClick={handleBuyerSelection}
+                disabled={loading}
                 className={`rounded-2xl border p-5 text-left transition ${
                   registrationType === "BUYER"
                     ? "border-black bg-black text-white shadow-lg"
                     : "border-gray-200 bg-white hover:border-gray-400"
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-60`}
               >
 
                 <div className="flex items-start justify-between">
@@ -278,18 +349,17 @@ export default function RegisterPage() {
 
               </button>
 
-              {/* SELL */}
+              {/* SELLER */}
+
               <button
                 type="button"
-                onClick={() => {
-                  setRegistrationType("SELLER");
-                  setError("");
-                }}
+                onClick={handleSellerSelection}
+                disabled={loading}
                 className={`rounded-2xl border p-5 text-left transition ${
                   registrationType === "SELLER"
                     ? "border-black bg-black text-white shadow-lg"
                     : "border-gray-200 bg-white hover:border-gray-400"
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-60`}
               >
 
                 <div className="flex items-start justify-between">
@@ -334,9 +404,9 @@ export default function RegisterPage() {
                       : "text-gray-500"
                   }`}
                 >
-                  <p>✓ List your products</p>
-                  <p>✓ Retail + wholesale sales</p>
-                  <p>✓ Seller dashboard</p>
+                  <p>✓ List Products</p>
+                  <p>✓ Retail + Wholesale Sales</p>
+                  <p>✓ Seller Dashboard</p>
                 </div>
 
               </button>
@@ -345,7 +415,10 @@ export default function RegisterPage() {
 
           </div>
 
-          {/* SELLER */}
+          {/* =========================================
+              SELLER REGISTRATION CARD
+          ========================================= */}
+
           {registrationType === "SELLER" ? (
 
             <div className="mt-5 rounded-3xl border border-gray-200 bg-white p-5 shadow-sm sm:p-7">
@@ -369,9 +442,10 @@ export default function RegisterPage() {
                     </h2>
 
                     <p className="mt-2 text-xs leading-5 text-gray-500">
-                      Seller registration requires your
-                      business, contact and verification
-                      details.
+                      Seller registration is separate from
+                      buyer registration. You will provide
+                      your business, KYC and bank details
+                      on the next page.
                     </p>
 
                   </div>
@@ -385,7 +459,7 @@ export default function RegisterPage() {
                 <SellerFeature
                   icon="📦"
                   title="List Products"
-                  text="Add your products with retail and wholesale pricing."
+                  text="Add products with retail and wholesale pricing."
                 />
 
                 <SellerFeature
@@ -396,14 +470,14 @@ export default function RegisterPage() {
 
                 <SellerFeature
                   icon="📊"
-                  title="Manage Business"
-                  text="Manage products, stock, orders and earnings from your dashboard."
+                  title="Seller Dashboard"
+                  text="Manage products, stock, orders and earnings."
                 />
 
                 <SellerFeature
-                  icon="✓"
-                  title="Seller Verification"
-                  text="Your seller application will be reviewed by ANJIVO."
+                  icon="🛡️"
+                  title="Verification"
+                  text="Seller applications are reviewed before approval."
                 />
 
               </div>
@@ -426,10 +500,7 @@ export default function RegisterPage() {
 
               <button
                 type="button"
-                onClick={() => {
-                  setRegistrationType("BUYER");
-                  setError("");
-                }}
+                onClick={handleBuyerSelection}
                 className="mt-3 w-full rounded-xl border border-gray-200 py-3 text-xs font-bold text-gray-700 transition hover:border-black hover:text-black"
               >
                 ← I want to buy instead
@@ -439,7 +510,9 @@ export default function RegisterPage() {
 
           ) : (
 
-            /* BUYER REGISTRATION */
+            /* =========================================
+               BUYER REGISTRATION
+            ========================================= */
 
             <div className="mt-5 rounded-3xl border border-gray-200 bg-white p-5 shadow-sm sm:p-7">
 
@@ -473,6 +546,7 @@ export default function RegisterPage() {
               </div>
 
               {/* BUYER TYPE */}
+
               <div className="mt-6">
 
                 <p className="mb-2 text-xs font-bold text-gray-700">
@@ -482,11 +556,15 @@ export default function RegisterPage() {
                 <div className="grid grid-cols-2 gap-2">
 
                   {/* RETAIL */}
+
                   <button
                     type="button"
                     onClick={() =>
-                      setBuyerType("RETAIL_CUSTOMER")
+                      setBuyerType(
+                        "RETAIL_CUSTOMER"
+                      )
                     }
+                    disabled={loading}
                     className={`rounded-xl border p-3 text-left transition ${
                       buyerType === "RETAIL_CUSTOMER"
                         ? "border-black bg-black text-white"
@@ -515,11 +593,15 @@ export default function RegisterPage() {
                   </button>
 
                   {/* WHOLESALE */}
+
                   <button
                     type="button"
                     onClick={() =>
-                      setBuyerType("WHOLESALE_CUSTOMER")
+                      setBuyerType(
+                        "WHOLESALE_CUSTOMER"
+                      )
                     }
+                    disabled={loading}
                     className={`rounded-xl border p-3 text-left transition ${
                       buyerType === "WHOLESALE_CUSTOMER"
                         ? "border-black bg-black text-white"
@@ -552,19 +634,22 @@ export default function RegisterPage() {
               </div>
 
               {/* ERROR */}
+
               {error && (
                 <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold leading-5 text-red-700">
                   ⚠️ {error}
                 </div>
               )}
 
-              {/* FORM */}
+              {/* BUYER FORM */}
+
               <form
                 onSubmit={handleSubmit}
                 className="mt-6 space-y-4"
               >
 
                 {/* NAME */}
+
                 <div>
 
                   <label
@@ -590,6 +675,7 @@ export default function RegisterPage() {
                 </div>
 
                 {/* MOBILE */}
+
                 <div>
 
                   <label
@@ -611,14 +697,13 @@ export default function RegisterPage() {
                       inputMode="numeric"
                       maxLength={10}
                       value={phone}
-                      onChange={(event) => {
-                        const value =
-                          event.target.value
-                            .replace(/\D/g, "")
-                            .slice(0, 10);
-
-                        setPhone(value);
-                      }}
+                      onChange={(event) =>
+                        setPhone(
+                          cleanPhone(
+                            event.target.value
+                          )
+                        )
+                      }
                       placeholder="10-digit mobile number"
                       autoComplete="tel"
                       disabled={loading}
@@ -628,12 +713,14 @@ export default function RegisterPage() {
                   </div>
 
                   <p className="mt-1.5 text-[10px] text-gray-400">
-                    Mobile OTP verification will be required.
+                    Mobile OTP verification will be
+                    required.
                   </p>
 
                 </div>
 
                 {/* EMAIL */}
+
                 <div>
 
                   <label
@@ -657,12 +744,13 @@ export default function RegisterPage() {
                   />
 
                   <p className="mt-1.5 text-[10px] text-gray-400">
-                    Email OTP verification will be required.
+                    Email verification will be required.
                   </p>
 
                 </div>
 
                 {/* PASSWORD */}
+
                 <div>
 
                   <label
@@ -688,6 +776,7 @@ export default function RegisterPage() {
                 </div>
 
                 {/* CONFIRM PASSWORD */}
+
                 <div>
 
                   <label
@@ -715,6 +804,7 @@ export default function RegisterPage() {
                 </div>
 
                 {/* SUBMIT */}
+
                 <button
                   type="submit"
                   disabled={loading}
@@ -734,10 +824,10 @@ export default function RegisterPage() {
               </p>
 
             </div>
-
           )}
 
           {/* LOGIN */}
+
           <div className="mt-6 text-center">
 
             <p className="text-xs text-gray-500">
@@ -754,10 +844,12 @@ export default function RegisterPage() {
           </div>
 
           {/* TRUST */}
+
           <div className="mt-6 grid grid-cols-3 gap-2">
 
             <div className="rounded-xl border border-gray-200 bg-white p-3 text-center">
               <div className="text-sm">🔒</div>
+
               <p className="mt-1 text-[9px] font-bold text-gray-500">
                 Secure
               </p>
@@ -765,6 +857,7 @@ export default function RegisterPage() {
 
             <div className="rounded-xl border border-gray-200 bg-white p-3 text-center">
               <div className="text-sm">✓</div>
+
               <p className="mt-1 text-[9px] font-bold text-gray-500">
                 Verified
               </p>
@@ -772,6 +865,7 @@ export default function RegisterPage() {
 
             <div className="rounded-xl border border-gray-200 bg-white p-3 text-center">
               <div className="text-sm">🛡️</div>
+
               <p className="mt-1 text-[9px] font-bold text-gray-500">
                 Protected
               </p>
@@ -780,6 +874,7 @@ export default function RegisterPage() {
           </div>
 
           {/* TERMS */}
+
           <p className="mt-5 text-center text-[10px] leading-5 text-gray-400">
             By creating an account, you agree to
             ANJIVO&apos;s Terms & Conditions and
@@ -794,9 +889,9 @@ export default function RegisterPage() {
   );
 }
 
-/* =========================================================
+/* =============================================
    SELLER FEATURE
-========================================================= */
+============================================= */
 
 function SellerFeature({
   icon,
