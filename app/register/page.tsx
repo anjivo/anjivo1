@@ -26,6 +26,7 @@ export default function RegisterPage() {
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] =
     useState("");
@@ -40,13 +41,29 @@ export default function RegisterPage() {
 
     setError("");
 
-    if (!name.trim()) {
+    const cleanName = name.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPhone = phone.replace(/\D/g, "");
+
+    if (!cleanName) {
       setError("Please enter your full name.");
       return;
     }
 
-    if (!email.trim()) {
+    if (!cleanEmail) {
       setError("Please enter your email address.");
+      return;
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+
+    if (!/^[6-9]\d{9}$/.test(cleanPhone)) {
+      setError(
+        "Please enter a valid 10-digit Indian mobile number."
+      );
       return;
     }
 
@@ -62,10 +79,6 @@ export default function RegisterPage() {
       return;
     }
 
-    /*
-     * Seller registration is handled separately.
-     * Sellers need business and verification details.
-     */
     if (registrationType === "SELLER") {
       router.push("/seller/register");
       return;
@@ -74,14 +87,20 @@ export default function RegisterPage() {
     try {
       setLoading(true);
 
-      await registerCustomer(
-        name,
-        email,
+      await registerCustomer({
+        name: cleanName,
+        email: cleanEmail,
+        phone: `+91${cleanPhone}`,
         password,
-        buyerType
-      );
+        customerType: buyerType,
+      });
 
-      router.push("/account");
+      /*
+       * Verification page will handle:
+       * Email verification
+       * Mobile OTP verification
+       */
+      router.push("/verify");
     } catch (err: unknown) {
       console.error("Registration error:", err);
 
@@ -121,6 +140,8 @@ export default function RegisterPage() {
             "Registration failed. Please try again."
           );
         }
+      } else if (err instanceof Error) {
+        setError(err.message);
       } else {
         setError(
           "Registration failed. Please try again."
@@ -165,6 +186,7 @@ export default function RegisterPage() {
 
       {/* MAIN */}
       <main className="px-4 py-8 sm:py-12">
+
         <div className="mx-auto max-w-lg">
 
           {/* TITLE */}
@@ -179,7 +201,7 @@ export default function RegisterPage() {
             </h1>
 
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-500">
-              First choose what you want to do on ANJIVO.
+              Create your ANJIVO account and start buying or selling.
             </p>
 
           </div>
@@ -320,6 +342,7 @@ export default function RegisterPage() {
               </button>
 
             </div>
+
           </div>
 
           {/* SELLER */}
@@ -525,6 +548,7 @@ export default function RegisterPage() {
                   </button>
 
                 </div>
+
               </div>
 
               {/* ERROR */}
@@ -565,6 +589,50 @@ export default function RegisterPage() {
 
                 </div>
 
+                {/* MOBILE */}
+                <div>
+
+                  <label
+                    htmlFor="phone"
+                    className="mb-1.5 block text-xs font-bold text-gray-700"
+                  >
+                    Mobile Number
+                  </label>
+
+                  <div className="flex">
+
+                    <div className="flex h-12 items-center rounded-l-xl border border-r-0 border-gray-200 bg-gray-100 px-3 text-sm font-bold text-gray-700">
+                      +91
+                    </div>
+
+                    <input
+                      id="phone"
+                      type="tel"
+                      inputMode="numeric"
+                      maxLength={10}
+                      value={phone}
+                      onChange={(event) => {
+                        const value =
+                          event.target.value
+                            .replace(/\D/g, "")
+                            .slice(0, 10);
+
+                        setPhone(value);
+                      }}
+                      placeholder="10-digit mobile number"
+                      autoComplete="tel"
+                      disabled={loading}
+                      className="h-12 w-full rounded-r-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+
+                  </div>
+
+                  <p className="mt-1.5 text-[10px] text-gray-400">
+                    Mobile OTP verification will be required.
+                  </p>
+
+                </div>
+
                 {/* EMAIL */}
                 <div>
 
@@ -587,6 +655,10 @@ export default function RegisterPage() {
                     disabled={loading}
                     className="h-12 w-full rounded-xl border border-gray-200 bg-gray-50 px-4 text-sm outline-none transition placeholder:text-gray-400 focus:border-black focus:bg-white disabled:cursor-not-allowed disabled:opacity-60"
                   />
+
+                  <p className="mt-1.5 text-[10px] text-gray-400">
+                    Email OTP verification will be required.
+                  </p>
 
                 </div>
 
@@ -656,11 +728,13 @@ export default function RegisterPage() {
               </form>
 
               <p className="mt-4 text-center text-[10px] leading-5 text-gray-400">
-                You can use your Buyer account for retail
-                shopping or wholesale purchases.
+                Your email and mobile number will need
+                to be verified before your account becomes
+                fully active.
               </p>
 
             </div>
+
           )}
 
           {/* LOGIN */}
@@ -713,12 +787,17 @@ export default function RegisterPage() {
           </p>
 
         </div>
+
       </main>
+
     </div>
   );
 }
 
-/* SELLER FEATURE */
+/* =========================================================
+   SELLER FEATURE
+========================================================= */
+
 function SellerFeature({
   icon,
   title,
