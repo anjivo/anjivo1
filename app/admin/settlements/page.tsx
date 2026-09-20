@@ -101,10 +101,10 @@ function booleanValue(value: unknown): boolean {
   return value === true;
 }
 
-function timestampValue(
-  value: unknown
-): number {
-  if (!value) return 0;
+function timestampValue(value: unknown): number {
+  if (!value) {
+    return 0;
+  }
 
   if (
     typeof value === "object" &&
@@ -128,24 +128,28 @@ function timestampValue(
   }
 
   if (typeof value === "string") {
-    const time =
-      new Date(value).getTime();
+    const time = new Date(value).getTime();
 
     return Number.isFinite(time)
       ? time
       : 0;
   }
 
+  if (typeof value === "number") {
+    return Number.isFinite(value)
+      ? value
+      : 0;
+  }
+
   return 0;
 }
 
-function formatDate(
-  value: unknown
-): string {
-  const millis =
-    timestampValue(value);
+function formatDate(value: unknown): string {
+  const millis = timestampValue(value);
 
-  if (!millis) return "—";
+  if (!millis) {
+    return "—";
+  }
 
   return new Intl.DateTimeFormat(
     "en-IN",
@@ -156,9 +160,7 @@ function formatDate(
   ).format(new Date(millis));
 }
 
-function formatCurrency(
-  value: number
-): string {
+function formatCurrency(value: number): string {
   return `₹${Math.round(
     value
   ).toLocaleString("en-IN")}`;
@@ -247,6 +249,19 @@ function mapOrder(
             >)
           : {};
 
+      const quantity =
+        numberValue(
+          item.quantity
+        );
+
+      const total =
+        numberValue(
+          item.total
+        ) ||
+        numberValue(
+          item.selectedPrice
+        ) * quantity;
+
       return {
         sellerId:
           stringValue(
@@ -258,21 +273,9 @@ function mapOrder(
             item.sellerName
           ),
 
-        quantity:
-          numberValue(
-            item.quantity
-          ),
+        quantity,
 
-        total:
-          numberValue(
-            item.total
-          ) ||
-          numberValue(
-            item.selectedPrice
-          ) *
-            numberValue(
-              item.quantity
-            ),
+        total,
 
         pricingType:
           stringValue(
@@ -305,6 +308,17 @@ function mapSettlement(
   id: string,
   data: Record<string, unknown>
 ): Settlement {
+  const rawStatus =
+    stringValue(data.status);
+
+  const status: SettlementStatus =
+    rawStatus === "processing" ||
+    rawStatus === "paid" ||
+    rawStatus === "failed" ||
+    rawStatus === "on_hold"
+      ? rawStatus
+      : "pending";
+
   return {
     id,
 
@@ -363,14 +377,7 @@ function mapSettlement(
         data.payableAmount
       ),
 
-    status:
-      data.status ===
-        "processing" ||
-      data.status === "paid" ||
-      data.status === "failed" ||
-      data.status === "on_hold"
-        ? data.status
-        : "pending",
+    status,
 
     transactionId:
       stringValue(
@@ -413,13 +420,17 @@ export default function AdminSettlementsPage() {
   const [selectedSellerId, setSelectedSellerId] =
     useState("all");
 
-  const [selectedSettlement, setSelectedSettlement] =
-    useState<Settlement | null>(
-      null
-    );
+  const [
+    selectedSettlement,
+    setSelectedSettlement,
+  ] = useState<Settlement | null>(
+    null
+  );
 
-  const [showCreateModal, setShowCreateModal] =
-    useState(false);
+  const [
+    showCreateModal,
+    setShowCreateModal,
+  ] = useState(false);
 
   const [creating, setCreating] =
     useState(false);
@@ -548,8 +559,14 @@ export default function AdminSettlementsPage() {
           )
       );
 
-      setSellers(sellerList);
-      setOrders(orderList);
+      setSellers(
+        sellerList
+      );
+
+      setOrders(
+        orderList
+      );
+
       setSettlements(
         settlementList
       );
@@ -567,10 +584,7 @@ export default function AdminSettlementsPage() {
 
   const sellerSales = useMemo(() => {
     const map =
-      new Map<
-        string,
-        number
-      >();
+      new Map<string, number>();
 
     orders.forEach((order) => {
       if (
@@ -595,7 +609,8 @@ export default function AdminSettlementsPage() {
 
           map.set(
             item.sellerId,
-            current + item.total
+            current +
+              item.total
           );
         }
       );
@@ -678,7 +693,8 @@ export default function AdminSettlementsPage() {
       settlements
         .filter(
           (item) =>
-            item.status === "paid"
+            item.status ===
+            "paid"
         )
         .reduce(
           (sum, item) =>
@@ -757,10 +773,13 @@ export default function AdminSettlementsPage() {
           ),
           {
             status,
+
             transactionId:
               transactionId.trim(),
+
             paidAt:
               serverTimestamp(),
+
             updatedAt:
               serverTimestamp(),
           }
@@ -794,6 +813,7 @@ export default function AdminSettlementsPage() {
         ),
         {
           status,
+
           updatedAt:
             serverTimestamp(),
         }
@@ -1019,18 +1039,23 @@ export default function AdminSettlementsPage() {
                 <option value="all">
                   All Status
                 </option>
+
                 <option value="pending">
                   Pending
                 </option>
+
                 <option value="processing">
                   Processing
                 </option>
+
                 <option value="paid">
                   Paid
                 </option>
+
                 <option value="failed">
                   Failed
                 </option>
+
                 <option value="on_hold">
                   On Hold
                 </option>
@@ -1405,6 +1430,11 @@ function SettlementDetailsModal({
     status: SettlementStatus
   ) => void;
 }) {
+  const hasPaidAt =
+    Boolean(
+      settlement.paidAt
+    );
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">
       <div className="flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -1628,7 +1658,7 @@ function SettlementDetailsModal({
               </div>
             </div>
 
-            {settlement.paidAt && (
+            {hasPaidAt ? (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
                 <p className="text-sm font-bold text-emerald-800">
                   Payment Completed
@@ -1650,7 +1680,7 @@ function SettlementDetailsModal({
                   </p>
                 )}
               </div>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -1707,11 +1737,15 @@ function CreateSettlementModal({
   const [commissionRate, setCommissionRate] =
     useState("10");
 
-  const [shippingAdjustments, setShippingAdjustments] =
-    useState("0");
+  const [
+    shippingAdjustments,
+    setShippingAdjustments,
+  ] = useState("0");
 
-  const [otherAdjustments, setOtherAdjustments] =
-    useState("0");
+  const [
+    otherAdjustments,
+    setOtherAdjustments,
+  ] = useState("0");
 
   useEffect(() => {
     if (
@@ -1759,14 +1793,15 @@ function CreateSettlementModal({
   const commission =
     (gross * rate) / 100;
 
-  const payable = Math.max(
-    0,
-    gross -
-      refund -
-      commission +
-      shipping +
-      other
-  );
+  const payable =
+    Math.max(
+      0,
+      gross -
+        refund -
+        commission +
+        shipping +
+        other
+    );
 
   async function handleSubmit(
     event: React.FormEvent
@@ -1774,11 +1809,16 @@ function CreateSettlementModal({
     event.preventDefault();
 
     if (!sellerId) {
-      alert("Seller select karein.");
+      alert(
+        "Seller select karein."
+      );
       return;
     }
 
-    if (!periodStart || !periodEnd) {
+    if (
+      !periodStart ||
+      !periodEnd
+    ) {
       alert(
         "Settlement period select karein."
       );
@@ -1802,7 +1842,10 @@ function CreateSettlementModal({
       return;
     }
 
-    if (rate < 0 || rate > 100) {
+    if (
+      rate < 0 ||
+      rate > 100
+    ) {
       alert(
         "Commission rate 0–100% ke beech honi chahiye."
       );
@@ -1818,7 +1861,8 @@ function CreateSettlementModal({
       commissionRate: rate,
       shippingAdjustments:
         shipping,
-      otherAdjustments: other,
+      otherAdjustments:
+        other,
     });
   }
 
@@ -1846,7 +1890,9 @@ function CreateSettlementModal({
         </div>
 
         <form
-          onSubmit={handleSubmit}
+          onSubmit={
+            handleSubmit
+          }
           className="overflow-y-auto p-5 sm:p-6"
         >
           <div className="space-y-4">
