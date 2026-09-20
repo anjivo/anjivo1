@@ -10,10 +10,15 @@ import {
 } from "firebase/firestore";
 
 import { db } from "@/lib/firebase";
+
 import {
   getCart,
   getWholesalePrice,
 } from "@/lib/cart";
+
+/* ----------------------------------------
+   Shipping Address
+---------------------------------------- */
 
 export type ShippingAddress = {
   fullName: string;
@@ -24,6 +29,10 @@ export type ShippingAddress = {
   state: string;
   pincode: string;
 };
+
+/* ----------------------------------------
+   Order Item
+---------------------------------------- */
 
 export type OrderItem = {
   productId: string;
@@ -46,6 +55,10 @@ export type OrderItem = {
   subtotal: number;
 };
 
+/* ----------------------------------------
+   Order Status
+---------------------------------------- */
+
 export type OrderStatus =
   | "pending"
   | "confirmed"
@@ -57,6 +70,10 @@ export type OrderStatus =
   | "cancelled"
   | "returned"
   | "refunded";
+
+/* ----------------------------------------
+   Order
+---------------------------------------- */
 
 export type Order = {
   id: string;
@@ -86,6 +103,10 @@ export type Order = {
   updatedAt?: unknown;
 };
 
+/* ----------------------------------------
+   Create Order Input
+---------------------------------------- */
+
 export type CreateOrderInput = {
   userId: string;
 
@@ -93,6 +114,10 @@ export type CreateOrderInput = {
 
   paymentMethod: "COD";
 };
+
+/* ----------------------------------------
+   Created Order
+---------------------------------------- */
 
 export type CreatedOrder = {
   orderId: string;
@@ -115,6 +140,10 @@ function clean(value: unknown): string {
     ? value.trim()
     : "";
 }
+
+/* ----------------------------------------
+   Map Firestore Order
+---------------------------------------- */
 
 function mapOrder(
   id: string,
@@ -172,8 +201,7 @@ function mapOrder(
 
               selectedPrice:
                 Number(
-                  item.selectedPrice ||
-                    0
+                  item.selectedPrice || 0
                 ),
 
               pricingType:
@@ -548,6 +576,12 @@ export async function createCustomerOrder(
   for (
     const cartItem of cart.items
   ) {
+    /*
+     * IMPORTANT:
+     * CartItem uses `id` as the
+     * product document ID.
+     */
+
     const productRef =
       doc(
         db,
@@ -692,69 +726,29 @@ export async function createCustomerOrder(
       cartItem.pricingType ===
       "wholesale"
     ) {
+      /*
+       * IMPORTANT:
+       * getWholesalePrice() accepts only:
+       *
+       * {
+       *   wholesalePrice,
+       *   wholesaleTiers
+       * }
+       *
+       * Do NOT pass the complete Product
+       * object here.
+       */
+
       selectedPrice =
         getWholesalePrice(
           {
-            id:
-              productSnap.id,
-
-            name:
-              product.name ||
-              cartItem.name,
-
-            slug:
-              product.slug ||
-              cartItem.slug,
-
-            categoryId:
-              product.categoryId ||
-              "",
-
-            sellerId:
-              product.sellerId,
-
-            images:
-              Array.isArray(
-                product.images
-              )
-                ? product.images
-                : [],
-
-            mrp:
-              Number(
-                product.mrp ??
-                  0
-              ),
-
-            retailPrice:
-              Number(
-                product.retailPrice ??
-                  0
-              ),
-
             wholesalePrice:
               Number(
                 product.wholesalePrice ??
                   0
               ),
 
-            moq,
-
             wholesaleTiers,
-
-            stock,
-
-            quantity:
-              cartItem.quantity,
-
-            selectedPrice:
-              Number(
-                product.wholesalePrice ??
-                  0
-              ),
-
-            pricingType:
-              "wholesale",
           },
           cartItem.quantity
         );
@@ -804,6 +798,12 @@ export async function createCustomerOrder(
 
     const orderItem: OrderItem =
       {
+        /*
+         * OrderItem uses productId.
+         * This is different from CartItem,
+         * where the field is `id`.
+         */
+
         productId:
           productSnap.id,
 
