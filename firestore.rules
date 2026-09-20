@@ -1,0 +1,940 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================
+    // COMMON HELPERS
+    // =========================================================
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn()
+        && request.auth.uid == userId;
+    }
+
+    function userExists() {
+      return signedIn()
+        && exists(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        );
+    }
+
+    function currentUser() {
+      return get(
+        /databases/$(database)/documents/users/$(request.auth.uid)
+      );
+    }
+
+    function isAdmin() {
+      return userExists()
+        && currentUser().data.role == "ADMIN";
+    }
+
+    function isSeller() {
+      return userExists()
+        && currentUser().data.role == "SELLER";
+    }
+
+    function isCustomer() {
+      return userExists()
+        && (
+          currentUser().data.role == "RETAIL_CUSTOMER"
+          || currentUser().data.role == "WHOLESALE_CUSTOMER"
+        );
+    }
+
+    /*
+     * IMPORTANT:
+     *
+     * Seller approval is controlled by:
+     * sellers/{uid}.status
+     *
+     * User role must also be SELLER.
+     */
+    function isApprovedSeller() {
+      return userExists()
+        && currentUser().data.role == "SELLER"
+        && exists(
+          /databases/$(database)/documents/sellers/$(request.auth.uid)
+        )
+        && get(
+          /databases/$(database)/documents/sellers/$(request.auth.uid)
+        ).data.status == "approved";
+    }
+
+
+    // =========================================================
+    // USERS
+    // =========================================================
+
+    match /users/{userId} {
+
+      // -------------------------------------------------------
+      // READ
+      // -------------------------------------------------------
+
+      // Own profile or admin.
+      allow read: if isOwner(userId)
+        || isAdmin();
+
+
+      // -------------------------------------------------------
+      // CREATE
+      // -------------------------------------------------------
+
+      /*
+       * Customer registration.
+       *
+       * SELLER / ADMIN role cannot be created by client.
+       */
+      allow create: if isOwner(userId)
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.role in [
+          "RETAIL_CUSTOMER",
+          "WHOLESALE_CUSTOMER"
+        ];
+
+
+      // -------------------------------------------------------
+      // UPDATE
+      // -------------------------------------------------------
+
+      /*
+       * User can update their own profile.
+       *
+       * IMPORTANT:
+       * Protected account fields cannot be changed by client:
+       *
+       * role
+       * sellerApplicationStatus
+       * accountStatus
+       * emailVerified
+       * phoneVerified
+       */
+      allow update: if isOwner(userId)
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.role == resource.data.role
+        && !request.resource.data
+          .diff(resource.data)
+          .affectedKeys()
+          .hasAny([
+            "role",
+            "sellerApplicationStatus",
+            "accountStatus",
+            "emailVerified",
+            "phoneVerified"
+          ])
+        || isAdmin();
+
+
+      // -------------------------------------------------------
+      // DELETE
+      // -------------------------------------------------------
+
+      // Admin can manage/delete users.
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLERS
+    // =========================================================
+
+    match /sellers/{sellerId} {
+
+      // -------------------------------------------------------
+      // READ
+      // -------------------------------------------------------
+
+      /*
+       * Approved seller profiles can be public.
+       * Owner can see own application.
+       * Admin can see everything.
+       */
+      allow read: if resource.data.status == "approved"
+        || isOwner(sellerId)
+        || isAdmin();
+
+
+      // -------------------------------------------------------
+      // CREATE
+      // -------------------------------------------------------
+
+      /*
+       * New seller application must:
+       *
+       * - belong to logged-in user
+       * - start as pending
+       * - start unverified
+       * - not be admin approved
+       * - not be active
+       */
+      allow create: if isOwner(sellerId)
+
+        && request.resource.data.userId
+           == request.auth.uid
+
+        && request.resource.data.status
+           == "pending"
+
+        && request.resource.data.sellerVerified
+           == false
+
+        && request.resource.data.adminApproved
+           == false
+
+        && request.resource.data.emailVerified
+           == false
+
+        && request.resource.data.phoneVerified
+           == false
+
+        && request.resource.data.gstVerified
+           == false
+
+        && request.resource.data.panVerified
+           == false
+
+        && request.resource.data.bankVerified
+           == false
+
+        && request.resource.data.accountStatus
+           == "PENDING";
+
+
+      // -------------------------------------------------------
+      // UPDATE
+      // -------------------------------------------------------
+
+      /*
+       * Seller can update their application while pending.
+       *
+       * Seller CANNOT modify:
+       *
+       * status
+       * sellerVerified
+       * adminApproved
+       * emailVerified
+       * phoneVerified
+       * gstVerified
+       * panVerified
+       * bankVerified
+       * accountStatus
+       * userId
+       */
+      allow update: if isOwner(sellerId)
+
+        && resource.data.status == "pending"
+
+        && request.resource.data.userId
+           == resource.data.userId
+
+        && request.resource.data.status
+           == resource.data.status
+
+        && request.resource.data.sellerVerified
+           == resource.data.sellerVerified
+
+        && request.resource.data.adminApproved
+           == resource.data.adminApproved
+
+        && request.resource.data.emailVerified
+           == resource.data.emailVerified
+
+        && request.resource.data.phoneVerified
+           == resource.data.phoneVerified
+
+        && request.resource.data.gstVerified
+           == resource.data.gstVerified
+
+        && request.resource.data.panVerified
+           == resource.data.panVerified
+
+        && request.resource.data.bankVerified
+           == resource.data.bankVerified
+
+        && request.resource.data.accountStatus
+           == resource.data.accountStatus;
+
+
+      /*
+       * Admin has complete seller control.
+       *
+       * Admin can:
+       * - approve
+       * - reject
+       * - verify
+       * - block
+       * - update seller profile
+       */
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PRODUCTS
+    // =========================================================
+
+    match /products/{productId} {
+
+      // -------------------------------------------------------
+      // READ
+      // -------------------------------------------------------
+
+      /*
+       * Active products are public.
+       * Seller can see own products.
+       * Admin can see everything.
+       */
+      allow read: if resource.data.status == "active"
+        || (
+          signedIn()
+          && resource.data.sellerId == request.auth.uid
+        )
+        || isAdmin();
+
+
+      // -------------------------------------------------------
+      // CREATE
+      // -------------------------------------------------------
+
+      /*
+       * Approved seller can create product.
+       *
+       * New products must start as draft.
+       */
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid
+        && request.resource.data.status
+           == "draft";
+
+
+      // -------------------------------------------------------
+      // UPDATE
+      // -------------------------------------------------------
+
+      /*
+       * Seller can update own product.
+       *
+       * Seller cannot:
+       * - change sellerId
+       * - directly change product status
+       */
+      allow update: if isApprovedSeller()
+        && resource.data.sellerId
+           == request.auth.uid
+        && request.resource.data.sellerId
+           == resource.data.sellerId
+        && request.resource.data.status
+           == resource.data.status;
+
+
+      // -------------------------------------------------------
+      // ADMIN
+      // -------------------------------------------------------
+
+      allow create, update, delete: if isAdmin();
+
+
+      // -------------------------------------------------------
+      // SELLER DELETE
+      // -------------------------------------------------------
+
+      allow delete: if isApprovedSeller()
+        && resource.data.sellerId
+           == request.auth.uid;
+    }
+
+
+    // =========================================================
+    // CATEGORIES
+    // =========================================================
+
+    match /categories/{categoryId} {
+
+      // Active categories public.
+      // Admin can see all.
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
+      // Admin only.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CARTS
+    // carts/{userId}
+    // =========================================================
+
+    match /carts/{userId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    // =========================================================
+    // WISHLISTS
+    // wishlists/{userId}
+    // =========================================================
+
+    match /wishlists/{userId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    // =========================================================
+    // ADDRESSES
+    // addresses/{userId}/items/{addressId}
+    // =========================================================
+
+    match /addresses/{userId}/items/{addressId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    // =========================================================
+    // ORDERS
+    // =========================================================
+
+    match /orders/{orderId} {
+
+      // -------------------------------------------------------
+      // READ
+      // -------------------------------------------------------
+
+      /*
+       * Admin can read everything.
+       * Customer can read own order.
+       * Seller can read orders containing their sellerId.
+       */
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.userId == request.auth.uid
+        )
+
+        || (
+          signedIn()
+          && request.auth.uid in resource.data.sellerIds
+        );
+
+
+      // -------------------------------------------------------
+      // CREATE
+      // -------------------------------------------------------
+
+      /*
+       * Customer can create order only for themselves.
+       *
+       * NOTE:
+       * Production payment/order creation should eventually
+       * move to trusted backend/server-side processing.
+       */
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+
+      // -------------------------------------------------------
+      // ADMIN UPDATE
+      // -------------------------------------------------------
+
+      allow update: if isAdmin();
+
+
+      // -------------------------------------------------------
+      // SELLER UPDATE
+      // -------------------------------------------------------
+
+      /*
+       * Seller can update fulfillment status only.
+       *
+       * Seller cannot change:
+       * userId
+       * sellerIds
+       * items
+       * shippingAddress
+       * paymentMethod
+       * paymentStatus
+       * subtotal
+       * shippingCharge
+       * discount
+       * totalAmount
+       */
+      allow update: if signedIn()
+
+        && request.auth.uid in resource.data.sellerIds
+
+        && request.resource.data.userId
+           == resource.data.userId
+
+        && request.resource.data.sellerIds
+           == resource.data.sellerIds
+
+        && request.resource.data.items
+           == resource.data.items
+
+        && request.resource.data.shippingAddress
+           == resource.data.shippingAddress
+
+        && request.resource.data.paymentMethod
+           == resource.data.paymentMethod
+
+        && request.resource.data.paymentStatus
+           == resource.data.paymentStatus
+
+        && request.resource.data.subtotal
+           == resource.data.subtotal
+
+        && request.resource.data.shippingCharge
+           == resource.data.shippingCharge
+
+        && request.resource.data.discount
+           == resource.data.discount
+
+        && request.resource.data.totalAmount
+           == resource.data.totalAmount
+
+        && request.resource.data.status in [
+          "pending",
+          "confirmed",
+          "processing",
+          "shipped",
+          "delivered",
+          "cancelled",
+          "returned"
+        ];
+
+
+      // -------------------------------------------------------
+      // DELETE
+      // -------------------------------------------------------
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // ORDER ITEMS
+    // orders/{orderId}/items/{itemId}
+    // =========================================================
+
+    match /orders/{orderId}/items/{itemId} {
+
+      // Customer who owns order.
+      // Seller participating in order.
+      // Admin.
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && get(
+            /databases/$(database)/documents/orders/$(orderId)
+          ).data.userId == request.auth.uid
+        )
+
+        || (
+          signedIn()
+          && request.auth.uid in get(
+            /databases/$(database)/documents/orders/$(orderId)
+          ).data.sellerIds
+        );
+
+
+      // Only admin for now.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // REVIEWS
+    // =========================================================
+
+    match /reviews/{reviewId} {
+
+      // Approved reviews public.
+      // User sees own review.
+      // Admin sees all.
+      allow read: if resource.data.status == "approved"
+
+        || (
+          signedIn()
+          && resource.data.userId == request.auth.uid
+        )
+
+        || isAdmin();
+
+
+      // User can create pending review.
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid
+        && request.resource.data.status
+           == "pending";
+
+
+      // User can edit own pending review.
+      allow update: if signedIn()
+        && resource.data.userId
+           == request.auth.uid
+        && resource.data.status
+           == "pending"
+        && request.resource.data.status
+           == "pending";
+
+
+      // Admin moderation.
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // WHOLESALE QUOTES
+    // =========================================================
+
+    match /wholesaleQuotes/{quoteId} {
+
+      // Buyer sees own quotes.
+      // Seller sees assigned quotes.
+      // Admin sees all.
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.buyerId
+             == request.auth.uid
+        )
+
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+
+      // Buyer creates quote.
+      allow create: if signedIn()
+        && request.resource.data.buyerId
+           == request.auth.uid;
+
+
+      // Buyer/seller can update quote.
+      // Admin always allowed.
+      allow update: if isAdmin()
+
+        || (
+          signedIn()
+          && (
+            resource.data.buyerId
+              == request.auth.uid
+
+            || resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+
+      // Admin only delete.
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // COUPONS
+    // =========================================================
+
+    match /coupons/{couponId} {
+
+      // Active coupons visible to signed-in users.
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.status == "active"
+        );
+
+      // Admin manages coupons.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER COMMISSIONS
+    // =========================================================
+
+    match /sellerCommissions/{commissionId} {
+
+      // Seller can see own commission.
+      // Admin can see all.
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      // Admin/system-side process.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER PAYOUTS
+    // =========================================================
+
+    match /sellerPayouts/{payoutId} {
+
+      // Seller sees own payouts.
+      // Admin sees all.
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      // Admin only.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // NOTIFICATIONS
+    // notifications/{userId}/items/{notificationId}
+    // =========================================================
+
+    match /notifications/{userId}/items/{notificationId} {
+
+      // User sees own notifications.
+      // Admin sees all.
+      allow read: if isOwner(userId)
+        || isAdmin();
+
+      // Admin/system controlled.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PLATFORM SETTINGS
+    // =========================================================
+
+    match /settings/{settingId} {
+
+      // Signed-in users can read platform settings.
+      allow read: if signedIn();
+
+      // Admin controls settings.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // RETURNS
+    // =========================================================
+
+    match /returns/{returnId} {
+
+      // Admin can see everything.
+      // Customer can see own return.
+      // Seller can see return related to their order.
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        )
+
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+
+      // Customer can create own return request.
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+
+      // Admin controls return workflow.
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PRODUCT QUESTIONS
+    // =========================================================
+
+    match /productQuestions/{questionId} {
+
+      // Public/customer questions can be read.
+      allow read: if true;
+
+
+      // Signed-in customer can ask question.
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+
+      // User can update own question.
+      // Admin can manage all.
+      allow update: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+
+      allow delete: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // PRODUCT ANSWERS
+    // =========================================================
+
+    match /productAnswers/{answerId} {
+
+      allow read: if true;
+
+
+      // Approved seller can answer questions.
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+
+      // Seller can edit own answer.
+      allow update: if isApprovedSeller()
+        && resource.data.sellerId
+           == request.auth.uid
+        && request.resource.data.sellerId
+           == resource.data.sellerId;
+
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER OFFERS
+    // =========================================================
+
+    match /sellerOffers/{offerId} {
+
+      // Active offers can be read.
+      allow read: if isAdmin()
+
+        || (
+          signedIn()
+          && resource.data.status == "active"
+        )
+
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+
+      // Approved seller creates own offer.
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+
+      // Seller can update own offer.
+      allow update: if isApprovedSeller()
+        && resource.data.sellerId
+           == request.auth.uid
+        && request.resource.data.sellerId
+           == resource.data.sellerId;
+
+
+      // Admin can manage.
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // BANNERS / HOMEPAGE CONTENT
+    // =========================================================
+
+    match /banners/{bannerId} {
+
+      // Active banners public.
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
+      // Admin only.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER NOTIFICATIONS
+    // sellerNotifications/{sellerId}/items/{notificationId}
+    // =========================================================
+
+    match /sellerNotifications/{sellerId}/items/{notificationId} {
+
+      allow read: if isOwner(sellerId)
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CUSTOMER NOTIFICATIONS
+    // customerNotifications/{userId}/items/{notificationId}
+    // =========================================================
+
+    match /customerNotifications/{userId}/items/{notificationId} {
+
+      allow read: if isOwner(userId)
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // EVERYTHING ELSE
+    // =========================================================
+
+    /*
+     * Any collection not explicitly defined above
+     * remains completely blocked.
+     */
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
