@@ -1,56 +1,227 @@
 "use client";
 
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { onAuthStateChanged } from "firebase/auth";
 import {
-  onAuthStateChanged,
-  type User,
-} from "firebase/auth";
-
-import {
+  collection,
   doc,
   getDoc,
+  getDocs,
+  serverTimestamp,
+  updateDoc,
 } from "firebase/firestore";
-
-import {
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-
-import { useRouter } from "next/navigation";
 
 import { auth, db } from "@/lib/firebase";
 
-import {
-  getAllCustomers,
-  updateCustomerStatus,
-  type AdminCustomer,
-} from "@/lib/admin-customers";
+type CustomerType =
+  | "RETAIL_CUSTOMER"
+  | "WHOLESALE_CUSTOMER";
+
+type CustomerStatus =
+  | "ACTIVE"
+  | "PENDING_VERIFICATION"
+  | "BLOCKED"
+  | "SUSPENDED";
+
+type Customer = {
+  id: string;
+  uid: string;
+
+  name: string;
+  email: string;
+  phone: string;
+
+  role: string;
+  customerType: CustomerType;
+
+  emailVerified: boolean;
+  phoneVerified: boolean;
+
+  accountStatus: CustomerStatus;
+
+  city?: string;
+  state?: string;
+  pincode?: string;
+
+  createdAt?: unknown;
+  updatedAt?: unknown;
+};
+
+type CustomerFilter =
+  | "all"
+  | "retail"
+  | "wholesale"
+  | "active"
+  | "pending"
+  | "blocked";
+
+/* =========================================================
+   HELPERS
+========================================================= */
+
+function getTimestampValue(
+  value: unknown
+): number {
+  if (!value) return 0;
+
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "seconds" in value
+  ) {
+    return Number(
+      (value as { seconds?: unknown }).seconds ?? 0
+    );
+  }
+
+  if (value instanceof Date) {
+    return Math.floor(
+      value.getTime() / 1000
+    );
+  }
+
+  return 0;
+}
+
+function stringValue(
+  value: unknown
+): string {
+  if (
+    value === undefined ||
+    value === null
+  ) {
+    return "";
+  }
+
+  return String(value);
+}
+
+function booleanValue(
+  value: unknown
+): boolean {
+  return value === true;
+}
+
+function mapCustomer(
+  id: string,
+  data: Record<string, unknown>
+): Customer {
+  const rawType =
+    stringValue(
+      data.customerType
+    );
+
+  const customerType: CustomerType =
+    rawType ===
+    "WHOLESALE_CUSTOMER"
+      ? "WHOLESALE_CUSTOMER"
+      : "RETAIL_CUSTOMER";
+
+  const rawStatus =
+    stringValue(
+      data.accountStatus
+    );
+
+  let accountStatus: CustomerStatus =
+    "PENDING_VERIFICATION";
+
+  if (
+    rawStatus === "ACTIVE" ||
+    rawStatus === "BLOCKED" ||
+    rawStatus === "SUSPENDED"
+  ) {
+    accountStatus =
+      rawStatus as CustomerStatus;
+  }
+
+  return {
+    id,
+
+    uid:
+      stringValue(
+        data.uid
+      ) || id,
+
+    name:
+      stringValue(
+        data.name
+      ),
+
+    email:
+      stringValue(
+        data.email
+      ),
+
+    phone:
+      stringValue(
+        data.phone
+      ),
+
+    role:
+      stringValue(
+        data.role
+      ),
+
+    customerType,
+
+    emailVerified:
+      booleanValue(
+        data.emailVerified
+      ),
+
+    phoneVerified:
+      booleanValue(
+        data.phoneVerified
+      ),
+
+    accountStatus,
+
+    city:
+      data.city
+        ? stringValue(data.city)
+        : undefined,
+
+    state:
+      data.state
+        ? stringValue(data.state)
+        : undefined,
+
+    pincode:
+      data.pincode
+        ? stringValue(data.pincode)
+        : undefined,
+
+    createdAt:
+      data.createdAt,
+
+    updatedAt:
+      data.updatedAt,
+  };
+}
+
+/* =========================================================
+   PAGE
+========================================================= */
 
 export default function AdminCustomersPage() {
-  const router = useRouter();
-
-  const [user, setUser] =
-    useState<User | null>(null);
-
-  const [customers, setCustomers] =
-    useState<AdminCustomer[]>([]);
-
   const [loading, setLoading] =
     useState(true);
 
-  const [actionLoading, setActionLoading] =
-    useState("");
+  const [authorized, setAuthorized] =
+    useState(false);
+
+  const [customers, setCustomers] =
+    useState<Customer[]>([]);
+
+  const [filter, setFilter] =
+    useState<CustomerFilter>("all");
 
   const [search, setSearch] =
     useState("");
 
-  const [filter, setFilter] =
-    useState<
-      | "all"
-      | "retail"
-      | "wholesale"
-      | "blocked"
-    >("all");
+  const [processing, setProcessing] =
+    useState<string | null>(null);
 
   const [error, setError] =
     useState("");
@@ -58,17 +229,20 @@ export default function AdminCustomersPage() {
   const [success, setSuccess] =
     useState("");
 
+  /* =========================================================
+     ADMIN AUTH
+  ========================================================= */
+
   useEffect(() => {
     const unsubscribe =
       onAuthStateChanged(
         auth,
-        async (currentUser) => {
-          if (!currentUser) {
-            router.replace("/login");
+        async (user) => {
+          if (!user) {
+            window.location.href =
+              "/login?redirect=/admin/customers";
             return;
           }
-
-          setUser(currentUser);
 
           try {
             const userSnapshot =
@@ -76,116 +250,397 @@ export default function AdminCustomersPage() {
                 doc(
                   db,
                   "users",
-                  currentUser.uid
+                  user.uid
                 )
               );
 
             if (
-              !userSnapshot.exists() ||
-              userSnapshot.data().role !==
-                "ADMIN"
+              !userSnapshot.exists()
             ) {
-              router.replace("/");
+              window.location.href =
+                "/";
               return;
             }
 
+            const userData =
+              userSnapshot.data();
+
+            if (
+              userData.role !==
+              "ADMIN"
+            ) {
+              window.location.href =
+                "/account";
+              return;
+            }
+
+            setAuthorized(true);
+
             await loadCustomers();
           } catch (err) {
-            console.error(err);
+            console.error(
+              "Customer admin auth error:",
+              err
+            );
 
             setError(
               "Unable to verify admin access."
             );
+          } finally {
+            setLoading(false);
           }
         }
       );
 
-    return () => unsubscribe();
-  }, [router]);
+    return () =>
+      unsubscribe();
+  }, []);
+
+  /* =========================================================
+     LOAD CUSTOMERS
+  ========================================================= */
 
   async function loadCustomers() {
     try {
-      setLoading(true);
       setError("");
 
-      const data =
-        await getAllCustomers();
+      /*
+       * Deliberately no orderBy("createdAt").
+       * Older user documents may not have createdAt.
+       */
 
-      setCustomers(data);
+      const snapshot =
+        await getDocs(
+          collection(
+            db,
+            "users"
+          )
+        );
+
+      const list: Customer[] = [];
+
+      snapshot.docs.forEach(
+        (item) => {
+          const data =
+            item.data();
+
+          /*
+           * Only marketplace customers.
+           * ADMIN and SELLER accounts
+           * are excluded.
+           */
+
+          if (
+            data.role !==
+              "RETAIL_CUSTOMER" &&
+            data.role !==
+              "WHOLESALE_CUSTOMER"
+          ) {
+            return;
+          }
+
+          list.push(
+            mapCustomer(
+              item.id,
+              data
+            )
+          );
+        }
+      );
+
+      list.sort(
+        (a, b) =>
+          getTimestampValue(
+            b.createdAt
+          ) -
+          getTimestampValue(
+            a.createdAt
+          )
+      );
+
+      setCustomers(list);
     } catch (err) {
-      console.error(err);
+      console.error(
+        "Load customers error:",
+        err
+      );
 
       setError(
-        "Unable to load customers."
+        "Customers load nahi ho paaye."
       );
-    } finally {
-      setLoading(false);
     }
   }
 
-  async function toggleStatus(
-    customer: AdminCustomer
+  /* =========================================================
+     ACTIVATE CUSTOMER
+  ========================================================= */
+
+  async function activateCustomer(
+    customer: Customer
   ) {
-    const newStatus =
-      customer.accountStatus ===
-      "blocked"
-        ? "active"
-        : "blocked";
+    const confirmed =
+      window.confirm(
+        `Activate "${customer.name || customer.email}"?`
+      );
+
+    if (!confirmed) return;
 
     try {
-      setActionLoading(
+      setProcessing(
         customer.id
       );
 
       setError("");
       setSuccess("");
 
-      await updateCustomerStatus(
-        customer.id,
-        newStatus
+      await updateDoc(
+        doc(
+          db,
+          "users",
+          customer.uid
+        ),
+        {
+          accountStatus:
+            "ACTIVE",
+
+          updatedAt:
+            serverTimestamp(),
+        }
       );
 
-      setCustomers((current) =>
-        current.map((item) =>
-          item.id === customer.id
-            ? {
-                ...item,
-                accountStatus:
-                  newStatus,
-              }
-            : item
-        )
+      setCustomers(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              customer.id
+                ? {
+                    ...item,
+                    accountStatus:
+                      "ACTIVE",
+                  }
+                : item
+          )
       );
 
       setSuccess(
-        newStatus === "blocked"
-          ? "Customer blocked successfully."
-          : "Customer activated successfully."
+        `${customer.name || "Customer"} is now active.`
       );
     } catch (err) {
-      console.error(err);
+      console.error(
+        "Activate customer error:",
+        err
+      );
 
       setError(
-        "Unable to update customer status."
+        "Customer activate nahi ho saka."
       );
     } finally {
-      setActionLoading("");
+      setProcessing(null);
     }
   }
 
+  /* =========================================================
+     BLOCK CUSTOMER
+  ========================================================= */
+
+  async function blockCustomer(
+    customer: Customer
+  ) {
+    const confirmed =
+      window.confirm(
+        `Block "${customer.name || customer.email}"?\n\nThe customer will not be treated as an active marketplace account.`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setProcessing(
+        customer.id
+      );
+
+      setError("");
+      setSuccess("");
+
+      await updateDoc(
+        doc(
+          db,
+          "users",
+          customer.uid
+        ),
+        {
+          accountStatus:
+            "BLOCKED",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      setCustomers(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              customer.id
+                ? {
+                    ...item,
+                    accountStatus:
+                      "BLOCKED",
+                  }
+                : item
+          )
+      );
+
+      setSuccess(
+        `${customer.name || "Customer"} has been blocked.`
+      );
+    } catch (err) {
+      console.error(
+        "Block customer error:",
+        err
+      );
+
+      setError(
+        "Customer block nahi ho saka."
+      );
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  /* =========================================================
+     SUSPEND CUSTOMER
+  ========================================================= */
+
+  async function suspendCustomer(
+    customer: Customer
+  ) {
+    const confirmed =
+      window.confirm(
+        `Suspend "${customer.name || customer.email}"?`
+      );
+
+    if (!confirmed) return;
+
+    try {
+      setProcessing(
+        customer.id
+      );
+
+      setError("");
+      setSuccess("");
+
+      await updateDoc(
+        doc(
+          db,
+          "users",
+          customer.uid
+        ),
+        {
+          accountStatus:
+            "SUSPENDED",
+
+          updatedAt:
+            serverTimestamp(),
+        }
+      );
+
+      setCustomers(
+        (current) =>
+          current.map(
+            (item) =>
+              item.id ===
+              customer.id
+                ? {
+                    ...item,
+                    accountStatus:
+                      "SUSPENDED",
+                  }
+                : item
+          )
+      );
+
+      setSuccess(
+        `${customer.name || "Customer"} has been suspended.`
+      );
+    } catch (err) {
+      console.error(
+        "Suspend customer error:",
+        err
+      );
+
+      setError(
+        "Customer suspend nahi ho saka."
+      );
+    } finally {
+      setProcessing(null);
+    }
+  }
+
+  /* =========================================================
+     FILTER
+  ========================================================= */
+
   const filteredCustomers =
     useMemo(() => {
-      const term =
+      const searchText =
         search
           .trim()
           .toLowerCase();
 
       return customers.filter(
         (customer) => {
-          const searchable = [
+          let matchesFilter =
+            true;
+
+          if (
+            filter === "retail"
+          ) {
+            matchesFilter =
+              customer.customerType ===
+              "RETAIL_CUSTOMER";
+          }
+
+          if (
+            filter === "wholesale"
+          ) {
+            matchesFilter =
+              customer.customerType ===
+              "WHOLESALE_CUSTOMER";
+          }
+
+          if (
+            filter === "active"
+          ) {
+            matchesFilter =
+              customer.accountStatus ===
+              "ACTIVE";
+          }
+
+          if (
+            filter === "pending"
+          ) {
+            matchesFilter =
+              customer.accountStatus ===
+              "PENDING_VERIFICATION";
+          }
+
+          if (
+            filter === "blocked"
+          ) {
+            matchesFilter =
+              customer.accountStatus ===
+              "BLOCKED";
+          }
+
+          const searchableText = [
             customer.name,
             customer.email,
             customer.phone,
+            customer.city,
+            customer.state,
+            customer.pincode,
             customer.uid,
           ]
             .filter(Boolean)
@@ -193,441 +648,731 @@ export default function AdminCustomersPage() {
             .toLowerCase();
 
           const matchesSearch =
-            !term ||
-            searchable.includes(
-              term
+            !searchText ||
+            searchableText.includes(
+              searchText
             );
 
-          let matchesFilter = true;
-
-          if (filter === "retail") {
-            matchesFilter =
-              customer.role ===
-              "RETAIL_CUSTOMER";
-          }
-
-          if (filter === "wholesale") {
-            matchesFilter =
-              customer.role ===
-              "WHOLESALE_CUSTOMER";
-          }
-
-          if (filter === "blocked") {
-            matchesFilter =
-              customer.accountStatus ===
-              "blocked";
-          }
-
           return (
-            matchesSearch &&
-            matchesFilter
+            matchesFilter &&
+            matchesSearch
           );
         }
       );
     }, [
       customers,
-      search,
       filter,
+      search,
     ]);
 
-  const retailCount =
-    customers.filter(
-      (customer) =>
-        customer.role ===
-        "RETAIL_CUSTOMER"
-    ).length;
+  /* =========================================================
+     COUNTS
+  ========================================================= */
 
-  const wholesaleCount =
-    customers.filter(
-      (customer) =>
-        customer.role ===
-        "WHOLESALE_CUSTOMER"
-    ).length;
+  const counts =
+    useMemo(() => {
+      return {
+        all:
+          customers.length,
 
-  const blockedCount =
-    customers.filter(
-      (customer) =>
-        customer.accountStatus ===
-        "blocked"
-    ).length;
+        retail:
+          customers.filter(
+            (customer) =>
+              customer.customerType ===
+              "RETAIL_CUSTOMER"
+          ).length,
+
+        wholesale:
+          customers.filter(
+            (customer) =>
+              customer.customerType ===
+              "WHOLESALE_CUSTOMER"
+          ).length,
+
+        active:
+          customers.filter(
+            (customer) =>
+              customer.accountStatus ===
+              "ACTIVE"
+          ).length,
+
+        pending:
+          customers.filter(
+            (customer) =>
+              customer.accountStatus ===
+              "PENDING_VERIFICATION"
+          ).length,
+
+        blocked:
+          customers.filter(
+            (customer) =>
+              customer.accountStatus ===
+              "BLOCKED"
+          ).length,
+      };
+    }, [customers]);
+
+  /* =========================================================
+     LOADING
+  ========================================================= */
 
   if (loading) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-slate-50">
-        <div className="text-center">
-          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" />
+      <main className="min-h-screen bg-[#f5f6f8]">
+        <div className="mx-auto max-w-7xl px-4 py-20 text-center">
 
-          <p className="mt-4 text-sm text-slate-600">
-            Loading customers...
+          <div className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-gray-200 border-t-black" />
+
+          <p className="mt-4 text-sm font-bold text-gray-500">
+            Loading Customer Management...
           </p>
+
         </div>
       </main>
     );
   }
 
+  if (!authorized) {
+    return null;
+  }
+
+  /* =========================================================
+     UI
+  ========================================================= */
+
   return (
-    <main className="min-h-screen bg-slate-50">
+    <main className="min-h-screen bg-[#f5f6f8]">
+
+      {/* HEADER */}
 
       <header className="border-b bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
 
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              ANJIVO ADMIN
-            </p>
+          <Link href="/">
+            <img
+              src="/logo/anjivo-logo.png"
+              alt="ANJIVO"
+              className="h-10 w-auto"
+            />
+          </Link>
 
-            <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">
-              Customer Management
-            </h1>
-          </div>
+          <div className="flex flex-wrap gap-2">
 
-          <div className="flex gap-2">
-            <button
-              onClick={loadCustomers}
-              className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
+            <Link
+              href="/admin"
+              className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
             >
-              Refresh
-            </button>
+              Admin Dashboard
+            </Link>
+
+            <Link
+              href="/admin/sellers"
+              className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+            >
+              Sellers
+            </Link>
 
             <button
+              type="button"
               onClick={() =>
-                router.push("/admin")
+                loadCustomers()
               }
-              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+              className="rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white"
             >
-              Dashboard
+              ↻ Refresh
             </button>
-          </div>
 
+          </div>
         </div>
       </header>
 
-      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
 
-        {error && (
-          <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {error}
+        {/* TITLE */}
+
+        <div>
+
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-gray-400">
+            ADMIN / CUSTOMERS
+          </p>
+
+          <h1 className="mt-2 text-3xl font-black tracking-tight text-gray-900">
+            Customer Management
+          </h1>
+
+          <p className="mt-2 text-sm text-gray-500">
+            Retail aur wholesale customers
+            ko manage karein.
+          </p>
+
+        </div>
+
+        {/* ALERTS */}
+
+        {success && (
+          <div className="mt-6 rounded-2xl border border-green-200 bg-green-50 p-4">
+            <p className="text-sm font-bold text-green-700">
+              ✓ {success}
+            </p>
           </div>
         )}
 
-        {success && (
-          <div className="mb-5 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-            {success}
+        {error && (
+          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4">
+            <p className="text-sm font-bold text-red-700">
+              {error}
+            </p>
           </div>
         )}
 
         {/* STATS */}
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
 
-          <StatCard
-            title="Total Customers"
-            value={customers.length}
+          <CustomerCount
+            label="All"
+            count={counts.all}
+            active={
+              filter === "all"
+            }
+            onClick={() =>
+              setFilter("all")
+            }
           />
 
-          <StatCard
-            title="Retail Customers"
-            value={retailCount}
+          <CustomerCount
+            label="Retail"
+            count={counts.retail}
+            active={
+              filter === "retail"
+            }
+            onClick={() =>
+              setFilter("retail")
+            }
           />
 
-          <StatCard
-            title="Wholesale Customers"
-            value={wholesaleCount}
+          <CustomerCount
+            label="Wholesale"
+            count={
+              counts.wholesale
+            }
+            active={
+              filter ===
+              "wholesale"
+            }
+            onClick={() =>
+              setFilter(
+                "wholesale"
+              )
+            }
           />
 
-          <StatCard
-            title="Blocked"
-            value={blockedCount}
+          <CustomerCount
+            label="Active"
+            count={counts.active}
+            active={
+              filter === "active"
+            }
+            onClick={() =>
+              setFilter("active")
+            }
+          />
+
+          <CustomerCount
+            label="Pending"
+            count={counts.pending}
+            active={
+              filter === "pending"
+            }
+            onClick={() =>
+              setFilter("pending")
+            }
+          />
+
+          <CustomerCount
+            label="Blocked"
+            count={counts.blocked}
+            active={
+              filter === "blocked"
+            }
+            onClick={() =>
+              setFilter("blocked")
+            }
           />
 
         </div>
 
-        {/* FILTER */}
+        {/* SEARCH */}
 
-        <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mt-5 rounded-2xl border border-gray-200 bg-white p-3">
 
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <input
+            value={search}
+            onChange={(event) =>
+              setSearch(
+                event.target.value
+              )
+            }
+            placeholder="Search name, email, mobile, city, pincode or customer ID..."
+            className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+          />
 
-            <input
-              value={search}
-              onChange={(e) =>
-                setSearch(
-                  e.target.value
-                )
-              }
-              placeholder="Search name, email, phone or customer ID..."
-              className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-slate-900 lg:max-w-xl"
-            />
+        </div>
 
-            <div className="flex flex-wrap gap-2">
+        {/* LIST */}
 
-              <FilterButton
-                active={
-                  filter === "all"
-                }
-                onClick={() =>
-                  setFilter("all")
-                }
-              >
-                All
-              </FilterButton>
-
-              <FilterButton
-                active={
-                  filter === "retail"
-                }
-                onClick={() =>
-                  setFilter("retail")
-                }
-              >
-                Retail
-              </FilterButton>
-
-              <FilterButton
-                active={
-                  filter === "wholesale"
-                }
-                onClick={() =>
-                  setFilter(
-                    "wholesale"
-                  )
-                }
-              >
-                Wholesale
-              </FilterButton>
-
-              <FilterButton
-                active={
-                  filter === "blocked"
-                }
-                onClick={() =>
-                  setFilter("blocked")
-                }
-              >
-                Blocked
-              </FilterButton>
-
-            </div>
-          </div>
-        </section>
-
-        {/* CUSTOMER LIST */}
-
-        <section className="mt-6 space-y-4">
+        <div className="mt-6 overflow-hidden rounded-3xl border border-gray-200 bg-white">
 
           {filteredCustomers.length ===
           0 ? (
-            <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+            <div className="p-14 text-center">
 
-              <h2 className="text-lg font-bold text-slate-900">
+              <div className="text-5xl">
+                👤
+              </div>
+
+              <h2 className="mt-4 text-lg font-black">
                 No customers found
               </h2>
 
-              <p className="mt-2 text-sm text-slate-500">
-                Try another search or filter.
+              <p className="mt-2 text-sm text-gray-500">
+                Search ya filter change
+                karke try karein.
               </p>
 
             </div>
           ) : (
-            filteredCustomers.map(
-              (customer) => (
-                <CustomerCard
-                  key={customer.id}
-                  customer={customer}
-                  loading={
-                    actionLoading ===
-                    customer.id
-                  }
-                  onToggle={() =>
-                    toggleStatus(
+            <div className="divide-y divide-gray-100">
+
+              {filteredCustomers.map(
+                (customer) => (
+                  <CustomerRow
+                    key={
+                      customer.id
+                    }
+                    customer={
                       customer
-                    )
-                  }
-                  onView={() =>
-                    router.push(
-                      `/admin/customers/${customer.id}`
-                    )
-                  }
-                />
-              )
-            )
+                    }
+                    processing={
+                      processing ===
+                      customer.id
+                    }
+                    onActivate={() =>
+                      activateCustomer(
+                        customer
+                      )
+                    }
+                    onBlock={() =>
+                      blockCustomer(
+                        customer
+                      )
+                    }
+                    onSuspend={() =>
+                      suspendCustomer(
+                        customer
+                      )
+                    }
+                  />
+                )
+              )}
+
+            </div>
           )}
 
-        </section>
+        </div>
+
       </div>
     </main>
   );
 }
 
-function StatCard({
-  title,
-  value,
-}: {
-  title: string;
-  value: number;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p className="text-sm text-slate-500">
-        {title}
-      </p>
+/* =========================================================
+   COUNT
+========================================================= */
 
-      <p className="mt-2 text-3xl font-bold text-slate-900">
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function FilterButton({
+function CustomerCount({
+  label,
+  count,
   active,
   onClick,
-  children,
 }: {
+  label: string;
+  count: number;
   active: boolean;
   onClick: () => void;
-  children: React.ReactNode;
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`rounded-xl px-4 py-2 text-sm font-semibold ${
+      className={`rounded-2xl border p-4 text-left transition ${
         active
-          ? "bg-slate-900 text-white"
-          : "border border-slate-200 bg-white text-slate-700"
+          ? "border-black bg-black text-white"
+          : "border-gray-200 bg-white hover:border-gray-400"
       }`}
     >
-      {children}
+      <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+        {label}
+      </p>
+
+      <p className="mt-1 text-2xl font-black">
+        {count.toLocaleString(
+          "en-IN"
+        )}
+      </p>
     </button>
   );
 }
 
-function CustomerCard({
+/* =========================================================
+   CUSTOMER ROW
+========================================================= */
+
+function CustomerRow({
   customer,
-  loading,
-  onToggle,
-  onView,
+  processing,
+  onActivate,
+  onBlock,
+  onSuspend,
 }: {
-  customer: AdminCustomer;
-  loading: boolean;
-  onToggle: () => void;
-  onView: () => void;
+  customer: Customer;
+  processing: boolean;
+  onActivate: () => void;
+  onBlock: () => void;
+  onSuspend: () => void;
 }) {
-  const isWholesale =
-    customer.role ===
-    "WHOLESALE_CUSTOMER";
+  const verificationCount =
+    [
+      customer.emailVerified,
+      customer.phoneVerified,
+    ].filter(Boolean).length;
 
   return (
-    <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+    <div className="p-5 sm:p-6">
 
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
 
-        <div className="min-w-0 flex-1">
+        {/* CUSTOMER */}
+
+        <div className="min-w-0">
 
           <div className="flex flex-wrap items-center gap-2">
 
-            <h2 className="text-lg font-bold text-slate-900">
+            <h2 className="text-lg font-black text-gray-900">
               {customer.name ||
                 "Unnamed Customer"}
             </h2>
 
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                isWholesale
-                  ? "bg-purple-50 text-purple-700"
-                  : "bg-blue-50 text-blue-700"
-              }`}
-            >
-              {isWholesale
-                ? "Wholesale"
-                : "Retail"}
-            </span>
-
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                customer.accountStatus ===
-                "blocked"
-                  ? "bg-red-50 text-red-700"
-                  : "bg-green-50 text-green-700"
-              }`}
-            >
-              {customer.accountStatus ===
-              "blocked"
-                ? "Blocked"
-                : "Active"}
-            </span>
-
-          </div>
-
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-
-            <Info
-              label="Email"
-              value={
-                customer.email ||
-                "-"
+            <CustomerTypeBadge
+              type={
+                customer.customerType
               }
             />
 
-            <Info
-              label="Phone"
-              value={
-                customer.phone ||
-                "-"
-              }
-            />
-
-            <Info
-              label="Customer ID"
-              value={
-                customer.uid
-              }
-            />
-
-            <Info
-              label="Role"
-              value={
-                customer.role
+            <StatusBadge
+              status={
+                customer.accountStatus
               }
             />
 
           </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+
+            <InfoBadge>
+              📧{" "}
+              {customer.email ||
+                "No email"}
+            </InfoBadge>
+
+            <InfoBadge>
+              📱{" "}
+              {customer.phone ||
+                "No mobile"}
+            </InfoBadge>
+
+            {customer.city && (
+              <InfoBadge>
+                📍{" "}
+                {customer.city}
+                {customer.state
+                  ? `, ${customer.state}`
+                  : ""}
+              </InfoBadge>
+            )}
+
+          </div>
+
+          {/* VERIFICATION */}
+
+          <div className="mt-5">
+
+            <div className="flex items-center justify-between">
+
+              <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+                Verification
+              </p>
+
+              <p className="text-[10px] font-bold text-gray-500">
+                {verificationCount}/2
+                verified
+              </p>
+
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-2">
+
+              <VerificationBadge
+                label="Email"
+                verified={
+                  customer.emailVerified
+                }
+              />
+
+              <VerificationBadge
+                label="Mobile"
+                verified={
+                  customer.phoneVerified
+                }
+              />
+
+            </div>
+
+          </div>
+
+          {/* DETAILS */}
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+
+            <DetailBox
+              label="Customer Type"
+              value={
+                customer.customerType ===
+                "WHOLESALE_CUSTOMER"
+                  ? "Wholesale"
+                  : "Retail"
+              }
+            />
+
+            <DetailBox
+              label="City"
+              value={
+                customer.city ||
+                "Not provided"
+              }
+            />
+
+            <DetailBox
+              label="State"
+              value={
+                customer.state ||
+                "Not provided"
+              }
+            />
+
+            <DetailBox
+              label="Pincode"
+              value={
+                customer.pincode ||
+                "Not provided"
+              }
+            />
+
+          </div>
+
+          <p className="mt-4 break-all text-[9px] text-gray-400">
+            Customer ID:{" "}
+            {customer.uid}
+          </p>
+
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        {/* ACTIONS */}
 
-          <button
-            onClick={onView}
-            className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700"
-          >
-            View
-          </button>
+        <div className="flex shrink-0 flex-col gap-2 xl:w-44">
 
-          <button
-            disabled={loading}
-            onClick={onToggle}
-            className={`rounded-xl px-4 py-2 text-sm font-semibold text-white disabled:opacity-50 ${
-              customer.accountStatus ===
-              "blocked"
-                ? "bg-green-600"
-                : "bg-red-600"
-            }`}
-          >
-            {loading
-              ? "Updating..."
-              : customer.accountStatus ===
-                "blocked"
-              ? "Activate"
-              : "Block"}
-          </button>
+          {customer.accountStatus !==
+            "ACTIVE" && (
+            <button
+              type="button"
+              disabled={processing}
+              onClick={
+                onActivate
+              }
+              className="rounded-xl bg-green-600 px-4 py-3 text-xs font-black text-white disabled:opacity-50"
+            >
+              {processing
+                ? "Processing..."
+                : "✓ Activate"}
+            </button>
+          )}
+
+          {customer.accountStatus !==
+            "BLOCKED" && (
+            <button
+              type="button"
+              disabled={processing}
+              onClick={
+                onBlock
+              }
+              className="rounded-xl bg-red-600 px-4 py-3 text-xs font-black text-white disabled:opacity-50"
+            >
+              {processing
+                ? "Processing..."
+                : "Block Customer"}
+            </button>
+          )}
+
+          {customer.accountStatus !==
+            "SUSPENDED" &&
+            customer.accountStatus !==
+              "BLOCKED" && (
+              <button
+                type="button"
+                disabled={
+                  processing
+                }
+                onClick={
+                  onSuspend
+                }
+                className="rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-xs font-black text-orange-700 disabled:opacity-50"
+              >
+                Suspend
+              </button>
+            )}
 
         </div>
+
       </div>
-    </article>
+    </div>
   );
 }
 
-function Info({
+/* =========================================================
+   TYPE BADGE
+========================================================= */
+
+function CustomerTypeBadge({
+  type,
+}: {
+  type: CustomerType;
+}) {
+  const wholesale =
+    type ===
+    "WHOLESALE_CUSTOMER";
+
+  return (
+    <span
+      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${
+        wholesale
+          ? "bg-purple-100 text-purple-700"
+          : "bg-blue-100 text-blue-700"
+      }`}
+    >
+      {wholesale
+        ? "WHOLESALE"
+        : "RETAIL"}
+    </span>
+  );
+}
+
+/* =========================================================
+   STATUS
+========================================================= */
+
+function StatusBadge({
+  status,
+}: {
+  status: CustomerStatus;
+}) {
+  const styles: Record<
+    CustomerStatus,
+    string
+  > = {
+    ACTIVE:
+      "bg-green-100 text-green-700",
+
+    PENDING_VERIFICATION:
+      "bg-yellow-100 text-yellow-700",
+
+    BLOCKED:
+      "bg-red-100 text-red-700",
+
+    SUSPENDED:
+      "bg-orange-100 text-orange-700",
+  };
+
+  const labels: Record<
+    CustomerStatus,
+    string
+  > = {
+    ACTIVE: "ACTIVE",
+
+    PENDING_VERIFICATION:
+      "PENDING",
+
+    BLOCKED: "BLOCKED",
+
+    SUSPENDED: "SUSPENDED",
+  };
+
+  return (
+    <span
+      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${styles[status]}`}
+    >
+      {labels[status]}
+    </span>
+  );
+}
+
+/* =========================================================
+   VERIFICATION
+========================================================= */
+
+function VerificationBadge({
+  label,
+  verified,
+}: {
+  label: string;
+  verified: boolean;
+}) {
+  return (
+    <span
+      className={`rounded-full px-3 py-1.5 text-[9px] font-black ${
+        verified
+          ? "bg-green-100 text-green-700"
+          : "bg-gray-100 text-gray-500"
+      }`}
+    >
+      {verified
+        ? "✓"
+        : "○"}{" "}
+      {label}
+    </span>
+  );
+}
+
+/* =========================================================
+   INFO
+========================================================= */
+
+function InfoBadge({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="rounded-lg bg-gray-100 px-2.5 py-1.5 text-[10px] font-bold text-gray-600">
+      {children}
+    </span>
+  );
+}
+
+/* =========================================================
+   DETAIL
+========================================================= */
+
+function DetailBox({
   label,
   value,
 }: {
@@ -635,14 +1380,16 @@ function Info({
   value: string;
 }) {
   return (
-    <div className="rounded-xl bg-slate-50 p-3">
-      <p className="text-xs font-semibold uppercase text-slate-400">
+    <div className="rounded-xl border border-gray-200 bg-white p-3">
+
+      <p className="text-[9px] font-black uppercase tracking-wide text-gray-400">
         {label}
       </p>
 
-      <p className="mt-1 break-words text-sm font-medium text-slate-800">
+      <p className="mt-1 break-all text-xs font-bold text-gray-700">
         {value}
       </p>
+
     </div>
   );
 }
