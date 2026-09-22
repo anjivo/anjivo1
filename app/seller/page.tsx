@@ -16,15 +16,20 @@ import Footer from "@/components/Footer";
 
 import { auth, db } from "@/lib/firebase";
 import { getSellerProducts } from "@/lib/seller-products";
+import {
+  getSellerOrders,
+  type SellerOrder,
+} from "@/lib/seller-orders";
 import type { Product } from "@/types/product";
 
 type OrderSummary = {
   id: string;
   status: string;
+  fulfillmentStatus?: string;
   totalAmount: number;
   sellerSubtotal: number;
   createdAt?: unknown;
-  customerName: string;
+  itemCount: number;
 };
 
 type SellerDashboardData = {
@@ -34,6 +39,14 @@ type SellerDashboardData = {
   products: Product[];
   orders: OrderSummary[];
 };
+
+function formatStatus(value: string) {
+  return value
+    .replaceAll("_", " ")
+    .replace(/\\b\\w/g, (character) =>
+      character.toUpperCase()
+    );
+}
 
 function getTimestampValue(value: unknown): number {
   if (
@@ -198,107 +211,34 @@ export default function SellerDashboardPage() {
 
           /*
            * Seller orders
+           *
+           * Use the shared seller-order data layer so the dashboard
+           * applies the same sellerId filtering and wholesale/set
+           * normalization as the Seller Orders page.
            */
-          const ordersQuery = query(
-            collection(db, "orders"),
-            where(
-              "sellerIds",
-              "array-contains",
-              user.uid
-            )
-          );
-
-          const ordersSnapshot =
-            await getDocs(ordersQuery);
+          const sellerOrders =
+            await getSellerOrders(user.uid);
 
           const orders: OrderSummary[] =
-            ordersSnapshot.docs.map(
-              (orderDoc) => {
-                const data =
-                  orderDoc.data();
-
-                const items =
-                  Array.isArray(data.items)
-                    ? data.items
-                    : [];
-
-                const sellerItems =
-                  items.filter(
-                    (item) =>
-                      item &&
-                      typeof item === "object" &&
-                      (item as {
-                        sellerId?: unknown;
-                      }).sellerId ===
-                        user.uid
-                  );
-
-                const sellerSubtotal =
-                  sellerItems.reduce(
-                    (sum, item) => {
-                      const current =
-                        item as {
-                          selectedPrice?: unknown;
-                          quantity?: unknown;
-                          price?: unknown;
-                        };
-
-                      const price =
-                        Number(
-                          current.selectedPrice ??
-                            current.price ??
-                            0
-                        );
-
-                      const quantity =
-                        Number(
-                          current.quantity ?? 0
-                        );
-
-                      return (
-                        sum +
-                        price * quantity
-                      );
-                    },
-                    0
-                  );
-
-                return {
-                  id: orderDoc.id,
-
-                  status: String(
-                    data.status ??
-                      "pending"
-                  ),
-
-                  totalAmount: Number(
-                    data.totalAmount ?? 0
-                  ),
-
-                  sellerSubtotal,
-
-                  createdAt:
-                    data.createdAt,
-
-                  customerName:
-                    String(
-                      data.customerName ??
-                        data.userName ??
-                        "Customer"
-                    ),
-                };
-              }
+            sellerOrders.map(
+              (order: SellerOrder) => ({
+                id: order.id,
+                status:
+                  order.fulfillmentStatus ||
+                  order.status ||
+                  "pending",
+                fulfillmentStatus:
+                  order.fulfillmentStatus,
+                totalAmount:
+                  Number(order.totalAmount ?? 0),
+                sellerSubtotal:
+                  Number(order.sellerSubtotal ?? 0),
+                createdAt:
+                  order.createdAt,
+                itemCount:
+                  order.items.length,
+              })
             );
-
-          orders.sort(
-            (a, b) =>
-              getTimestampValue(
-                b.createdAt
-              ) -
-              getTimestampValue(
-                a.createdAt
-              )
-          );
 
           setDashboard({
             businessName,
@@ -835,7 +775,8 @@ export default function SellerDashboardPage() {
                           </p>
 
                           <p className="mt-1 text-xs text-gray-500">
-                            {order.customerName}
+                            {order.itemCount}{" "}
+                            item(s)
                             {" • "}
                             {formatDate(
                               order.createdAt
@@ -865,7 +806,9 @@ export default function SellerDashboardPage() {
                               order.status
                             )}`}
                           >
-                            {order.status}
+                            {formatStatus(
+                              order.status
+                            )}
                           </span>
 
                         </div>
@@ -966,7 +909,7 @@ export default function SellerDashboardPage() {
                           </p>
 
                           <p className="text-[9px] text-gray-400">
-                            units
+                            pieces
                           </p>
 
                         </div>
