@@ -103,53 +103,69 @@ function normalizeComposition(
     return undefined;
   }
 
-  const result = value
-    .map((raw): SellerOrderItem["setComposition"] extends Array<infer T> ? T | null : never => {
-      const item = raw as RawCompositionItem;
+  type NormalizedCompositionItem = {
+    variantType:
+      | "SIZE"
+      | "COLOR"
+      | "SIZE_COLOR"
+      | "CUSTOM";
+    value: string;
+    quantity: number;
+    size?: string;
+    color?: string;
+  };
 
-      const variantType =
-        item.variantType === "SIZE" ||
-        item.variantType === "COLOR" ||
-        item.variantType === "SIZE_COLOR" ||
-        item.variantType === "CUSTOM"
-          ? item.variantType
-          : "CUSTOM";
+  const result: NormalizedCompositionItem[] = [];
 
-      const compositionItem = {
-        variantType,
-        value:
-          typeof item.value === "string"
-            ? item.value
-            : "",
-        quantity:
-          typeof item.quantity === "number" &&
-          Number.isFinite(item.quantity)
-            ? item.quantity
-            : Number(item.quantity ?? 0),
-        ...(typeof item.size === "string"
-          ? { size: item.size }
-          : {}),
-        ...(typeof item.color === "string"
-          ? { color: item.color }
-          : {}),
-      };
+  for (const raw of value) {
+    const item =
+      raw as RawCompositionItem;
 
-      if (
-        !compositionItem.value ||
-        !Number.isInteger(compositionItem.quantity) ||
-        compositionItem.quantity <= 0
-      ) {
-        return null;
-      }
+    const variantType =
+      item.variantType === "SIZE" ||
+      item.variantType === "COLOR" ||
+      item.variantType === "SIZE_COLOR" ||
+      item.variantType === "CUSTOM"
+        ? item.variantType
+        : "CUSTOM";
 
-      return compositionItem;
-    })
-    .filter(
-      (item): item is NonNullable<typeof item> =>
-        item !== null
-    );
+    const quantity =
+      typeof item.quantity === "number" &&
+      Number.isFinite(item.quantity)
+        ? item.quantity
+        : Number(item.quantity ?? 0);
 
-  return result.length > 0 ? result : undefined;
+    const compositionItem: NormalizedCompositionItem = {
+      variantType,
+      value:
+        typeof item.value === "string"
+          ? item.value.trim()
+          : "",
+      quantity,
+      ...(typeof item.size === "string"
+        ? { size: item.size }
+        : {}),
+      ...(typeof item.color === "string"
+        ? { color: item.color }
+        : {}),
+    };
+
+    if (
+      !compositionItem.value ||
+      !Number.isInteger(
+        compositionItem.quantity
+      ) ||
+      compositionItem.quantity <= 0
+    ) {
+      continue;
+    }
+
+    result.push(compositionItem);
+  }
+
+  return result.length > 0
+    ? result
+    : undefined;
 }
 
 function mapItem(rawItem: unknown): SellerOrderItem {
