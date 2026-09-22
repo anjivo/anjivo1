@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
 
 import {
-  doc,
-  getDoc,
-  runTransaction,
-  serverTimestamp,
-} from "firebase/firestore";
+  FieldValue,
+} from "firebase-admin/firestore";
 
-import { db } from "@/lib/firebase";
+import {
+  getAdminApp,
+} from "@/lib/firebase-admin";
+
+import {
+  verifyIdToken,
+} from "@/lib/firebase-admin-auth";
+
+import {
+  getFirestore,
+} from "firebase-admin/firestore";
+
+export const runtime = "nodejs";
 
 type OrderItemRequest = {
   productId: string;
@@ -78,6 +87,13 @@ type OrderLineItem = {
   moq: number;
 };
 
+type SellerGroup = {
+  sellerId: string;
+  sellerName: string;
+  items: OrderLineItem[];
+  subtotal: number;
+};
+
 function stringValue(
   value: unknown,
   fallback = ""
@@ -110,8 +126,12 @@ function getWholesalePrice(
 
   tiers.sort(
     (a, b) =>
-      numberValue(b.minQuantity) -
-      numberValue(a.minQuantity)
+      numberValue(
+        b.minQuantity
+      ) -
+      numberValue(
+        a.minQuantity
+      )
   );
 
   const matchingTier =
@@ -121,12 +141,14 @@ function getWholesalePrice(
           numberValue(
             tier.minQuantity
           ) &&
-        (tier.maxQuantity ===
-          undefined ||
+        (
+          tier.maxQuantity ===
+            undefined ||
           quantity <=
             numberValue(
               tier.maxQuantity
-            ))
+            )
+        )
     );
 
   if (matchingTier) {
@@ -144,6 +166,13 @@ function normaliseProduct(
   id: string,
   data: Record<string, unknown>
 ): ProductData {
+  const status =
+    data.status === "draft" ||
+    data.status === "out_of_stock" ||
+    data.status === "blocked"
+      ? data.status
+      : "active";
+
   return {
     id,
 
@@ -165,13 +194,7 @@ function normaliseProduct(
       "ANJIVO Seller"
     ),
 
-    status:
-      data.status === "draft" ||
-      data.status ===
-        "out_of_stock" ||
-      data.status === "blocked"
-        ? data.status
-        : "active",
+    status,
 
     stock: numberValue(
       data.stock
@@ -181,9 +204,10 @@ function normaliseProduct(
       data.mrp
     ),
 
-    retailPrice: numberValue(
-      data.retailPrice
-    ),
+    retailPrice:
+      numberValue(
+        data.retailPrice
+      ),
 
     wholesalePrice:
       numberValue(
@@ -235,6 +259,15 @@ function normaliseProduct(
 function validateShippingAddress(
   address: unknown
 ): ShippingAddress {
+  if (
+    !address ||
+    typeof address !== "object"
+  ) {
+    throw new Error(
+      "Delivery address is required."
+    );
+  }
+
   const value =
     address as Record<
       string,
@@ -243,37 +276,37 @@ function validateShippingAddress(
 
   const fullName =
     stringValue(
-      value?.fullName
+      value.fullName
     );
 
   const phone =
     stringValue(
-      value?.phone
+      value.phone
     );
 
   const addressLine1 =
     stringValue(
-      value?.addressLine1
+      value.addressLine1
     );
 
   const addressLine2 =
     stringValue(
-      value?.addressLine2
+      value.addressLine2
     );
 
   const city =
     stringValue(
-      value?.city
+      value.city
     );
 
   const state =
     stringValue(
-      value?.state
+      value.state
     );
 
   const pincode =
     stringValue(
-      value?.pincode
+      value.pincode
     );
 
   if (
@@ -339,17 +372,45 @@ function validateShippingAddress(
   };
 }
 
+function createId(
+  prefix: string
+): string {
+  return `${prefix}_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
 export async function POST(
   request: Request
 ) {
   try {
-    const body =
-      await request.json();
+    /*
+     * ------------------------------------------------
+     * 1. VERIFY FIREBASE AUTH TOKEN
+     * ------------------------------------------------
+     *
+     * We do NOT trust userId coming from the
+     * browser request body.
+     */
+
+    const decodedToken =
+      await verifyIdToken(
+        request.headers.get(
+          "authorization"
+        )
+      );
 
     const userId =
-      stringValue(
-        body?.userId
-      );
+      decodedToken.uid;
+
+    /*
+     * ------------------------------------------------
+     * 2. READ REQUEST
+     * ------------------------------------------------
+     */
+
+    const body =
+      await request.json();
 
     const paymentMethod =
       body?.paymentMethod ===
@@ -364,19 +425,6 @@ export async function POST(
 
     const rawItems =
       body?.items;
-
-    if (!userId) {
-      return NextResponse.json(
-        {
-          success: false,
-          message:
-            "Login required.",
-        },
-        {
-          status: 401,
-        }
-      );
-    }
 
     if (
       !Array.isArray(
@@ -397,12 +445,17 @@ export async function POST(
     }
 
     /*
-     * Normalise incoming items.
+     * ------------------------------------------------
+     * 3. NORMALISE CART ITEMS
+     * ------------------------------------------------
      *
-     * Browser values are treated only as
-     * identifiers/quantity preferences.
-     * Price, seller and stock are re-read
-     * from Firestore below.
+     * Client supplies only:
+     * productId
+     * sellerId
+     * quantity
+     * pricingType
+     *
+     * Price is NEVER accepted from client.
      */
 
     const itemMap =
@@ -414,6 +467,23 @@ export async function POST(
     for (
       const rawItem of rawItems
     ) {
+      if (
+        !rawItem ||
+        typeof rawItem !==
+          "object"
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            message:
+              "Invalid order item.",
+          },
+          {
+            status: 400,
+          }
+        );
+      }
+
       const item =
         rawItem as Record<
           string,
@@ -422,24 +492,24 @@ export async function POST(
 
       const productId =
         stringValue(
-          item?.productId ??
-            item?.id
+          item.productId ??
+            item.id
         );
 
       const sellerId =
         stringValue(
-          item?.sellerId
+          item.sellerId
         );
 
       const quantity =
         Math.floor(
           numberValue(
-            item?.quantity
+            item.quantity
           )
         );
 
       const pricingType =
-        item?.pricingType ===
+        item.pricingType ===
         "wholesale"
           ? "wholesale"
           : "retail";
@@ -452,7 +522,7 @@ export async function POST(
           {
             success: false,
             message:
-              "Invalid order item.",
+              "Invalid product or seller information.",
           },
           {
             status: 400,
@@ -506,17 +576,28 @@ export async function POST(
       );
 
     /*
-     * All important operations happen inside
-     * one Firestore transaction.
+     * ------------------------------------------------
+     * 4. ADMIN FIRESTORE
+     * ------------------------------------------------
+     */
+
+    const adminDb =
+      getFirestore(
+        getAdminApp()
+      );
+
+    /*
+     * ------------------------------------------------
+     * 5. TRUSTED FIRESTORE TRANSACTION
+     * ------------------------------------------------
      *
-     * This helps prevent two customers from
-     * buying the same final stock at the
-     * same time.
+     * Product read + validation + order creation
+     * + seller orders + stock deduction happen
+     * inside one trusted transaction.
      */
 
     const result =
-      await runTransaction(
-        db,
+      await adminDb.runTransaction(
         async (transaction) => {
           const products =
             new Map<
@@ -525,10 +606,8 @@ export async function POST(
             >();
 
           /*
-           * First read all product documents.
-           *
-           * Firestore transactions require
-           * reads before writes.
+           * Firestore transaction rule:
+           * perform reads before writes.
            */
 
           for (
@@ -543,11 +622,13 @@ export async function POST(
             }
 
             const productRef =
-              doc(
-                db,
-                "products",
-                item.productId
-              );
+              adminDb
+                .collection(
+                  "products"
+                )
+                .doc(
+                  item.productId
+                );
 
             const snapshot =
               await transaction.get(
@@ -555,7 +636,7 @@ export async function POST(
               );
 
             if (
-              !snapshot.exists()
+              !snapshot.exists
             ) {
               throw new Error(
                 `Product ${item.productId} no longer exists.`
@@ -575,8 +656,9 @@ export async function POST(
           }
 
           /*
-           * Re-validate everything using
-           * current Firestore state.
+           * ------------------------------------------------
+           * 6. VALIDATE + CALCULATE SERVER PRICE
+           * ------------------------------------------------
            */
 
           const orderItems: OrderLineItem[] =
@@ -585,12 +667,7 @@ export async function POST(
           const sellerMap =
             new Map<
               string,
-              {
-                sellerId: string;
-                sellerName: string;
-                items: OrderLineItem[];
-                subtotal: number;
-              }
+              SellerGroup
             >();
 
           let subtotal = 0;
@@ -610,7 +687,7 @@ export async function POST(
             }
 
             /*
-             * Seller ownership check
+             * Seller ownership
              */
             if (
               product.sellerId !==
@@ -671,7 +748,7 @@ export async function POST(
             }
 
             /*
-             * Server-side price
+             * SERVER-SIDE PRICE
              */
             const unitPrice =
               item.pricingType ===
@@ -689,7 +766,7 @@ export async function POST(
               unitPrice < 0
             ) {
               throw new Error(
-                `${product.name} has an invalid price.`
+                `${product.name} has an invalid price configuration.`
               );
             }
 
@@ -697,7 +774,8 @@ export async function POST(
               unitPrice *
               item.quantity;
 
-            const orderItem: OrderLineItem =
+            const orderItem:
+              OrderLineItem =
               {
                 productId:
                   product.id,
@@ -782,19 +860,22 @@ export async function POST(
           }
 
           /*
-           * Current phase:
+           * ------------------------------------------------
+           * 7. CURRENT COMMERCE CALCULATIONS
+           * ------------------------------------------------
            *
-           * shipping = 0
-           * discount = 0
-           * tax = 0
-           *
-           * These will later be calculated
-           * by trusted commerce rules.
+           * Shipping, coupon and tax engines will
+           * be connected separately.
            */
 
-          const shippingCharge = 0;
-          const discount = 0;
-          const tax = 0;
+          const shippingCharge =
+            0;
+
+          const discount =
+            0;
+
+          const tax =
+            0;
 
           const total =
             Math.max(
@@ -806,16 +887,10 @@ export async function POST(
             );
 
           /*
-           * Generate order ID.
+           * ------------------------------------------------
+           * 8. SELLER GROUPS
+           * ------------------------------------------------
            */
-          const orderRef =
-            doc(
-              db,
-              "orders"
-            );
-
-          const orderId =
-            orderRef.id;
 
           const sellerGroups =
             Array.from(
@@ -823,12 +898,26 @@ export async function POST(
             );
 
           /*
-           * Parent marketplace order
+           * ------------------------------------------------
+           * 9. CREATE PARENT ORDER
+           * ------------------------------------------------
            */
+
+          const orderRef =
+            adminDb
+              .collection(
+                "orders"
+              )
+              .doc();
+
+          const orderId =
+            orderRef.id;
+
           transaction.set(
             orderRef,
             {
-              id: orderId,
+              id:
+                orderId,
 
               userId,
 
@@ -859,7 +948,8 @@ export async function POST(
 
               total,
 
-              currency: "INR",
+              currency:
+                "INR",
 
               paymentMethod,
 
@@ -883,29 +973,28 @@ export async function POST(
                 ),
 
               createdAt:
-                serverTimestamp(),
+                FieldValue.serverTimestamp(),
 
               updatedAt:
-                serverTimestamp(),
+                FieldValue.serverTimestamp(),
             }
           );
 
           /*
-           * Seller-specific order documents.
-           *
-           * This gives each seller a clean
-           * representation of only their own
-           * items.
+           * ------------------------------------------------
+           * 10. CREATE SELLER ORDERS
+           * ------------------------------------------------
            */
 
           for (
             const seller of sellerGroups
           ) {
             const sellerOrderRef =
-              doc(
-                db,
-                "sellerOrders"
-              );
+              adminDb
+                .collection(
+                  "sellerOrders"
+                )
+                .doc();
 
             transaction.set(
               sellerOrderRef,
@@ -930,11 +1019,14 @@ export async function POST(
                 subtotal:
                   seller.subtotal,
 
-                shippingCharge: 0,
+                shippingCharge:
+                  0,
 
-                discount: 0,
+                discount:
+                  0,
 
-                tax: 0,
+                tax:
+                  0,
 
                 total:
                   seller.subtotal,
@@ -949,19 +1041,20 @@ export async function POST(
                   "PENDING",
 
                 createdAt:
-                  serverTimestamp(),
+                  FieldValue.serverTimestamp(),
 
                 updatedAt:
-                  serverTimestamp(),
+                  FieldValue.serverTimestamp(),
               }
             );
           }
 
           /*
-           * Inventory deduction.
+           * ------------------------------------------------
+           * 11. DEDUCT INVENTORY
+           * ------------------------------------------------
            *
-           * This happens in the same transaction
-           * as order creation.
+           * Same transaction.
            */
 
           for (
@@ -979,11 +1072,13 @@ export async function POST(
             }
 
             const productRef =
-              doc(
-                db,
-                "products",
-                item.productId
-              );
+              adminDb
+                .collection(
+                  "products"
+                )
+                .doc(
+                  item.productId
+                );
 
             const newStock =
               product.stock -
@@ -1001,24 +1096,23 @@ export async function POST(
                     : "active",
 
                 updatedAt:
-                  serverTimestamp(),
+                  FieldValue.serverTimestamp(),
               }
             );
           }
 
           /*
-           * Transaction record.
-           *
-           * Actual payment transaction
-           * will be populated when Razorpay
-           * is connected.
+           * ------------------------------------------------
+           * 12. TRANSACTION RECORD
+           * ------------------------------------------------
            */
 
           const transactionRef =
-            doc(
-              db,
-              "transactions"
-            );
+            adminDb
+              .collection(
+                "transactions"
+              )
+              .doc();
 
           transaction.set(
             transactionRef,
@@ -1045,25 +1139,25 @@ export async function POST(
                 "INR",
 
               createdAt:
-                serverTimestamp(),
+                FieldValue.serverTimestamp(),
 
               updatedAt:
-                serverTimestamp(),
+                FieldValue.serverTimestamp(),
             }
           );
 
           /*
-           * Basic audit record.
-           *
-           * Production immutable audit logging
-           * will later move to trusted backend.
+           * ------------------------------------------------
+           * 13. AUDIT LOG
+           * ------------------------------------------------
            */
 
           const auditRef =
-            doc(
-              db,
-              "auditLogs"
-            );
+            adminDb
+              .collection(
+                "auditLogs"
+              )
+              .doc();
 
           transaction.set(
             auditRef,
@@ -1081,7 +1175,7 @@ export async function POST(
                 "ORDER",
 
               description:
-                "Customer order created through checkout.",
+                "Customer order created through secure checkout API.",
 
               actorId:
                 userId,
@@ -1110,9 +1204,15 @@ export async function POST(
               },
 
               createdAt:
-                serverTimestamp(),
+                FieldValue.serverTimestamp(),
             }
           );
+
+          /*
+           * ------------------------------------------------
+           * 14. RETURN RESULT
+           * ------------------------------------------------
+           */
 
           return {
             orderId,
@@ -1135,6 +1235,12 @@ export async function POST(
           };
         }
       );
+
+    /*
+     * ------------------------------------------------
+     * 15. SUCCESS
+     * ------------------------------------------------
+     */
 
     return NextResponse.json(
       {
@@ -1160,13 +1266,30 @@ export async function POST(
         ? error.message
         : "Unable to create order.";
 
+    const lowerMessage =
+      message.toLowerCase();
+
+    const isAuthError =
+      lowerMessage.includes(
+        "authentication"
+      ) ||
+      lowerMessage.includes(
+        "token"
+      ) ||
+      lowerMessage.includes(
+        "unauthorized"
+      );
+
     return NextResponse.json(
       {
         success: false,
         message,
       },
       {
-        status: 400,
+        status:
+          isAuthError
+            ? 401
+            : 400,
       }
     );
   }
