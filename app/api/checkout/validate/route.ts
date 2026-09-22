@@ -264,7 +264,7 @@ function normalizeComposition(
   }
 
   return composition
-    .map((item) => {
+    .map((item): SetCompositionItem | null => {
       const source =
         item as SetCompositionItem;
 
@@ -288,26 +288,27 @@ function normalizeComposition(
           : {}),
         ...(source.value
           ? {
-              value: String(source.value),
+              value:
+                String(source.value),
             }
           : {}),
         quantity,
         ...(source.size
           ? {
-              size: String(source.size),
+              size:
+                String(source.size),
             }
           : {}),
         ...(source.color
           ? {
-              color: String(source.color),
+              color:
+                String(source.color),
             }
           : {}),
       };
     })
     .filter(
-      (
-        item
-      ): item is SetCompositionItem =>
+      (item): item is SetCompositionItem =>
         item !== null
     );
 }
