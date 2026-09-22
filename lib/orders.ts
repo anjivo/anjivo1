@@ -53,6 +53,20 @@ export type OrderItem = {
   moq: number;
 
   subtotal: number;
+
+  // Wholesale / set order metadata
+  wholesaleUnit?: "PIECE" | "SET";
+  piecesPerSet?: number;
+  setName?: string;
+  setBreakAllowed?: boolean;
+  setComposition?: Array<{
+    variantType: "SIZE" | "COLOR" | "SIZE_COLOR" | "CUSTOM";
+    value: string;
+    quantity: number;
+    size?: string;
+    color?: string;
+  }>;
+  isSet?: boolean;
 };
 
 /* ----------------------------------------
@@ -219,6 +233,37 @@ function mapOrder(
                 Number(
                   item.subtotal || 0
                 ),
+
+              wholesaleUnit:
+                item.wholesaleUnit === "SET" ||
+                item.wholesaleUnit === "PIECE"
+                  ? item.wholesaleUnit
+                  : undefined,
+
+              piecesPerSet:
+                Number(item.piecesPerSet || 0) > 0
+                  ? Number(item.piecesPerSet)
+                  : undefined,
+
+              setName:
+                typeof item.setName === "string" &&
+                item.setName.trim()
+                  ? item.setName.trim()
+                  : undefined,
+
+              setBreakAllowed:
+                typeof item.setBreakAllowed === "boolean"
+                  ? item.setBreakAllowed
+                  : undefined,
+
+              setComposition:
+                Array.isArray(item.setComposition)
+                  ? item.setComposition
+                  : undefined,
+
+              isSet:
+                item.isSet === true ||
+                item.wholesaleUnit === "SET",
             })
           )
         : [],
@@ -281,8 +326,12 @@ function mapOrder(
         data.totalAmount || 0
       ),
 
+    // Current server order API uses `orderStatus`.
+    // Keep `status` as a backward-compatible fallback for older orders.
     status:
-      data.status || "pending",
+      data.orderStatus ||
+      data.status ||
+      "pending",
 
     createdAt:
       data.createdAt,
@@ -488,534 +537,21 @@ function isValidAddress(
 ---------------------------------------- */
 
 export async function createCustomerOrder(
-  input: CreateOrderInput
+  _input: CreateOrderInput
 ): Promise<CreatedOrder> {
-  if (!input.userId) {
-    throw new Error(
-      "User login required."
-    );
-  }
-
-  if (
-    !isValidAddress(
-      input.shippingAddress
-    )
-  ) {
-    throw new Error(
-      "Please enter a valid delivery address."
-    );
-  }
-
-  if (
-    input.paymentMethod !==
-    "COD"
-  ) {
-    throw new Error(
-      "Only Cash on Delivery is currently available."
-    );
-  }
-
-  /* --------------------------------------
-     Load Cart
-  -------------------------------------- */
-
-  const cart =
-    await getCart(
-      input.userId
-    );
-
-  if (
-    !cart ||
-    cart.items.length === 0
-  ) {
-    throw new Error(
-      "Your cart is empty."
-    );
-  }
-
-  /* --------------------------------------
-     Load Customer
-  -------------------------------------- */
-
-  const userRef = doc(
-    db,
-    "users",
-    input.userId
+  /*
+   * Orders must now be created through:
+   *
+   *   POST /api/checkout/validate
+   *   POST /api/orders/create
+   *
+   * The server derives the authenticated user from the Firebase ID token,
+   * re-validates prices/stock/set rules, and creates the order atomically.
+   *
+   * This legacy client-side function is intentionally disabled so no
+   * browser code can bypass the secure order-creation flow.
+   */
+  throw new Error(
+    "Direct client-side order creation is disabled. Please use the checkout API."
   );
-
-  const userSnap =
-    await getDoc(
-      userRef
-    );
-
-  if (!userSnap.exists()) {
-    throw new Error(
-      "Customer profile not found."
-    );
-  }
-
-  const userData =
-    userSnap.data();
-
-  /* --------------------------------------
-     Prepare Order
-  -------------------------------------- */
-
-  const orderItems: OrderItem[] =
-    [];
-
-  const sellerIds: string[] =
-    [];
-
-  let subtotal = 0;
-
-  /* --------------------------------------
-     Validate Every Cart Product
-  -------------------------------------- */
-
-  for (
-    const cartItem of cart.items
-  ) {
-    /*
-     * IMPORTANT:
-     * CartItem uses `id` as the
-     * product document ID.
-     */
-
-    const productRef =
-      doc(
-        db,
-        "products",
-        cartItem.id
-      );
-
-    const productSnap =
-      await getDoc(
-        productRef
-      );
-
-    if (
-      !productSnap.exists()
-    ) {
-      throw new Error(
-        `Product "${cartItem.name}" is no longer available.`
-      );
-    }
-
-    const product =
-      productSnap.data();
-
-    /* Product status */
-
-    if (
-      product.status !==
-      "active"
-    ) {
-      throw new Error(
-        `"${product.name || cartItem.name}" is currently unavailable.`
-      );
-    }
-
-    /* Seller validation */
-
-    const productSellerId =
-      clean(
-        product.sellerId
-      );
-
-    if (!productSellerId) {
-      throw new Error(
-        `"${product.name || cartItem.name}" has an invalid seller.`
-      );
-    }
-
-    if (
-      productSellerId !==
-      cartItem.sellerId
-    ) {
-      throw new Error(
-        `"${product.name || cartItem.name}" seller information changed. Please refresh your cart.`
-      );
-    }
-
-    /* Stock validation */
-
-    const stock =
-      Number(
-        product.stock ?? 0
-      );
-
-    if (
-      stock <
-      cartItem.quantity
-    ) {
-      throw new Error(
-        `"${product.name || cartItem.name}" has only ${stock} item(s) available.`
-      );
-    }
-
-    /* MOQ */
-
-    const moq =
-      Math.max(
-        1,
-        Number(
-          product.moq ?? 1
-        )
-      );
-
-    if (
-      cartItem.pricingType ===
-        "wholesale" &&
-      cartItem.quantity < moq
-    ) {
-      throw new Error(
-        `"${product.name || cartItem.name}" requires minimum ${moq} quantity for wholesale purchase.`
-      );
-    }
-
-    /* ------------------------------------
-       Wholesale Tiers
-    ------------------------------------ */
-
-    const wholesaleTiers =
-      Array.isArray(
-        product.wholesaleTiers
-      )
-        ? product.wholesaleTiers
-            .map(
-              (tier: any) => ({
-                minQuantity:
-                  Number(
-                    tier.minQuantity ??
-                      0
-                  ),
-
-                maxQuantity:
-                  tier.maxQuantity ===
-                    undefined ||
-                  tier.maxQuantity ===
-                    null
-                    ? undefined
-                    : Number(
-                        tier.maxQuantity
-                      ),
-
-                price:
-                  Number(
-                    tier.price ??
-                      0
-                  ),
-              })
-            )
-            .filter(
-              (tier: any) =>
-                tier.minQuantity >
-                  0 &&
-                tier.price >= 0
-            )
-        : [];
-
-    /* ------------------------------------
-       Calculate Current Price
-    ------------------------------------ */
-
-    let selectedPrice: number;
-
-    if (
-      cartItem.pricingType ===
-      "wholesale"
-    ) {
-      /*
-       * IMPORTANT:
-       * getWholesalePrice() accepts only:
-       *
-       * {
-       *   wholesalePrice,
-       *   wholesaleTiers
-       * }
-       *
-       * Do NOT pass the complete Product
-       * object here.
-       */
-
-      selectedPrice =
-        getWholesalePrice(
-          {
-            wholesalePrice:
-              Number(
-                product.wholesalePrice ??
-                  0
-              ),
-
-            wholesaleTiers,
-          },
-          cartItem.quantity
-        );
-    } else {
-      selectedPrice =
-        Number(
-          product.retailPrice ??
-            0
-        );
-    }
-
-    if (
-      !Number.isFinite(
-        selectedPrice
-      ) ||
-      selectedPrice <= 0
-    ) {
-      throw new Error(
-        `"${product.name || cartItem.name}" has an invalid price.`
-      );
-    }
-
-    /* ------------------------------------
-       Item Subtotal
-    ------------------------------------ */
-
-    const itemSubtotal =
-      selectedPrice *
-      cartItem.quantity;
-
-    /* ------------------------------------
-       Seller Name
-    ------------------------------------ */
-
-    const sellerName =
-      clean(
-        product.sellerName
-      ) ||
-      clean(
-        cartItem.sellerName
-      ) ||
-      "ANJIVO Seller";
-
-    /* ------------------------------------
-       Order Item
-    ------------------------------------ */
-
-    const orderItem: OrderItem =
-      {
-        /*
-         * OrderItem uses productId.
-         * This is different from CartItem,
-         * where the field is `id`.
-         */
-
-        productId:
-          productSnap.id,
-
-        sellerId:
-          productSellerId,
-
-        sellerName,
-
-        name:
-          clean(
-            product.name
-          ) ||
-          cartItem.name,
-
-        slug:
-          clean(
-            product.slug
-          ) ||
-          cartItem.slug,
-
-        image:
-          Array.isArray(
-            product.images
-          ) &&
-          product.images.length >
-            0
-            ? product.images[0]
-            : cartItem.image,
-
-        quantity:
-          cartItem.quantity,
-
-        mrp:
-          Number(
-            product.mrp ??
-              cartItem.mrp ??
-              0
-          ),
-
-        selectedPrice,
-
-        pricingType:
-          cartItem.pricingType,
-
-        moq,
-
-        subtotal:
-          itemSubtotal,
-      };
-
-    orderItems.push(
-      orderItem
-    );
-
-    /* Seller IDs */
-
-    if (
-      !sellerIds.includes(
-        productSellerId
-      )
-    ) {
-      sellerIds.push(
-        productSellerId
-      );
-    }
-
-    subtotal +=
-      itemSubtotal;
-  }
-
-  /* --------------------------------------
-     Charges
-  -------------------------------------- */
-
-  const shippingCharge =
-    0;
-
-  const discount =
-    0;
-
-  const totalAmount =
-    subtotal +
-    shippingCharge -
-    discount;
-
-  if (
-    orderItems.length === 0
-  ) {
-    throw new Error(
-      "No valid products found in cart."
-    );
-  }
-
-  /* --------------------------------------
-     Create Order
-  -------------------------------------- */
-
-  const orderRef =
-    await addDoc(
-      collection(
-        db,
-        "orders"
-      ),
-      {
-        userId:
-          input.userId,
-
-        customerName:
-          clean(
-            userData.name
-          ) ||
-          clean(
-            userData.displayName
-          ) ||
-          "Customer",
-
-        customerEmail:
-          clean(
-            userData.email
-          ),
-
-        sellerIds,
-
-        items:
-          orderItems,
-
-        shippingAddress: {
-          fullName:
-            clean(
-              input
-                .shippingAddress
-                .fullName
-            ),
-
-          phone:
-            clean(
-              input
-                .shippingAddress
-                .phone
-            ),
-
-          addressLine1:
-            clean(
-              input
-                .shippingAddress
-                .addressLine1
-            ),
-
-          addressLine2:
-            clean(
-              input
-                .shippingAddress
-                .addressLine2
-            ),
-
-          city:
-            clean(
-              input
-                .shippingAddress
-                .city
-            ),
-
-          state:
-            clean(
-              input
-                .shippingAddress
-                .state
-            ),
-
-          pincode:
-            clean(
-              input
-                .shippingAddress
-                .pincode
-            ),
-        },
-
-        paymentMethod:
-          "COD",
-
-        paymentStatus:
-          "pending",
-
-        subtotal,
-
-        shippingCharge,
-
-        discount,
-
-        totalAmount,
-
-        status:
-          "pending",
-
-        createdAt:
-          serverTimestamp(),
-
-        updatedAt:
-          serverTimestamp(),
-      }
-    );
-
-  return {
-    orderId:
-      orderRef.id,
-
-    totalAmount,
-
-    subtotal,
-
-    shippingCharge,
-
-    discount,
-  };
 }
