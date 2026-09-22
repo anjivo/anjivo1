@@ -1485,7 +1485,7 @@ export default function SellerApplicationPage() {
                   type="button"
                   onClick={() =>
                     router.push(
-                      "/seller/dashboard"
+                      "/seller"
                     )
                   }
                   className="rounded-xl bg-black px-6 py-3 font-semibold text-white transition hover:bg-gray-800"
