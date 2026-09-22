@@ -129,6 +129,30 @@ export default function EditSellerProductPage() {
   const [stock, setStock] =
     useState("");
 
+  const [sellingMode, setSellingMode] =
+    useState<Product["sellingMode"]>("PIECE");
+
+  const [wholesaleUnit, setWholesaleUnit] =
+    useState<"PIECE" | "SET">("PIECE");
+
+  const [setBreakAllowed, setSetBreakAllowed] =
+    useState(true);
+
+  const [setName, setSetName] =
+    useState("");
+
+  const [setSize, setSetSize] =
+    useState("");
+
+  const [moqSets, setMoqSets] =
+    useState("");
+
+  const [setVariantType, setSetVariantType] =
+    useState<"SIZE" | "COLOR" | "SIZE_COLOR" | "CUSTOM">("SIZE");
+
+  const [setCompositionText, setSetCompositionText] =
+    useState("");
+
   const [imageUrl, setImageUrl] =
     useState("");
 
@@ -279,6 +303,55 @@ export default function EditSellerProductPage() {
               String(
                 loadedProduct.stock
               )
+            );
+
+            setSellingMode(
+              loadedProduct.sellingMode ?? "PIECE"
+            );
+
+            const loadedConfig =
+              loadedProduct.wholesaleConfiguration;
+
+            setWholesaleUnit(
+              loadedConfig?.saleUnit ?? "PIECE"
+            );
+
+            setSetBreakAllowed(
+              loadedConfig?.setBreakAllowed ?? true
+            );
+
+            setSetName(
+              loadedConfig?.setName ?? ""
+            );
+
+            setSetSize(
+              loadedConfig?.setSize !== undefined
+                ? String(loadedConfig.setSize)
+                : ""
+            );
+
+            setMoqSets(
+              loadedConfig?.moqSets !== undefined
+                ? String(loadedConfig.moqSets)
+                : ""
+            );
+
+            setSetVariantType(
+              loadedConfig?.composition?.[0]?.variantType ??
+                "SIZE"
+            );
+
+            setSetCompositionText(
+              loadedConfig?.composition
+                ?.map((item) => {
+                  const key =
+                    item.size && item.color
+                      ? `${item.size}/${item.color}`
+                      : item.size ?? item.color ?? item.value;
+
+                  return `${key}:${item.quantity}`;
+                })
+                .join(", ") ?? ""
             );
 
             setImageUrl(
@@ -433,6 +506,67 @@ export default function EditSellerProductPage() {
     setCategoryName(
       selected?.name ?? ""
     );
+  }
+
+  /* =========================================================
+     SET COMPOSITION
+  ========================================================= */
+
+  function parseSetComposition() {
+    const raw = setCompositionText.trim();
+
+    if (!raw) return [];
+
+    return raw.split(",").map((entry) => {
+      const separator = entry.lastIndexOf(":");
+
+      if (separator <= 0) {
+        throw new Error(
+          "Set composition format must be like S:2, M:2, L:2."
+        );
+      }
+
+      const value = entry.slice(0, separator).trim();
+      const quantity = Number(
+        entry.slice(separator + 1).trim()
+      );
+
+      if (
+        !value ||
+        !Number.isInteger(quantity) ||
+        quantity < 1
+      ) {
+        throw new Error(
+          "Each set composition item needs a valid name and quantity."
+        );
+      }
+
+      const parts = value
+        .split("/")
+        .map((part) => part.trim())
+        .filter(Boolean);
+
+      const size =
+        setVariantType === "SIZE" ||
+        setVariantType === "SIZE_COLOR"
+          ? parts[0] || value
+          : undefined;
+
+      const color =
+        setVariantType === "COLOR"
+          ? value
+          : setVariantType === "SIZE_COLOR"
+            ? parts[1]
+            : undefined;
+
+      return {
+        variantType: setVariantType,
+        value,
+        quantity,
+        ...(size ? { size } : {}),
+        ...(color ? { color } : {}),
+      };
+    });
   }
 
   /* =========================================================
@@ -596,6 +730,23 @@ export default function EditSellerProductPage() {
         );
       }
 
+      const isSetWholesale =
+        wholesaleUnit === "SET";
+
+      const moqSetsValue = isSetWholesale
+        ? Number(moqSets.trim() || moq)
+        : 0;
+
+      if (
+        isSetWholesale &&
+        (!Number.isInteger(moqSetsValue) ||
+          moqSetsValue < 1)
+      ) {
+        throw new Error(
+          "Set MOQ must be a whole number greater than 0."
+        );
+      }
+
       /* ===============================================
          STOCK
       =============================================== */
@@ -627,11 +778,84 @@ export default function EditSellerProductPage() {
 
       if (
         stockValue > 0 &&
+        !isSetWholesale &&
         moqValue > stockValue
       ) {
         throw new Error(
           "MOQ cannot be greater than available stock."
         );
+      }
+
+      let wholesaleConfiguration:
+        Product["wholesaleConfiguration"] =
+        undefined;
+
+      if (isSetWholesale) {
+        const setSizeValue = Number(setSize);
+
+        if (
+          !Number.isInteger(setSizeValue) ||
+          setSizeValue < 1
+        ) {
+          throw new Error(
+            "Pieces per set must be a whole number greater than 0."
+          );
+        }
+
+        const composition =
+          parseSetComposition();
+
+        const compositionTotal =
+          composition.reduce(
+            (sum, item) => sum + item.quantity,
+            0
+          );
+
+        if (!composition.length) {
+          throw new Error(
+            "Add at least one set composition item."
+          );
+        }
+
+        if (compositionTotal !== setSizeValue) {
+          throw new Error(
+            `Set composition total (${compositionTotal}) must match pieces per set (${setSizeValue}).`
+          );
+        }
+
+        const availableSets =
+          Math.floor(stockValue / setSizeValue);
+
+        if (
+          availableSets > 0 &&
+          moqSetsValue > availableSets
+        ) {
+          throw new Error(
+            "Set MOQ cannot be greater than available complete sets."
+          );
+        }
+
+        wholesaleConfiguration = {
+          enabled: true,
+          saleUnit: "SET",
+          setBreakAllowed,
+          setSize: setSizeValue,
+          ...(setName.trim()
+            ? { setName: setName.trim() }
+            : {}),
+          composition,
+          moqSets: moqSetsValue,
+          priceUnit: "SET",
+          tiers: [],
+        };
+      } else {
+        wholesaleConfiguration = {
+          enabled: true,
+          saleUnit: "PIECE",
+          setBreakAllowed: true,
+          priceUnit: "PIECE",
+          tiers: [],
+        };
       }
 
       /* ===============================================
@@ -795,13 +1019,20 @@ export default function EditSellerProductPage() {
          MOQ = FIRST TIER MIN
       =============================================== */
 
+      const effectiveWholesaleMoq =
+        isSetWholesale
+          ? moqSetsValue
+          : moqValue;
+
       if (
         wholesaleTiers[0]
           .minQuantity !==
-        moqValue
+        effectiveWholesaleMoq
       ) {
         throw new Error(
-          "The first wholesale tier minimum quantity must match MOQ."
+          `The first wholesale tier minimum quantity must match ${
+            isSetWholesale ? "set MOQ" : "MOQ"
+          }.`
         );
       }
 
@@ -956,6 +1187,13 @@ export default function EditSellerProductPage() {
           stock: Math.floor(
             stockValue
           ),
+
+          sellingMode,
+
+          wholesaleConfiguration: {
+            ...wholesaleConfiguration,
+            tiers: wholesaleTiers,
+          },
         }
       );
 
@@ -1299,13 +1537,101 @@ export default function EditSellerProductPage() {
           </section>
 
           {/* =================================================
+              SELLING MODE
+          ================================================= */}
+
+          <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+              Step 3
+            </p>
+
+            <h2 className="mt-1 text-xl font-black">
+              Selling Mode
+            </h2>
+
+            <p className="mt-1 text-xs leading-5 text-gray-500">
+              Choose how this product can be sold on ANJIVO.
+            </p>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              {([
+                ["PIECE", "Piece", "Wholesale by individual piece"],
+                ["SET", "Set", "Wholesale by complete set"],
+                ["BOTH", "Piece + Set", "Supports both modes"],
+              ] as const).map(([value, label, description]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setSellingMode(value);
+                    if (value === "PIECE") {
+                      setWholesaleUnit("PIECE");
+                    }
+                  }}
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    sellingMode === value
+                      ? "border-black bg-black text-white"
+                      : "border-gray-200 bg-white hover:border-black"
+                  }`}
+                >
+                  <p className="text-sm font-black">{label}</p>
+                  <p className={`mt-1 text-[10px] leading-4 ${
+                    sellingMode === value
+                      ? "text-gray-300"
+                      : "text-gray-500"
+                  }`}>
+                    {description}
+                  </p>
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-5 rounded-2xl bg-gray-50 p-4">
+              <label className="text-xs font-bold text-gray-700">
+                Wholesale Unit
+              </label>
+
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {([
+                  ["PIECE", "Wholesale by Piece"],
+                  ["SET", "Wholesale by Complete Set"],
+                ] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    disabled={
+                      sellingMode === "PIECE" &&
+                      value === "SET"
+                    }
+                    onClick={() =>
+                      setWholesaleUnit(value)
+                    }
+                    className={`rounded-xl border px-4 py-3 text-left text-xs font-bold ${
+                      wholesaleUnit === value
+                        ? "border-black bg-white"
+                        : "border-gray-200 bg-white"
+                    } ${
+                      sellingMode === "PIECE" &&
+                      value === "SET"
+                        ? "cursor-not-allowed opacity-40"
+                        : ""
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          {/* =================================================
               PRICING
           ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              Step 3
+              Step 4
             </p>
 
             <h2 className="mt-1 text-xl font-black">
@@ -1416,6 +1742,145 @@ export default function EditSellerProductPage() {
           </section>
 
           {/* =================================================
+              WHOLESALE SET CONFIGURATION
+          ================================================= */}
+
+          {wholesaleUnit === "SET" && (
+            <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                Step 5
+              </p>
+
+              <h2 className="mt-1 text-xl font-black">
+                Wholesale Set Configuration
+              </h2>
+
+              <p className="mt-1 text-xs leading-5 text-gray-500">
+                Configure the complete set and its composition.
+              </p>
+
+              <div className="mt-6 grid gap-5 sm:grid-cols-2">
+                <div>
+                  <label className="text-xs font-bold text-gray-700">
+                    Set Name
+                  </label>
+                  <input
+                    value={setName}
+                    onChange={(event) =>
+                      setSetName(event.target.value)
+                    }
+                    placeholder="e.g. Full Size Set"
+                    className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700">
+                    Pieces Per Set *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={setSize}
+                    onChange={(event) =>
+                      setSetSize(event.target.value)
+                    }
+                    placeholder="e.g. 6"
+                    className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700">
+                    Set MOQ *
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={moqSets}
+                    onChange={(event) =>
+                      setMoqSets(event.target.value)
+                    }
+                    placeholder="e.g. 2"
+                    className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-gray-700">
+                    Composition Type
+                  </label>
+                  <select
+                    value={setVariantType}
+                    onChange={(event) =>
+                      setSetVariantType(
+                        event.target.value as
+                          | "SIZE"
+                          | "COLOR"
+                          | "SIZE_COLOR"
+                          | "CUSTOM"
+                      )
+                    }
+                    className="mt-2 w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-none focus:border-black"
+                  >
+                    <option value="SIZE">Size</option>
+                    <option value="COLOR">Color</option>
+                    <option value="SIZE_COLOR">
+                      Size + Color
+                    </option>
+                    <option value="CUSTOM">Custom</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-5">
+                <label className="text-xs font-bold text-gray-700">
+                  Set Composition *
+                </label>
+
+                <input
+                  value={setCompositionText}
+                  onChange={(event) =>
+                    setSetCompositionText(
+                      event.target.value
+                    )
+                  }
+                  placeholder="S:2, M:2, L:2"
+                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                />
+
+                <p className="mt-2 text-[10px] leading-5 text-gray-400">
+                  Use name:quantity format. For Size + Color,
+                  use size/color:quantity. The total must equal
+                  Pieces Per Set.
+                </p>
+              </div>
+
+              <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                <input
+                  type="checkbox"
+                  checked={!setBreakAllowed}
+                  onChange={(event) =>
+                    setSetBreakAllowed(
+                      !event.target.checked
+                    )
+                  }
+                  className="mt-1 h-4 w-4"
+                />
+
+                <span>
+                  <span className="block text-xs font-black">
+                    Lock complete set
+                  </span>
+                  <span className="mt-1 block text-[10px] leading-5 text-gray-500">
+                    Buyers must purchase the complete configured set.
+                  </span>
+                </span>
+              </label>
+            </section>
+          )}
+
+          {/* =================================================
               WHOLESALE TIERS
           ================================================= */}
 
@@ -1426,7 +1891,7 @@ export default function EditSellerProductPage() {
               <div>
 
                 <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-                  Step 4
+                  Step 6
                 </p>
 
                 <h2 className="mt-1 text-xl font-black">
@@ -1598,7 +2063,7 @@ export default function EditSellerProductPage() {
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
 
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
-              Step 5
+              Step 7
             </p>
 
             <h2 className="mt-1 text-xl font-black">
