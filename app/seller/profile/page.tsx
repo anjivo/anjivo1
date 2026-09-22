@@ -136,6 +136,21 @@ export default function SellerProfilePage() {
   const [sellerVerified, setSellerVerified] =
     useState(false);
 
+  const [emailVerified, setEmailVerified] =
+    useState(false);
+
+  const [phoneVerified, setPhoneVerified] =
+    useState(false);
+
+  const [gstVerified, setGstVerified] =
+    useState(false);
+
+  const [panVerified, setPanVerified] =
+    useState(false);
+
+  const [bankVerified, setBankVerified] =
+    useState(false);
+
   /* =========================================================
      LOAD PROFILE
   ========================================================= */
@@ -222,6 +237,15 @@ export default function SellerProfilePage() {
               String(
                 userData.phone ?? ""
               )
+            );
+
+            setEmailVerified(
+              userData.emailVerified === true ||
+                user.emailVerified === true
+            );
+
+            setPhoneVerified(
+              userData.phoneVerified === true
             );
 
             /* =================================================
@@ -326,8 +350,19 @@ export default function SellerProfilePage() {
               );
 
               setSellerVerified(
-                data.sellerVerified ===
-                  true
+                data.sellerVerified === true
+              );
+
+              setGstVerified(
+                data.gstVerified === true
+              );
+
+              setPanVerified(
+                data.panVerified === true
+              );
+
+              setBankVerified(
+                data.bankVerified === true
               );
             } else {
               setSellerStatus(
@@ -372,13 +407,26 @@ export default function SellerProfilePage() {
       return "Phone number is required.";
     }
 
-    if (
-      phone.replace(
-        /\D/g,
-        ""
-      ).length !== 10
-    ) {
+    const normalizedPhone = phone
+      .replace(/\D/g, "")
+      .slice(0, 10);
+
+    if (normalizedPhone.length !== 10) {
       return "Enter a valid 10-digit phone number.";
+    }
+
+    if (phoneVerified) {
+      const currentPhone = String(
+        auth.currentUser?.phoneNumber ?? ""
+      ).replace(/\D/g, "");
+
+      if (
+        currentPhone &&
+        currentPhone.length >= 10 &&
+        currentPhone.slice(-10) !== normalizedPhone
+      ) {
+        return "Verified mobile number cannot be changed from this profile. Please complete phone re-verification.";
+      }
     }
 
     if (!businessName.trim()) {
@@ -1153,8 +1201,14 @@ export default function SellerProfilePage() {
                     )
                   }
                   placeholder="ABCDE1234F"
-                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase outline-none focus:border-black"
+                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase outline-none focus:border-black disabled:cursor-not-allowed disabled:bg-gray-50"
                 />
+
+                <p className="mt-1 text-[10px] text-gray-400">
+                  {panVerified
+                    ? "PAN is verified and locked."
+                    : "PAN verification is controlled by ANJIVO administration."}
+                </p>
 
               </div>
 
@@ -1197,7 +1251,7 @@ export default function SellerProfilePage() {
                     )
                   }
                   placeholder="As per bank account"
-                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black disabled:cursor-not-allowed disabled:bg-gray-50"
                 />
 
               </div>
@@ -1224,11 +1278,13 @@ export default function SellerProfilePage() {
                     )
                   }
                   placeholder="Bank account number"
-                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
+                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black disabled:cursor-not-allowed disabled:bg-gray-50"
                 />
 
                 <p className="mt-1 text-[10px] text-gray-400">
-                  Hidden while typing for privacy.
+                  {bankVerified
+                    ? "Bank account is verified and locked."
+                    : "Hidden while typing for privacy."}
                 </p>
 
               </div>
@@ -1254,7 +1310,7 @@ export default function SellerProfilePage() {
                     )
                   }
                   placeholder="SBIN0001234"
-                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase outline-none focus:border-black"
+                  className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm uppercase outline-none focus:border-black disabled:cursor-not-allowed disabled:bg-gray-50"
                 />
 
               </div>
@@ -1306,10 +1362,48 @@ export default function SellerProfilePage() {
 
               </div>
 
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-xl border border-gray-200 bg-white p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                    Email
+                  </p>
+                  <p className={`mt-1 text-xs font-bold ${emailVerified ? "text-green-700" : "text-yellow-700"}`}>
+                    {emailVerified ? "✓ Verified" : "Pending"}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-white p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                    Mobile
+                  </p>
+                  <p className={`mt-1 text-xs font-bold ${phoneVerified ? "text-green-700" : "text-yellow-700"}`}>
+                    {phoneVerified ? "✓ Verified" : "Pending"}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-white p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                    GST
+                  </p>
+                  <p className={`mt-1 text-xs font-bold ${gstVerified ? "text-green-700" : "text-yellow-700"}`}>
+                    {gstVerified ? "✓ Verified" : "Pending"}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-white p-3">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                    Bank
+                  </p>
+                  <p className={`mt-1 text-xs font-bold ${bankVerified ? "text-green-700" : "text-yellow-700"}`}>
+                    {bankVerified ? "✓ Verified" : "Pending"}
+                  </p>
+                </div>
+              </div>
+
               <p className="mt-4 text-xs leading-5 text-gray-500">
-                Seller verification status is controlled by
-                ANJIVO administration. Updating your business
-                details does not automatically approve your account.
+                Seller, KYC and payout verification status is controlled by
+                ANJIVO administration. Updating business details does not
+                automatically approve or verify your account.
               </p>
 
             </div>
