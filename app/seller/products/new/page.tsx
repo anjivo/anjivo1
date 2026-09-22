@@ -216,8 +216,8 @@ export default function NewSellerProductPage() {
   ======================================================= */
 
   const [
-    setName,
-    setSetName,
+    wholesaleSetName,
+    setWholesaleSetName,
   ] = useState("");
 
   const [
@@ -496,7 +496,7 @@ export default function NewSellerProductPage() {
         "PIECE"
       );
 
-      setSetName("");
+      setWholesaleSetName("");
 
       setSetSize("1");
 
@@ -553,7 +553,7 @@ export default function NewSellerProductPage() {
     if (
       unit === "PIECE"
     ) {
-      setSetName("");
+      setWholesaleSetName("");
 
       setSetSize("1");
 
@@ -809,7 +809,7 @@ export default function NewSellerProductPage() {
       }
 
       if (
-        !setName.trim()
+        !wholesaleSetName.trim()
       ) {
         return "Enter a name for the wholesale set.";
       }
@@ -1393,7 +1393,7 @@ export default function NewSellerProductPage() {
                   ),
 
                 setName:
-                  setName.trim(),
+                  wholesaleSetName.trim(),
 
                 composition:
                   setComposition,
@@ -2184,12 +2184,12 @@ export default function NewSellerProductPage() {
                   <input
                     type="text"
                     value={
-                      setName
+                      wholesaleSetName
                     }
                     onChange={(
                       event
                     ) =>
-                      setSetName(
+                      setWholesaleSetName(
                         event.target.value
                       )
                     }
@@ -3003,7 +3003,7 @@ export default function NewSellerProductPage() {
               </div>
 
               <h3 className="mt-4 text-lg font-black">
-                {setName ||
+                {wholesaleSetName ||
                   (wholesaleUnit ===
                   "SET"
                     ? "Wholesale Set"
