@@ -1,283 +1,273 @@
 import { NextResponse } from "next/server";
+import {
+  Timestamp,
+} from "firebase-admin/firestore";
 
 import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  query,
-  where,
-} from "firebase/firestore";
+  adminDb,
+} from "@/lib/firebase-admin";
 
-import { db } from "@/lib/firebase";
+import {
+  verifyIdToken,
+} from "@/lib/firebase-admin-auth";
 
-type RequestItem = {
-  productId: string;
-  sellerId: string;
-  quantity: number;
-  pricingType: "retail" | "wholesale";
+export const runtime = "nodejs";
+
+type PricingType =
+  | "retail"
+  | "wholesale";
+
+type RequestedItem = {
+  id?: unknown;
+  productId?: unknown;
+  sellerId?: unknown;
+  quantity?: unknown;
+  pricingType?: unknown;
+};
+
+type WholesaleTier = {
+  minQuantity: number;
+  maxQuantity?: number;
+  price: number;
 };
 
 type ProductData = {
-  id: string;
-  name: string;
-  slug?: string;
-
-  sellerId: string;
-  sellerName?: string;
-
-  status:
-    | "active"
-    | "draft"
-    | "out_of_stock"
-    | "blocked";
-
-  stock: number;
-
-  mrp: number;
-  retailPrice: number;
-  wholesalePrice: number;
-
-  moq: number;
-
-  wholesaleTiers?: {
-    minQuantity: number;
-    maxQuantity?: number;
-    price: number;
-  }[];
-
-  images?: string[];
+  name?: unknown;
+  slug?: unknown;
+  sellerId?: unknown;
+  sellerName?: unknown;
+  status?: unknown;
+  stock?: unknown;
+  mrp?: unknown;
+  retailPrice?: unknown;
+  wholesalePrice?: unknown;
+  moq?: unknown;
+  wholesaleTiers?: unknown;
+  images?: unknown;
+  categoryId?: unknown;
+  categoryName?: unknown;
 };
 
 type ValidatedItem = {
   productId: string;
   sellerId: string;
-
+  sellerName: string;
   name: string;
-  sellerName: string;
-
+  slug: string;
   image: string;
-
   quantity: number;
-
-  pricingType: "retail" | "wholesale";
-
+  pricingType: PricingType;
   unitPrice: number;
-  subtotal: number;
-
-  moq: number;
+  lineTotal: number;
   stock: number;
+  moq: number;
+  retailPrice: number;
+  wholesalePrice: number;
+  wholesaleTiers: WholesaleTier[];
 };
 
-type ValidationError = {
-  productId?: string;
-  code: string;
-  message: string;
-};
-
-type SellerGroup = {
-  sellerId: string;
-  sellerName: string;
-  itemCount: number;
-  subtotal: number;
-};
+function stringValue(
+  value: unknown
+): string {
+  return typeof value === "string"
+    ? value.trim()
+    : "";
+}
 
 function numberValue(
   value: unknown,
   fallback = 0
 ): number {
-  return typeof value === "number" &&
+  if (
+    typeof value === "number" &&
     Number.isFinite(value)
-    ? value
-    : fallback;
+  ) {
+    return value;
+  }
+
+  if (
+    typeof value === "string" &&
+    value.trim() !== ""
+  ) {
+    const parsed =
+      Number(value);
+
+    return Number.isFinite(parsed)
+      ? parsed
+      : fallback;
+  }
+
+  return fallback;
 }
 
-function stringValue(
-  value: unknown,
-  fallback = ""
-): string {
-  return typeof value === "string"
-    ? value
-    : fallback;
+function normalizePricingType(
+  value: unknown
+): PricingType | null {
+  if (
+    value === "retail" ||
+    value === "wholesale"
+  ) {
+    return value;
+  }
+
+  return null;
+}
+
+function normalizeWholesaleTiers(
+  value: unknown
+): WholesaleTier[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((tier) => {
+      if (
+        !tier ||
+        typeof tier !== "object"
+      ) {
+        return null;
+      }
+
+      const source =
+        tier as Record<
+          string,
+          unknown
+        >;
+
+      const minQuantity =
+        numberValue(
+          source.minQuantity
+        );
+
+      const maxQuantityRaw =
+        source.maxQuantity;
+
+      const price =
+        numberValue(
+          source.price
+        );
+
+      if (
+        minQuantity <= 0 ||
+        price < 0
+      ) {
+        return null;
+      }
+
+      const maxQuantity =
+        maxQuantityRaw === undefined ||
+        maxQuantityRaw === null ||
+        maxQuantityRaw === ""
+          ? undefined
+          : numberValue(
+              maxQuantityRaw
+            );
+
+      return {
+        minQuantity,
+        ...(maxQuantity !== undefined
+          ? { maxQuantity }
+          : {}),
+        price,
+      };
+    })
+    .filter(
+      (
+        tier
+      ): tier is WholesaleTier =>
+        tier !== null
+    )
+    .sort(
+      (a, b) =>
+        b.minQuantity -
+        a.minQuantity
+    );
 }
 
 function getWholesalePrice(
-  product: ProductData,
+  wholesalePrice: number,
+  wholesaleTiers: WholesaleTier[],
   quantity: number
 ): number {
-  const tiers =
-    Array.isArray(
-      product.wholesaleTiers
-    )
-      ? [...product.wholesaleTiers]
-      : [];
+  for (
+    const tier of wholesaleTiers
+  ) {
+    const minimumMatches =
+      quantity >= tier.minQuantity;
 
-  tiers.sort(
-    (a, b) =>
-      numberValue(b.minQuantity) -
-      numberValue(a.minQuantity)
-  );
+    const maximumMatches =
+      tier.maxQuantity ===
+        undefined ||
+      quantity <=
+        tier.maxQuantity;
 
-  const matchingTier =
-    tiers.find(
-      (tier) =>
-        quantity >=
-          numberValue(
-            tier.minQuantity
-          ) &&
-        (tier.maxQuantity ===
-          undefined ||
-          quantity <=
-            numberValue(
-              tier.maxQuantity
-            ))
-    );
-
-  if (matchingTier) {
-    return numberValue(
-      matchingTier.price
-    );
+    if (
+      minimumMatches &&
+      maximumMatches
+    ) {
+      return tier.price;
+    }
   }
 
-  return numberValue(
-    product.wholesalePrice
-  );
+  return wholesalePrice;
 }
 
-function normaliseProduct(
-  id: string,
-  data: Record<string, unknown>
-): ProductData {
-  return {
-    id,
+function getErrorMessage(
+  error: unknown
+): string {
+  if (
+    error instanceof Error
+  ) {
+    return error.message;
+  }
 
-    name: stringValue(
-      data.name,
-      "Product"
-    ),
-
-    slug: stringValue(
-      data.slug
-    ),
-
-    sellerId: stringValue(
-      data.sellerId
-    ),
-
-    sellerName: stringValue(
-      data.sellerName,
-      "ANJIVO Seller"
-    ),
-
-    status:
-      data.status === "draft" ||
-      data.status ===
-        "out_of_stock" ||
-      data.status === "blocked"
-        ? data.status
-        : "active",
-
-    stock: numberValue(
-      data.stock
-    ),
-
-    mrp: numberValue(
-      data.mrp
-    ),
-
-    retailPrice: numberValue(
-      data.retailPrice
-    ),
-
-    wholesalePrice:
-      numberValue(
-        data.wholesalePrice
-      ),
-
-    moq: numberValue(
-      data.moq,
-      1
-    ),
-
-    wholesaleTiers:
-      Array.isArray(
-        data.wholesaleTiers
-      )
-        ? data.wholesaleTiers
-            .filter(
-              (tier) =>
-                tier &&
-                typeof tier ===
-                  "object"
-            )
-            .map(
-              (tier) =>
-                tier as {
-                  minQuantity: number;
-                  maxQuantity?: number;
-                  price: number;
-                }
-            )
-        : [],
-
-    images:
-      Array.isArray(
-        data.images
-      )
-        ? data.images.filter(
-            (image) =>
-              typeof image ===
-              "string"
-          )
-        : [],
-  };
+  return "Checkout validation failed.";
 }
 
 export async function POST(
   request: Request
 ) {
   try {
+    /*
+     * -----------------------------------------
+     * 1. Authenticate Firebase user
+     * -----------------------------------------
+     */
+
+    const decodedToken =
+      await verifyIdToken(
+        request.headers.get(
+          "authorization"
+        )
+      );
+
+    const userId =
+      decodedToken.uid;
+
+    /*
+     * -----------------------------------------
+     * 2. Read request body
+     * -----------------------------------------
+     */
+
     const body =
       await request.json();
 
-    const userId =
-      stringValue(body?.userId);
-
-    const items =
-      body?.items;
-
-    if (!userId) {
-      return NextResponse.json(
-        {
-          success: false,
-          errors: [
-            {
-              code: "AUTH_REQUIRED",
-              message:
-                "Please login before checkout.",
-            },
-          ],
-        },
-        {
-          status: 401,
-        }
-      );
-    }
+    const requestedItems =
+      Array.isArray(body?.items)
+        ? (body.items as RequestedItem[])
+        : [];
 
     if (
-      !Array.isArray(items) ||
-      items.length === 0
+      requestedItems.length === 0
     ) {
       return NextResponse.json(
         {
           success: false,
-          errors: [
-            {
-              code: "EMPTY_CART",
-              message:
-                "Your cart is empty.",
-            },
-          ],
+          message:
+            "Your cart is empty.",
+          errors: [],
         },
         {
           status: 400,
@@ -285,152 +275,77 @@ export async function POST(
       );
     }
 
-    const requestItems: RequestItem[] =
-      items.map(
-        (item: unknown) => {
-          const value =
-            item as Record<
-              string,
-              unknown
-            >;
+    /*
+     * -----------------------------------------
+     * 3. Normalize requested items
+     * -----------------------------------------
+     */
 
-          const pricingType =
-            value.pricingType ===
-            "wholesale"
-              ? "wholesale"
-              : "retail";
+    const normalizedItems =
+      requestedItems.map(
+        (item) => ({
+          productId:
+            stringValue(
+              item.productId ??
+                item.id
+            ),
 
-          return {
-            productId:
-              stringValue(
-                value.id ??
-                  value.productId
-              ),
+          sellerId:
+            stringValue(
+              item.sellerId
+            ),
 
-            sellerId:
-              stringValue(
-                value.sellerId
-              ),
-
-            quantity: Math.floor(
+          quantity:
+            Math.floor(
               numberValue(
-                value.quantity
+                item.quantity
               )
             ),
 
-            pricingType,
-          };
-        }
+          pricingType:
+            normalizePricingType(
+              item.pricingType
+            ),
+        })
       );
 
-    const errors: ValidationError[] =
-      [];
-
-    const validatedItems: ValidatedItem[] =
-      [];
+    const errors: Array<{
+      productId?: string;
+      sellerId?: string;
+      message: string;
+    }> = [];
 
     /*
-     * Important:
-     * Product IDs are collected first.
-     * Actual product documents are then
-     * fetched from Firestore.
-     *
-     * Browser-supplied price, stock,
-     * seller name etc. are NOT trusted.
+     * -----------------------------------------
+     * 4. Basic request validation
+     * -----------------------------------------
      */
 
-    const uniqueProductIds =
-      Array.from(
-        new Set(
-          requestItems
-            .map(
-              (item) =>
-                item.productId
-            )
-            .filter(Boolean)
-        )
-      );
+    for (
+      const item of normalizedItems
+    ) {
+      if (!item.productId) {
+        errors.push({
+          message:
+            "Product ID is missing.",
+        });
 
-    const productSnapshots =
-      await Promise.all(
-        uniqueProductIds.map(
-          async (productId) => {
-            const snapshot =
-              await getDoc(
-                doc(
-                  db,
-                  "products",
-                  productId
-                )
-              );
-
-            return {
-              productId,
-              snapshot,
-            };
-          }
-        )
-      );
-
-    const productMap =
-      new Map<
-        string,
-        ProductData
-      >();
-
-    for (const {
-      productId,
-      snapshot,
-    } of productSnapshots) {
-      if (!snapshot.exists()) {
         continue;
       }
 
-      const data =
-        snapshot.data() as Record<
-          string,
-          unknown
-        >;
-
-      productMap.set(
-        productId,
-        normaliseProduct(
-          productId,
-          data
-        )
-      );
-    }
-
-    /*
-     * Prevent duplicate product/seller/
-     * pricing combinations from being
-     * accidentally processed multiple times.
-     */
-
-    const combinationMap =
-      new Map<
-        string,
-        RequestItem
-      >();
-
-    for (const item of requestItems) {
-      if (
-        !item.productId ||
-        !item.sellerId
-      ) {
+      if (!item.sellerId) {
         errors.push({
           productId:
             item.productId,
-          code: "INVALID_ITEM",
           message:
-            "One of the cart items is invalid.",
+            "Seller ID is missing.",
         });
 
         continue;
       }
 
       if (
-        !Number.isFinite(
+        !Number.isInteger(
           item.quantity
         ) ||
         item.quantity <= 0
@@ -438,72 +353,227 @@ export async function POST(
         errors.push({
           productId:
             item.productId,
-          code: "INVALID_QUANTITY",
+          sellerId:
+            item.sellerId,
           message:
-            "Product quantity must be greater than zero.",
+            "Invalid product quantity.",
         });
-
-        continue;
       }
 
-      const key = [
-        item.productId,
-        item.sellerId,
-        item.pricingType,
-      ].join("|");
-
-      const existing =
-        combinationMap.get(key);
-
-      if (existing) {
-        existing.quantity +=
-          item.quantity;
-      } else {
-        combinationMap.set(
-          key,
-          {
-            ...item,
-          }
-        );
-      }
-    }
-
-    const finalRequestItems =
-      Array.from(
-        combinationMap.values()
-      );
-
-    for (const item of finalRequestItems) {
-      const product =
-        productMap.get(
-          item.productId
-        );
-
-      if (!product) {
+      if (!item.pricingType) {
         errors.push({
           productId:
             item.productId,
-          code: "PRODUCT_NOT_FOUND",
+          sellerId:
+            item.sellerId,
           message:
-            "This product is no longer available.",
+            "Invalid pricing type.",
+        });
+      }
+    }
+
+    if (errors.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Some cart items are invalid.",
+          errors,
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    /*
+     * -----------------------------------------
+     * 5. Prevent duplicate product/seller/
+     *    pricing combinations
+     * -----------------------------------------
+     */
+
+    const uniqueKeys =
+      new Set<string>();
+
+    for (
+      const item of normalizedItems
+    ) {
+      const key =
+        `${item.productId}:${item.sellerId}:${item.pricingType}`;
+
+      if (
+        uniqueKeys.has(key)
+      ) {
+        errors.push({
+          productId:
+            item.productId,
+          sellerId:
+            item.sellerId,
+          message:
+            "Duplicate product found in checkout.",
+        });
+      }
+
+      uniqueKeys.add(key);
+    }
+
+    if (errors.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Duplicate cart items detected.",
+          errors,
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    /*
+     * -----------------------------------------
+     * 6. Read current products directly
+     *    from Firestore Admin SDK
+     * -----------------------------------------
+     */
+
+    const validatedItems: ValidatedItem[] =
+      [];
+
+    /*
+     * Track total requested quantity
+     * per product.
+     *
+     * This prevents:
+     *
+     * Retail quantity 5
+     * +
+     * Wholesale quantity 10
+     *
+     * from bypassing total stock.
+     */
+
+    const requestedQuantityByProduct =
+      new Map<string, number>();
+
+    for (
+      const item of normalizedItems
+    ) {
+      const current =
+        requestedQuantityByProduct.get(
+          item.productId
+        ) ?? 0;
+
+      requestedQuantityByProduct.set(
+        item.productId,
+        current + item.quantity
+      );
+    }
+
+    /*
+     * -----------------------------------------
+     * 7. Validate every product
+     * -----------------------------------------
+     */
+
+    for (
+      const item of normalizedItems
+    ) {
+      const productRef =
+        adminDb
+          .collection("products")
+          .doc(item.productId);
+
+      const productSnapshot =
+        await productRef.get();
+
+      if (
+        !productSnapshot.exists
+      ) {
+        errors.push({
+          productId:
+            item.productId,
+          sellerId:
+            item.sellerId,
+          message:
+            "Product is no longer available.",
         });
 
         continue;
       }
 
+      const product =
+        productSnapshot.data() as ProductData;
+
+      const actualSellerId =
+        stringValue(
+          product.sellerId
+        );
+
+      const status =
+        stringValue(
+          product.status
+        );
+
+      const stock =
+        Math.max(
+          0,
+          Math.floor(
+            numberValue(
+              product.stock
+            )
+          )
+        );
+
+      const retailPrice =
+        Math.max(
+          0,
+          numberValue(
+            product.retailPrice
+          )
+        );
+
+      const wholesalePrice =
+        Math.max(
+          0,
+          numberValue(
+            product.wholesalePrice
+          )
+        );
+
+      const moq =
+        Math.max(
+          1,
+          Math.floor(
+            numberValue(
+              product.moq,
+              1
+            )
+          )
+        );
+
+      const wholesaleTiers =
+        normalizeWholesaleTiers(
+          product.wholesaleTiers
+        );
+
       /*
-       * Seller validation
+       * Seller verification
        */
+
       if (
-        product.sellerId !==
+        actualSellerId !==
         item.sellerId
       ) {
         errors.push({
           productId:
             item.productId,
-          code: "SELLER_MISMATCH",
+          sellerId:
+            item.sellerId,
           message:
-            "Product seller information has changed. Please refresh your cart.",
+            "Seller information has changed. Please refresh your cart.",
         });
 
         continue;
@@ -512,48 +582,43 @@ export async function POST(
       /*
        * Product status
        */
+
       if (
-        product.status !==
-        "active"
+        status !== "active"
       ) {
         errors.push({
           productId:
             item.productId,
-          code: "PRODUCT_UNAVAILABLE",
+          sellerId:
+            item.sellerId,
           message:
-            `${product.name} is currently unavailable.`,
+            "This product is currently unavailable.",
         });
 
         continue;
       }
 
       /*
-       * Stock validation
+       * Stock
        */
+
+      const totalRequestedQuantity =
+        requestedQuantityByProduct.get(
+          item.productId
+        ) ?? item.quantity;
+
       if (
-        product.stock <= 0
+        stock <= 0 ||
+        totalRequestedQuantity >
+          stock
       ) {
         errors.push({
           productId:
             item.productId,
-          code: "OUT_OF_STOCK",
+          sellerId:
+            item.sellerId,
           message:
-            `${product.name} is out of stock.`,
-        });
-
-        continue;
-      }
-
-      if (
-        item.quantity >
-        product.stock
-      ) {
-        errors.push({
-          productId:
-            item.productId,
-          code: "INSUFFICIENT_STOCK",
-          message:
-            `${product.name} has only ${product.stock} units available.`,
+            `Only ${stock} unit(s) are currently available.`,
         });
 
         continue;
@@ -562,16 +627,11 @@ export async function POST(
       /*
        * Wholesale validation
        */
+
       if (
         item.pricingType ===
         "wholesale"
       ) {
-        const moq =
-          Math.max(
-            1,
-            product.moq
-          );
-
         if (
           item.quantity <
           moq
@@ -579,9 +639,59 @@ export async function POST(
           errors.push({
             productId:
               item.productId,
-            code: "MOQ_NOT_MET",
+            sellerId:
+              item.sellerId,
             message:
-              `${product.name} requires a minimum wholesale quantity of ${moq}.`,
+              `Minimum wholesale quantity is ${moq}.`,
+          });
+
+          continue;
+        }
+
+        /*
+         * Current checkout user must be
+         * authorized for wholesale.
+         *
+         * For now we check the user's
+         * Firestore customer profile.
+         */
+
+        const userSnapshot =
+          await adminDb
+            .collection("users")
+            .doc(userId)
+            .get();
+
+        const userData =
+          userSnapshot.exists
+            ? userSnapshot.data()
+            : null;
+
+        const customerType =
+          stringValue(
+            userData?.customerType ??
+              userData?.role
+          );
+
+        const isWholesaleCustomer =
+          customerType ===
+          "WHOLESALE_CUSTOMER";
+
+        const isSeller =
+          customerType ===
+          "SELLER";
+
+        if (
+          !isWholesaleCustomer &&
+          !isSeller
+        ) {
+          errors.push({
+            productId:
+              item.productId,
+            sellerId:
+              item.sellerId,
+            message:
+              "Wholesale pricing is available only for approved wholesale customers.",
           });
 
           continue;
@@ -589,103 +699,150 @@ export async function POST(
       }
 
       /*
-       * Price calculation happens
-       * from Firestore product data.
+       * Calculate authoritative price
        */
-      let unitPrice =
-        product.retailPrice;
 
-      if (
+      const unitPrice =
         item.pricingType ===
         "wholesale"
-      ) {
-        unitPrice =
-          getWholesalePrice(
-            product,
-            item.quantity
-          );
-      }
+          ? getWholesalePrice(
+              wholesalePrice,
+              wholesaleTiers,
+              item.quantity
+            )
+          : retailPrice;
 
       if (
-        !Number.isFinite(
-          unitPrice
-        ) ||
         unitPrice < 0
       ) {
         errors.push({
           productId:
             item.productId,
-          code: "INVALID_PRICE",
+          sellerId:
+            item.sellerId,
           message:
-            `${product.name} has an invalid price configuration.`,
+            "Invalid product price.",
         });
 
         continue;
       }
 
-      const subtotal =
-        unitPrice *
-        item.quantity;
+      const images =
+        Array.isArray(
+          product.images
+        )
+          ? product.images
+              .filter(
+                (
+                  image
+                ): image is string =>
+                  typeof image ===
+                  "string" &&
+                  image.trim()
+                    .length > 0
+              )
+          : [];
 
       validatedItems.push({
         productId:
-          product.id,
+          item.productId,
 
         sellerId:
-          product.sellerId,
-
-        name:
-          product.name,
+          item.sellerId,
 
         sellerName:
-          product.sellerName ||
+          stringValue(
+            product.sellerName
+          ) ||
           "ANJIVO Seller",
 
+        name:
+          stringValue(
+            product.name
+          ) ||
+          "Product",
+
+        slug:
+          stringValue(
+            product.slug
+          ),
+
         image:
-          product.images?.[0] ||
-          "",
+          images[0] || "",
 
         quantity:
           item.quantity,
 
         pricingType:
-          item.pricingType,
+          item.pricingType!,
 
         unitPrice,
 
-        subtotal,
+        lineTotal:
+          unitPrice *
+          item.quantity,
 
-        moq:
-          product.moq,
+        stock,
 
-        stock:
-          product.stock,
+        moq,
+
+        retailPrice,
+
+        wholesalePrice,
+
+        wholesaleTiers,
       });
     }
 
     /*
-     * Seller-wise aggregation
+     * -----------------------------------------
+     * 8. Return validation errors
+     * -----------------------------------------
      */
-    const sellerMap =
+
+    if (
+      errors.length > 0
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Please review your cart before checkout.",
+          errors,
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    /*
+     * -----------------------------------------
+     * 9. Seller-wise grouping
+     * -----------------------------------------
+     */
+
+    const sellerGroups =
       new Map<
         string,
-        SellerGroup
+        {
+          sellerId: string;
+          sellerName: string;
+          items: ValidatedItem[];
+          subtotal: number;
+        }
       >();
 
-    for (const item of validatedItems) {
+    for (
+      const item of validatedItems
+    ) {
       const existing =
-        sellerMap.get(
+        sellerGroups.get(
           item.sellerId
         );
 
-      if (existing) {
-        existing.itemCount +=
-          item.quantity;
-
-        existing.subtotal +=
-          item.subtotal;
-      } else {
-        sellerMap.set(
+      if (!existing) {
+        sellerGroups.set(
           item.sellerId,
           {
             sellerId:
@@ -694,29 +851,32 @@ export async function POST(
             sellerName:
               item.sellerName,
 
-            itemCount:
-              item.quantity,
+            items: [item],
 
             subtotal:
-              item.subtotal,
+              item.lineTotal,
           }
         );
+      } else {
+        existing.items.push(
+          item
+        );
+
+        existing.subtotal +=
+          item.lineTotal;
       }
     }
 
-    const sellerGroups =
-      Array.from(
-        sellerMap.values()
-      );
-
     /*
-     * Financial summary
+     * -----------------------------------------
+     * 10. Calculate totals
+     * -----------------------------------------
      */
+
     const subtotal =
       validatedItems.reduce(
         (sum, item) =>
-          sum +
-          item.subtotal,
+          sum + item.lineTotal,
         0
       );
 
@@ -729,8 +889,7 @@ export async function POST(
         )
         .reduce(
           (sum, item) =>
-            sum +
-            item.subtotal,
+            sum + item.lineTotal,
           0
         );
 
@@ -743,88 +902,177 @@ export async function POST(
         )
         .reduce(
           (sum, item) =>
-            sum +
-            item.subtotal,
+            sum + item.lineTotal,
           0
         );
 
-    const totalItems =
-      validatedItems.reduce(
-        (sum, item) =>
-          sum +
-          item.quantity,
-        0
-      );
-
     /*
-     * Shipping and coupon are intentionally
-     * not trusted/calculated here yet.
+     * Shipping and discount will later
+     * be calculated server-side from:
      *
-     * They will be added through the
-     * secure checkout/order architecture.
+     * - pincode
+     * - shipping partner
+     * - coupon
+     * - seller rules
+     * - promotion
+     * - order value
      */
+
     const shippingCharge = 0;
     const discount = 0;
 
     const total =
-      Math.max(
-        0,
-        subtotal +
-          shippingCharge -
-          discount
-      );
+      subtotal +
+      shippingCharge -
+      discount;
 
-    return NextResponse.json({
-      success:
-        errors.length === 0,
+    /*
+     * -----------------------------------------
+     * 11. Response
+     * -----------------------------------------
+     */
 
-      userId,
+    return NextResponse.json(
+      {
+        success: true,
 
-      items:
-        validatedItems,
+        userId,
 
-      errors,
+        items:
+          validatedItems.map(
+            (item) => ({
+              productId:
+                item.productId,
 
-      sellerGroups,
+              sellerId:
+                item.sellerId,
 
-      sellerCount:
-        sellerGroups.length,
+              sellerName:
+                item.sellerName,
 
-      totalItems,
+              name:
+                item.name,
 
-      subtotal,
+              slug:
+                item.slug,
 
-      retailSubtotal,
+              image:
+                item.image,
 
-      wholesaleSubtotal,
+              quantity:
+                item.quantity,
 
-      shippingCharge,
+              pricingType:
+                item.pricingType,
 
-      discount,
+              unitPrice:
+                item.unitPrice,
 
-      total,
+              lineTotal:
+                item.lineTotal,
 
-      currency: "INR",
+              moq:
+                item.moq,
 
-      validatedAt:
-        new Date().toISOString(),
-    });
+              stock:
+                item.stock,
+            })
+          ),
+
+        sellerGroups:
+          Array.from(
+            sellerGroups.values()
+          ).map(
+            (group) => ({
+              sellerId:
+                group.sellerId,
+
+              sellerName:
+                group.sellerName,
+
+              subtotal:
+                group.subtotal,
+
+              items:
+                group.items.map(
+                  (item) => ({
+                    productId:
+                      item.productId,
+
+                    name:
+                      item.name,
+
+                    quantity:
+                      item.quantity,
+
+                    pricingType:
+                      item.pricingType,
+
+                    unitPrice:
+                      item.unitPrice,
+
+                    lineTotal:
+                      item.lineTotal,
+                  })
+                ),
+            })
+          ),
+
+        subtotal,
+
+        retailSubtotal,
+
+        wholesaleSubtotal,
+
+        shippingCharge,
+
+        discount,
+
+        total,
+
+        validatedAt:
+          Timestamp.now(),
+      },
+      {
+        status: 200,
+      }
+    );
   } catch (error) {
     console.error(
-      "Checkout validation API error:",
+      "Checkout validation error:",
       error
     );
+
+    const message =
+      getErrorMessage(error);
+
+    if (
+      message ===
+        "Authentication required." ||
+      message ===
+        "Authentication token missing."
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message,
+        },
+        {
+          status: 401,
+        }
+      );
+    }
 
     return NextResponse.json(
       {
         success: false,
-        errors: [
-          {
-            code: "CHECKOUT_VALIDATION_FAILED",
-            message:
-              "Unable to validate checkout. Please try again.",
-          },
-        ],
+        message:
+          "Unable to validate checkout right now. Please try again.",
+        error:
+          process.env.NODE_ENV ===
+          "development"
+            ? message
+            : undefined,
       },
       {
         status: 500,
