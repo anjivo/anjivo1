@@ -138,7 +138,7 @@ export default function EditSellerProductPage() {
   const [setBreakAllowed, setSetBreakAllowed] =
     useState(true);
 
-  const [setName, setSetName] =
+  const [wholesaleSetName, setWholesaleSetName] =
     useState("");
 
   const [setSize, setSetSize] =
@@ -320,7 +320,7 @@ export default function EditSellerProductPage() {
               loadedConfig?.setBreakAllowed ?? true
             );
 
-            setSetName(
+            setWholesaleSetName(
               loadedConfig?.setName ?? ""
             );
 
@@ -840,8 +840,8 @@ export default function EditSellerProductPage() {
           saleUnit: "SET",
           setBreakAllowed,
           setSize: setSizeValue,
-          ...(setName.trim()
-            ? { setName: setName.trim() }
+          ...(wholesaleSetName.trim()
+            ? { setName: wholesaleSetName.trim() }
             : {}),
           composition,
           moqSets: moqSetsValue,
@@ -1765,9 +1765,9 @@ export default function EditSellerProductPage() {
                     Set Name
                   </label>
                   <input
-                    value={setName}
+                    value={wholesaleSetName}
                     onChange={(event) =>
-                      setSetName(event.target.value)
+                      setWholesaleSetName(event.target.value)
                     }
                     placeholder="e.g. Full Size Set"
                     className="mt-2 w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
