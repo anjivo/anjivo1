@@ -4,14 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
-  query,
-  updateDoc,
-  where,
-  serverTimestamp,
 } from "firebase/firestore";
 import { useRouter } from "next/navigation";
 
@@ -72,9 +66,6 @@ export default function SellerOrdersPage() {
 
   const [error, setError] =
     useState("");
-
-  const [updatingOrder, setUpdatingOrder] =
-    useState<string | null>(null);
 
   useEffect(() => {
     const unsubscribe =
@@ -206,35 +197,6 @@ export default function SellerOrdersPage() {
     }
   }
 
-  async function updateOrderStatus(
-    orderId: string,
-    status: SellerOrder["status"]
-  ) {
-    if (!sellerId) return;
-
-    try {
-      setUpdatingOrder(orderId);
-      setError("");
-
-      /*
-       * IMPORTANT:
-       * The current Firestore rule only allows
-       * ADMIN to update orders.
-       *
-       * So this action is intentionally
-       * blocked at UI level until seller-order
-       * update rules are enabled.
-       */
-      setError(
-        "Seller order status updates will be enabled after the seller order security rules are added."
-      );
-
-      void status;
-    } finally {
-      setUpdatingOrder(null);
-    }
-  }
-
   const filteredOrders =
     useMemo(() => {
       const searchText =
@@ -246,7 +208,7 @@ export default function SellerOrdersPage() {
         (order) => {
           if (
             filter !== "all" &&
-            order.status !== filter
+            getEffectiveStatus(order) !== filter
           ) {
             return false;
           }
@@ -517,13 +479,6 @@ export default function SellerOrdersPage() {
                   <SellerOrderCard
                     key={order.id}
                     order={order}
-                    processing={
-                      updatingOrder ===
-                      order.id
-                    }
-                    onStatusChange={
-                      updateOrderStatus
-                    }
                   />
                 )
               )}
@@ -544,15 +499,8 @@ export default function SellerOrdersPage() {
 
 function SellerOrderCard({
   order,
-  processing,
-  onStatusChange,
 }: {
   order: SellerOrder;
-  processing: boolean;
-  onStatusChange: (
-    orderId: string,
-    status: SellerOrder["status"]
-  ) => void;
 }) {
   const address =
     order.shippingAddress;
@@ -586,8 +534,7 @@ function SellerOrderCard({
 
           <StatusBadge
             status={
-              order.status ||
-              "pending"
+              getEffectiveStatus(order)
             }
           />
 
@@ -628,9 +575,31 @@ function SellerOrderCard({
 
           {order.items.map(
             (item, index) => {
+              const isSet =
+                item.wholesaleUnit === "SET" ||
+                item.isSet === true;
+
+              const piecesPerSet =
+                item.piecesPerSet &&
+                item.piecesPerSet > 0
+                  ? item.piecesPerSet
+                  : undefined;
+
+              const actualPieces =
+                isSet && piecesPerSet
+                  ? item.quantity * piecesPerSet
+                  : item.quantity;
+
+              const unitLabel = isSet
+                ? item.quantity === 1
+                  ? "Set"
+                  : "Sets"
+                : item.quantity === 1
+                  ? "Piece"
+                  : "Pieces";
+
               const lineTotal =
-                item.selectedPrice *
-                item.quantity;
+                item.selectedPrice * item.quantity;
 
               return (
                 <div
@@ -681,11 +650,52 @@ function SellerOrderCard({
                       </span>
 
                       <span className="rounded-full bg-white px-2 py-1 text-[8px] font-black">
-                        Qty{" "}
-                        {item.quantity}
+                        {item.quantity} {unitLabel}
                       </span>
 
+                      {isSet && piecesPerSet && (
+                        <span className="rounded-full bg-green-100 px-2 py-1 text-[8px] font-black text-green-700">
+                          1 Set = {piecesPerSet} Pieces
+                        </span>
+                      )}
+
+                      {item.setName && (
+                        <span className="rounded-full bg-orange-100 px-2 py-1 text-[8px] font-black text-orange-700">
+                          {item.setName}
+                        </span>
+                      )}
+
+                      {isSet && item.setBreakAllowed === false && (
+                        <span className="rounded-full bg-red-100 px-2 py-1 text-[8px] font-black text-red-700">
+                          Set Cannot Be Broken
+                        </span>
+                      )}
+
                     </div>
+
+                    {isSet && (
+                      <div className="mt-2 rounded-xl border border-gray-200 bg-white p-2">
+                        <p className="text-[9px] font-black text-gray-700">
+                          Set Details
+                        </p>
+                        <p className="mt-1 text-[9px] text-gray-500">
+                          Ordered: {item.quantity} {unitLabel} • Actual pieces: {actualPieces}
+                        </p>
+
+                        {item.setComposition && item.setComposition.length > 0 && (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {item.setComposition.map((part, partIndex) => (
+                              <span
+                                key={`${part.value}-${partIndex}`}
+                                className="rounded-md bg-gray-100 px-2 py-1 text-[8px] font-bold text-gray-600"
+                              >
+                                {part.value} × {part.quantity}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                   </div>
 
@@ -809,45 +819,25 @@ function SellerOrderCard({
         <div>
 
           <label className="text-[10px] font-black uppercase tracking-wide text-gray-400">
-            Order Status
+            Seller Fulfillment Status
           </label>
 
-          <select
-            value={
-              order.status ||
-              "pending"
-            }
-            disabled={processing}
-            onChange={(event) =>
-              onStatusChange(
-                order.id,
-                event.target
-                  .value as SellerOrder["status"]
-              )
-            }
-            className="mt-2 rounded-xl border border-gray-200 bg-white px-4 py-3 text-xs font-bold outline-none disabled:opacity-50"
-          >
-            {[
-              "pending",
-              "confirmed",
-              "processing",
-              "shipped",
-              "delivered",
-              "cancelled",
-              "returned",
-            ].map(
-              (status) => (
-                <option
-                  key={status}
-                  value={status}
-                >
-                  {formatStatus(
-                    status
-                  )}
-                </option>
-              )
-            )}
-          </select>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <StatusBadge
+              status={getEffectiveStatus(order)}
+            />
+
+            {order.fulfillmentStatus &&
+              order.fulfillmentStatus !== getEffectiveStatus(order) && (
+                <span className="rounded-full bg-gray-100 px-3 py-1 text-[9px] font-black uppercase text-gray-600">
+                  Fulfillment: {formatStatus(order.fulfillmentStatus)}
+                </span>
+              )}
+          </div>
+
+          <p className="mt-2 text-[9px] text-gray-400">
+            Status updates will be enabled through the secure seller order API.
+          </p>
 
         </div>
 
@@ -947,7 +937,7 @@ function StatCard({
 function StatusBadge({
   status,
 }: {
-  status: SellerOrder["status"];
+  status: string;
 }) {
   const value =
     status || "pending";
@@ -962,6 +952,10 @@ function StatusBadge({
       "bg-blue-100 text-blue-700",
     processing:
       "bg-purple-100 text-purple-700",
+    packed:
+      "bg-purple-100 text-purple-700",
+    out_for_delivery:
+      "bg-indigo-100 text-indigo-700",
     shipped:
       "bg-indigo-100 text-indigo-700",
     delivered:
@@ -970,6 +964,8 @@ function StatusBadge({
       "bg-red-100 text-red-700",
     returned:
       "bg-orange-100 text-orange-700",
+    refunded:
+      "bg-gray-100 text-gray-700",
   };
 
   return (
@@ -1014,6 +1010,16 @@ function PaymentBadge({
       {formatStatus(status)}
     </span>
   );
+}
+
+function getEffectiveStatus(
+  order: SellerOrder
+): NonNullable<SellerOrder["status"]> {
+  return (
+    order.fulfillmentStatus ||
+    order.status ||
+    "pending"
+  ) as NonNullable<SellerOrder["status"]>;
 }
 
 function formatStatus(
