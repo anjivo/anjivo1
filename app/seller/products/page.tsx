@@ -19,6 +19,81 @@ import {
 
 import type { Product } from "@/types/product";
 
+function getPiecesPerSet(product: Product): number {
+  const configured = Number(product.wholesaleConfiguration?.setSize ?? 0);
+
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
+  }
+
+  const composition = product.wholesaleConfiguration?.composition;
+
+  if (Array.isArray(composition)) {
+    const total = composition.reduce(
+      (sum, item) => sum + Number(item.quantity || 0),
+      0
+    );
+
+    if (Number.isFinite(total) && total > 0) {
+      return Math.floor(total);
+    }
+  }
+
+  return 0;
+}
+
+function getWholesaleDisplay(product: Product): {
+  label: string;
+  unitLabel: string;
+  price: number;
+} {
+  const config = product.wholesaleConfiguration;
+
+  if (config?.enabled && config.priceUnit === "SET") {
+    return {
+      label: "Wholesale Set",
+      unitLabel: config.setName
+        ? `${config.setName} / set`
+        : "per set",
+      price: product.wholesalePrice,
+    };
+  }
+
+  return {
+    label: "Wholesale",
+    unitLabel: " / piece",
+    price: product.wholesalePrice,
+  };
+}
+
+function getStockDisplay(product: Product): {
+  value: number;
+  label: string;
+} {
+  const piecesPerSet = getPiecesPerSet(product);
+  const isSetProduct =
+    product.wholesaleConfiguration?.enabled === true &&
+    product.wholesaleConfiguration.saleUnit === "SET";
+
+  if (isSetProduct && piecesPerSet > 0) {
+    return {
+      value: Math.floor(product.stock / piecesPerSet),
+      label: "sets available",
+    };
+  }
+
+  return {
+    value: product.stock,
+    label: "pieces",
+  };
+}
+
+function getSellingModeLabel(product: Product): string {
+  if (product.sellingMode === "SET") return "SET";
+  if (product.sellingMode === "BOTH") return "PIECE + SET";
+  return "PIECE";
+}
+
 type StatusFilter =
   | "all"
   | "active"
@@ -86,7 +161,27 @@ export default function SellerProductsPage() {
             return;
           }
 
-          if (userData.sellerStatus !== "approved") {
+          const sellerSnapshot = await getDoc(
+            doc(db, "sellers", user.uid)
+          );
+
+          const sellerData = sellerSnapshot.exists()
+            ? sellerSnapshot.data()
+            : null;
+
+          const sellerStatus = String(
+            sellerData?.status ??
+              sellerData?.sellerStatus ??
+              userData.sellerStatus ??
+              ""
+          ).toLowerCase();
+
+          const isApproved =
+            sellerStatus === "approved" ||
+            userData.adminApproved === true ||
+            sellerData?.adminApproved === true;
+
+          if (!isApproved) {
             setError(
               "Your seller account is not approved yet."
             );
@@ -443,6 +538,11 @@ export default function SellerProductsPage() {
               Manage your ANJIVO marketplace products,
               pricing and inventory.
             </p>
+
+            <p className="mt-2 max-w-3xl text-[11px] leading-5 text-gray-400">
+              Wholesale SET products keep their configured set composition
+              and cannot be treated as loose pieces when set breaking is disabled.
+            </p>
           </div>
 
           <Link
@@ -796,8 +896,8 @@ export default function SellerProductsPage() {
                     </span>
                   </div>
 
-                  {product.stock <= 5 &&
-                    product.stock > 0 && (
+                  {getStockDisplay(product).value <= 5 &&
+                    getStockDisplay(product).value > 0 && (
                       <div className="absolute bottom-3 left-3">
                         <span className="rounded-full bg-orange-500 px-3 py-1.5 text-[9px] font-black text-white shadow-sm">
                           LOW STOCK
@@ -839,17 +939,19 @@ export default function SellerProductsPage() {
 
                     <div className="rounded-xl bg-gray-50 p-3">
                       <p className="text-[9px] font-bold text-gray-400">
-                        Stock
+                        {getStockDisplay(product).label === "sets available"
+                          ? "Set Stock"
+                          : "Piece Stock"}
                       </p>
 
                       <p
                         className={`mt-1 text-sm font-black ${
-                          product.stock <= 5
+                          getStockDisplay(product).value <= 5
                             ? "text-orange-600"
                             : "text-gray-900"
                         }`}
                       >
-                        {product.stock.toLocaleString(
+                        {getStockDisplay(product).value.toLocaleString(
                           "en-IN"
                         )}
                       </p>
@@ -858,42 +960,80 @@ export default function SellerProductsPage() {
 
                   {/* WHOLESALE */}
 
-                  <div className="mt-2 rounded-xl bg-gray-50 p-3">
+                  {(() => {
+                    const wholesale = getWholesaleDisplay(product);
+                    const piecesPerSet = getPiecesPerSet(product);
+                    const stockDisplay = getStockDisplay(product);
+                    const config = product.wholesaleConfiguration;
 
-                    <div className="flex items-center justify-between">
+                    return (
+                      <div className="mt-2 rounded-xl bg-gray-50 p-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[9px] font-bold text-gray-400">
+                            {wholesale.label}
+                          </p>
 
-                      <p className="text-[9px] font-bold text-gray-400">
-                        Wholesale From
-                      </p>
+                          <p className="rounded-full bg-white px-2 py-1 text-[8px] font-black text-gray-500">
+                            {getSellingModeLabel(product)}
+                          </p>
+                        </div>
 
-                      <p className="text-[9px] font-bold text-gray-400">
-                        MOQ {product.moq}
-                      </p>
-                    </div>
+                        <div className="mt-2 flex items-end justify-between gap-3">
+                          <p className="text-sm font-black">
+                            ₹
+                            {wholesale.price.toLocaleString("en-IN")}
+                            <span className="ml-1 text-[9px] font-medium text-gray-400">
+                              {wholesale.unitLabel}
+                            </span>
+                          </p>
 
-                    <p className="mt-1 text-sm font-black">
-                      ₹
-                      {product.wholesalePrice.toLocaleString(
-                        "en-IN"
-                      )}
+                          <p className="text-[9px] font-bold text-gray-400">
+                            MOQ {config?.saleUnit === "SET"
+                              ? `${config.moqSets ?? product.moq} set${(config?.moqSets ?? product.moq) > 1 ? "s" : ""}`
+                              : product.moq}
+                          </p>
+                        </div>
 
-                      <span className="ml-1 text-[9px] font-medium text-gray-400">
-                        / piece
-                      </span>
-                    </p>
+                        {config?.saleUnit === "SET" &&
+                          piecesPerSet > 0 && (
+                            <p className="mt-1 text-[9px] font-semibold text-gray-500">
+                              {config.setName
+                                ? `${config.setName} • `
+                                : ""}
+                              1 set = {piecesPerSet} pieces
+                              {config.setBreakAllowed === false
+                                ? " • Set cannot be broken"
+                                : ""}
+                            </p>
+                          )}
 
-                    {product.wholesaleTiers?.length >
-                      0 && (
-                      <p className="mt-1 text-[9px] font-semibold text-gray-400">
-                        {product.wholesaleTiers.length}{" "}
-                        quantity tier
-                        {product.wholesaleTiers.length >
-                        1
-                          ? "s"
-                          : ""}
-                      </p>
-                    )}
-                  </div>
+                        {product.wholesaleTiers?.length > 0 && (
+                          <p className="mt-1 text-[9px] font-semibold text-gray-400">
+                            {product.wholesaleTiers.length} quantity tier
+                            {product.wholesaleTiers.length > 1 ? "s" : ""}
+                          </p>
+                        )}
+
+                        {config?.composition &&
+                          config.composition.length > 0 && (
+                            <p className="mt-1 truncate text-[9px] font-medium text-gray-400">
+                              Composition:{" "}
+                              {config.composition
+                                .map(
+                                  (item) =>
+                                    `${item.value} × ${item.quantity}`
+                                )
+                                .join(" • ")}
+                            </p>
+                          )}
+
+                        <p className="mt-2 text-[9px] font-bold text-gray-400">
+                          Available: {stockDisplay.value.toLocaleString("en-IN")}{" "}
+                          {stockDisplay.label}
+                        </p>
+                      </div>
+                    );
+                  })()}
 
                   {/* QUICK STOCK */}
 
