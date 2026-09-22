@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, type DocumentReference } from "firebase-admin/firestore";
 
 import { adminDb } from "@/lib/firebase-admin";
 import { verifyIdToken } from "@/lib/firebase-admin-auth";
@@ -461,7 +461,7 @@ export async function POST(request: Request) {
      */
     const result = await adminDb.runTransaction(async (transaction) => {
       const products = new Map<string, ProductData>();
-      const productRefs = new Map<string, FirebaseFirestore.DocumentReference>();
+      const productRefs = new Map<string, DocumentReference>();
 
       for (const item of requestedItems) {
         if (products.has(item.productId)) continue;
