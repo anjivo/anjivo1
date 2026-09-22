@@ -2,7 +2,11 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -17,13 +21,20 @@ import { getProductBySlug } from "@/lib/products";
 import { auth } from "@/lib/firebase";
 import { addToCart } from "@/lib/cart";
 
-import type { Product } from "@/types/product";
+import type {
+  Product,
+  WholesaleUnit,
+} from "@/types/product";
 
 type ProductPageProps = {
   params: Promise<{
     slug: string;
   }>;
 };
+
+type PricingType =
+  | "retail"
+  | "wholesale";
 
 export default function ProductDetailsPage({
   params,
@@ -39,13 +50,26 @@ export default function ProductDetailsPage({
   const [loading, setLoading] =
     useState(true);
 
+  const [pricingType, setPricingType] =
+    useState<PricingType>("retail");
+
+  const [wholesaleUnit, setWholesaleUnit] =
+    useState<WholesaleUnit>("PIECE");
+
+  /*
+   * Quantity means:
+   *
+   * Retail:
+   *   number of pieces
+   *
+   * Wholesale PIECE:
+   *   number of pieces
+   *
+   * Wholesale SET:
+   *   number of sets
+   */
   const [quantity, setQuantity] =
     useState(1);
-
-  const [pricingType, setPricingType] =
-    useState<"retail" | "wholesale">(
-      "retail"
-    );
 
   const [addingToCart, setAddingToCart] =
     useState(false);
@@ -96,31 +120,177 @@ export default function ProductDetailsPage({
   }, []);
 
   /* =======================================================
-     WHOLESALE PRICE
+     WHOLESALE CONFIG
   ======================================================= */
 
-  const wholesalePrice = useMemo(() => {
-    if (!product) {
-      return 0;
-    }
+  const wholesaleConfig =
+    product?.wholesaleConfiguration;
 
-    let price =
-      product.wholesalePrice;
+  const wholesaleEnabled =
+    Boolean(
+      wholesaleConfig?.enabled
+    ) &&
+    Array.isArray(
+      wholesaleConfig?.tiers
+    ) &&
+    wholesaleConfig.tiers.length > 0;
 
-    for (const tier of product.wholesaleTiers) {
-      if (
-        quantity >= tier.minQuantity &&
-        (
-          tier.maxQuantity === undefined ||
-          quantity <= tier.maxQuantity
+  const configuredWholesaleUnit =
+    wholesaleConfig?.saleUnit;
+
+  const setEnabled =
+    wholesaleEnabled &&
+    configuredWholesaleUnit ===
+      "SET" &&
+    Number(
+      wholesaleConfig?.setSize || 0
+    ) > 0;
+
+  const pieceWholesaleEnabled =
+    wholesaleEnabled &&
+    configuredWholesaleUnit ===
+      "PIECE";
+
+  /*
+   * Backward compatibility:
+   *
+   * Older products do not have
+   * wholesaleConfiguration.
+   *
+   * Such products continue to work
+   * as PIECE wholesale.
+   */
+  const effectiveWholesaleUnit =
+    wholesaleEnabled
+      ? wholesaleUnit
+      : "PIECE";
+
+  /* =======================================================
+     SET INFORMATION
+  ======================================================= */
+
+  const piecesPerSet =
+    setEnabled
+      ? Number(
+          wholesaleConfig?.setSize || 0
         )
-      ) {
-        price = tier.price;
-      }
-    }
+      : 0;
 
-    return price;
-  }, [product, quantity]);
+  const setName =
+    setEnabled
+      ? wholesaleConfig?.setName ||
+        "Wholesale Set"
+      : "";
+
+  const setBreakAllowed =
+    setEnabled
+      ? wholesaleConfig?.setBreakAllowed !==
+        false
+      : true;
+
+  const setComposition =
+    setEnabled
+      ? wholesaleConfig?.composition || []
+      : [];
+
+  const wholesaleMoq =
+    setEnabled
+      ? Math.max(
+          1,
+          Number(
+            wholesaleConfig?.moqSets ||
+              product?.moq ||
+              1
+          )
+        )
+      : Math.max(
+          1,
+          Number(
+            product?.moq || 1
+          )
+        );
+
+  /* =======================================================
+     WHOLESALE TIERS
+  ======================================================= */
+
+  const activeWholesaleTiers =
+    wholesaleEnabled
+      ? (
+          wholesaleConfig?.tiers?.length
+            ? wholesaleConfig.tiers
+            : product?.wholesaleTiers || []
+        )
+      : product?.wholesaleTiers || [];
+
+  const wholesalePrice =
+    useMemo(() => {
+      if (!product) {
+        return 0;
+      }
+
+      let price =
+        wholesaleEnabled &&
+        wholesaleConfig?.tiers?.length
+          ? Number(
+              wholesaleConfig.tiers[0]
+                ?.price || 0
+            )
+          : Number(
+              product.wholesalePrice || 0
+            );
+
+      const tiers =
+        [...activeWholesaleTiers]
+          .filter(
+            (tier) =>
+              Number(
+                tier.minQuantity
+              ) > 0 &&
+              Number(tier.price) > 0
+          )
+          .sort(
+            (a, b) =>
+              Number(b.minQuantity) -
+              Number(a.minQuantity)
+          );
+
+      for (const tier of tiers) {
+        const min =
+          Number(
+            tier.minQuantity
+          );
+
+        const max =
+          tier.maxQuantity ===
+            undefined ||
+          tier.maxQuantity === null
+            ? undefined
+            : Number(
+                tier.maxQuantity
+              );
+
+        if (
+          quantity >= min &&
+          (
+            max === undefined ||
+            quantity <= max
+          )
+        ) {
+          price =
+            Number(tier.price);
+          break;
+        }
+      }
+
+      return price;
+    }, [
+      product,
+      quantity,
+      wholesaleEnabled,
+      wholesaleConfig,
+      activeWholesaleTiers,
+    ]);
 
   /* =======================================================
      SELECTED PRICE
@@ -132,6 +302,28 @@ export default function ProductDetailsPage({
       : product?.retailPrice ?? 0;
 
   /* =======================================================
+     PRICE UNIT LABEL
+  ======================================================= */
+
+  const priceUnitLabel =
+    pricingType === "wholesale" &&
+    effectiveWholesaleUnit === "SET"
+      ? "per Set"
+      : "per Piece";
+
+  /* =======================================================
+     ACTUAL PIECES
+  ======================================================= */
+
+  const actualPieceQuantity =
+    pricingType === "wholesale" &&
+    effectiveWholesaleUnit ===
+      "SET"
+      ? quantity *
+        piecesPerSet
+      : quantity;
+
+  /* =======================================================
      DISCOUNT
   ======================================================= */
 
@@ -139,12 +331,136 @@ export default function ProductDetailsPage({
     product &&
     product.mrp > product.retailPrice
       ? Math.round(
-          ((product.mrp -
-            product.retailPrice) /
-            product.mrp) *
-            100
+          (
+            (product.mrp -
+              product.retailPrice) /
+            product.mrp
+          ) * 100
         )
       : 0;
+
+  /* =======================================================
+     DISPLAY WHOLESALE MOQ
+  ======================================================= */
+
+  const displayedWholesaleMoq =
+    effectiveWholesaleUnit === "SET"
+      ? `${wholesaleMoq} ${
+          wholesaleMoq === 1
+            ? "Set"
+            : "Sets"
+        }`
+      : `${wholesaleMoq} ${
+          wholesaleMoq === 1
+            ? "Piece"
+            : "Pieces"
+        }`;
+
+  /* =======================================================
+     CAN BUY RETAIL
+  ======================================================= */
+
+  const canBuyRetail =
+    Boolean(product) &&
+    (
+      !product?.sellingMode ||
+      product.sellingMode ===
+        "PIECE" ||
+      product.sellingMode ===
+        "BOTH"
+    );
+
+  /* =======================================================
+     CAN BUY WHOLESALE
+  ======================================================= */
+
+  const canBuyWholesale =
+    Boolean(product) &&
+    wholesaleEnabled;
+
+  /* =======================================================
+     WHOLESALE UNIT SELECTION
+  ======================================================= */
+
+  function selectWholesaleUnit(
+    unit: WholesaleUnit
+  ) {
+    if (!product) {
+      return;
+    }
+
+    setPricingType("wholesale");
+    setWholesaleUnit(unit);
+
+    const nextMoq =
+      unit === "SET"
+        ? Math.max(
+            1,
+            Number(
+              wholesaleConfig?.moqSets ||
+                product.moq ||
+                1
+            )
+          )
+        : Math.max(
+            1,
+            Number(
+              product.moq || 1
+            )
+          );
+
+    setQuantity(
+      Math.min(
+        nextMoq,
+        product.stock
+      )
+    );
+
+    setCartMessage("");
+  }
+
+  /* =======================================================
+     RETAIL SELECTION
+  ======================================================= */
+
+  function selectRetail() {
+    setPricingType("retail");
+    setWholesaleUnit("PIECE");
+    setQuantity(1);
+    setCartMessage("");
+  }
+
+  /* =======================================================
+     WHOLESALE DEFAULT
+  ======================================================= */
+
+  useEffect(() => {
+    if (!product) {
+      return;
+    }
+
+    if (
+      !canBuyRetail &&
+      canBuyWholesale
+    ) {
+      setPricingType(
+        "wholesale"
+      );
+    }
+
+    if (
+      wholesaleConfig?.saleUnit
+    ) {
+      setWholesaleUnit(
+        wholesaleConfig.saleUnit
+      );
+    }
+  }, [
+    product,
+    canBuyRetail,
+    canBuyWholesale,
+    wholesaleConfig,
+  ]);
 
   /* =======================================================
      ADD TO CART
@@ -172,19 +488,59 @@ export default function ProductDetailsPage({
     }
 
     if (
-      pricingType === "wholesale" &&
-      quantity < product.moq
+      pricingType ===
+      "wholesale"
     ) {
-      setCartMessage(
-        `Wholesale minimum quantity is ${product.moq}.`
-      );
+      if (!wholesaleEnabled) {
+        setCartMessage(
+          "Wholesale is not available for this product."
+        );
 
-      return;
+        return;
+      }
+
+      const minimumQuantity =
+        effectiveWholesaleUnit ===
+        "SET"
+          ? wholesaleMoq
+          : Math.max(
+              1,
+              Number(
+                product.moq || 1
+              )
+            );
+
+      if (
+        quantity <
+        minimumQuantity
+      ) {
+        setCartMessage(
+          effectiveWholesaleUnit ===
+            "SET"
+            ? `Wholesale minimum quantity is ${minimumQuantity} sets.`
+            : `Wholesale minimum quantity is ${minimumQuantity} pieces.`
+        );
+
+        return;
+      }
     }
 
-    if (quantity > product.stock) {
+    /*
+     * For SET products, product.stock is treated
+     * as available SET quantity on the product page.
+     *
+     * Final component-level inventory is checked
+     * securely during checkout/order creation.
+     */
+    if (
+      quantity >
+      product.stock
+    ) {
       setCartMessage(
-        `Only ${product.stock} pieces are available.`
+        effectiveWholesaleUnit ===
+          "SET"
+          ? `Only ${product.stock} sets are currently available.`
+          : `Only ${product.stock} pieces are currently available.`
       );
 
       return;
@@ -194,19 +550,23 @@ export default function ProductDetailsPage({
       setAddingToCart(true);
       setCartMessage("");
 
+      const isSet =
+        pricingType ===
+          "wholesale" &&
+        effectiveWholesaleUnit ===
+          "SET";
+
       await addToCart(
         user.uid,
         {
-          /* IMPORTANT:
-             CartItem uses "id", not "productId".
-          */
           id: product.id,
 
           name: product.name,
 
           slug: product.slug,
 
-          sellerId: product.sellerId,
+          sellerId:
+            product.sellerId,
 
           sellerName:
             product.sellerName,
@@ -223,19 +583,63 @@ export default function ProductDetailsPage({
             product.wholesalePrice,
 
           wholesaleTiers:
-            product.wholesaleTiers || [],
+            activeWholesaleTiers || [],
 
-          moq: product.moq,
+          moq:
+            pricingType ===
+              "wholesale" &&
+            effectiveWholesaleUnit ===
+              "SET"
+              ? wholesaleMoq
+              : product.moq,
 
           pricingType,
 
-          stock: product.stock,
+          stock:
+            product.stock,
+
+          sellingMode:
+            product.sellingMode,
+
+          wholesaleUnit:
+            pricingType ===
+            "wholesale"
+              ? effectiveWholesaleUnit
+              : undefined,
+
+          piecesPerSet:
+            isSet
+              ? piecesPerSet
+              : undefined,
+
+          setName:
+            isSet
+              ? setName
+              : undefined,
+
+          setBreakAllowed:
+            isSet
+              ? setBreakAllowed
+              : undefined,
+
+          setComposition:
+            isSet
+              ? setComposition
+              : undefined,
+
+          isSet,
         },
         quantity
       );
 
       setCartMessage(
-        "Product added to cart successfully."
+        isSet
+          ? `${quantity} ${
+              quantity === 1
+                ? "set"
+                : "sets"
+            } added to cart successfully.`
+          : "Product added to cart successfully."
       );
     } catch (error) {
       console.error(
@@ -258,9 +662,13 @@ export default function ProductDetailsPage({
   ======================================================= */
 
   async function handleBuyNow() {
+    if (!product) {
+      return;
+    }
+
     if (!user) {
       router.push(
-        `/login?redirect=/products/${product?.slug}`
+        `/login?redirect=/products/${product.slug}`
       );
 
       return;
@@ -269,12 +677,11 @@ export default function ProductDetailsPage({
     await handleAddToCart();
 
     /*
-     * Small delay allows the cart operation to complete
-     * before navigating.
+     * Existing cart flow is preserved.
      */
     setTimeout(() => {
       router.push("/cart");
-    }, 300);
+    }, 400);
   }
 
   /* =======================================================
@@ -314,7 +721,6 @@ export default function ProductDetailsPage({
 
         <main className="mx-auto max-w-7xl px-4 py-16">
           <div className="rounded-3xl border border-dashed border-gray-300 bg-white p-10 text-center">
-
             <div className="text-5xl">
               📦
             </div>
@@ -333,7 +739,6 @@ export default function ProductDetailsPage({
             >
               Browse Products
             </Link>
-
           </div>
         </main>
 
@@ -341,6 +746,10 @@ export default function ProductDetailsPage({
       </div>
     );
   }
+
+  /* =======================================================
+     MAIN IMAGE
+  ======================================================= */
 
   const mainImage =
     product.images[0];
@@ -354,15 +763,12 @@ export default function ProductDetailsPage({
       <Header />
 
       <main>
-
         {/* =================================================
             BREADCRUMB
         ================================================= */}
 
         <div className="mx-auto max-w-7xl px-4 pt-5">
-
           <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-400">
-
             <Link
               href="/"
               className="hover:text-black"
@@ -384,9 +790,7 @@ export default function ProductDetailsPage({
             <span className="font-semibold text-gray-700">
               {product.name}
             </span>
-
           </div>
-
         </div>
 
         {/* =================================================
@@ -394,17 +798,13 @@ export default function ProductDetailsPage({
         ================================================= */}
 
         <section className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
-
           <div className="grid gap-6 lg:grid-cols-2 lg:gap-10">
-
             {/* =================================================
                 IMAGE
             ================================================= */}
 
             <div>
-
               <div className="relative aspect-square overflow-hidden rounded-3xl border border-gray-200 bg-white">
-
                 {mainImage ? (
                   <Image
                     src={mainImage}
@@ -431,12 +831,10 @@ export default function ProductDetailsPage({
                     {discount}% OFF
                   </span>
                 )}
-
               </div>
 
               {product.images.length > 1 && (
                 <div className="mt-3 grid grid-cols-5 gap-2">
-
                   {product.images
                     .slice(0, 5)
                     .map(
@@ -450,7 +848,9 @@ export default function ProductDetailsPage({
                         >
                           <Image
                             src={image}
-                            alt={`${product.name} ${index + 1}`}
+                            alt={`${product.name} ${
+                              index + 1
+                            }`}
                             fill
                             sizes="100px"
                             className="object-cover"
@@ -458,10 +858,8 @@ export default function ProductDetailsPage({
                         </div>
                       )
                     )}
-
                 </div>
               )}
-
             </div>
 
             {/* =================================================
@@ -469,9 +867,7 @@ export default function ProductDetailsPage({
             ================================================= */}
 
             <div className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-
               <div className="flex items-center justify-between gap-3">
-
                 <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-gray-400">
                   {product.categoryName ||
                     product.categoryId}
@@ -482,18 +878,18 @@ export default function ProductDetailsPage({
                     ✓ Verified Seller
                   </span>
                 )}
-
               </div>
 
               <h1 className="mt-3 text-2xl font-black leading-tight tracking-tight sm:text-3xl">
                 {product.name}
               </h1>
 
-              {product.rating !== undefined && (
+              {product.rating !==
+                undefined && (
                 <div className="mt-3 flex items-center gap-2">
-
                   <span className="rounded-lg bg-gray-100 px-2.5 py-1.5 text-xs font-black">
-                    ★ {product.rating}
+                    ★{" "}
+                    {product.rating}
                   </span>
 
                   {product.reviewsCount !==
@@ -505,7 +901,6 @@ export default function ProductDetailsPage({
                       reviews
                     </span>
                   )}
-
                 </div>
               )}
 
@@ -520,105 +915,323 @@ export default function ProductDetailsPage({
               ================================================= */}
 
               <div className="mt-6">
-
                 <p className="mb-2 text-xs font-black">
                   Choose buying option
                 </p>
 
-                <div className="grid grid-cols-2 gap-2">
-
+                <div
+                  className={`grid gap-2 ${
+                    canBuyRetail &&
+                    canBuyWholesale
+                      ? "grid-cols-2"
+                      : "grid-cols-1"
+                  }`}
+                >
                   {/* RETAIL */}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPricingType("retail");
-                      setQuantity(1);
-                      setCartMessage("");
-                    }}
-                    className={`rounded-xl border p-3 text-left transition ${
-                      pricingType === "retail"
-                        ? "border-black bg-black text-white"
-                        : "border-gray-200 bg-white hover:border-black"
-                    }`}
-                  >
-                    <div className="text-lg">
-                      🛍️
-                    </div>
-
-                    <p className="mt-1 text-xs font-black">
-                      Retail
-                    </p>
-
-                    <p
-                      className={`mt-1 text-[9px] ${
-                        pricingType === "retail"
-                          ? "text-gray-300"
-                          : "text-gray-400"
+                  {canBuyRetail && (
+                    <button
+                      type="button"
+                      onClick={
+                        selectRetail
+                      }
+                      className={`rounded-xl border p-3 text-left transition ${
+                        pricingType ===
+                        "retail"
+                          ? "border-black bg-black text-white"
+                          : "border-gray-200 bg-white hover:border-black"
                       }`}
                     >
-                      Buy single pieces
-                    </p>
-                  </button>
+                      <div className="text-lg">
+                        🛍️
+                      </div>
+
+                      <p className="mt-1 text-xs font-black">
+                        Retail
+                      </p>
+
+                      <p
+                        className={`mt-1 text-[9px] ${
+                          pricingType ===
+                          "retail"
+                            ? "text-gray-300"
+                            : "text-gray-400"
+                        }`}
+                      >
+                        Buy single pieces
+                      </p>
+                    </button>
+                  )}
 
                   {/* WHOLESALE */}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setPricingType(
-                        "wholesale"
-                      );
+                  {canBuyWholesale && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPricingType(
+                          "wholesale"
+                        );
 
-                      setQuantity(
-                        Math.min(
-                          Math.max(
-                            1,
-                            product.moq
-                          ),
-                          product.stock
-                        )
-                      );
+                        if (
+                          configuredWholesaleUnit
+                        ) {
+                          setWholesaleUnit(
+                            configuredWholesaleUnit
+                          );
 
-                      setCartMessage("");
-                    }}
-                    className={`rounded-xl border p-3 text-left transition ${
-                      pricingType ===
-                      "wholesale"
-                        ? "border-black bg-black text-white"
-                        : "border-gray-200 bg-white hover:border-black"
-                    }`}
-                  >
-                    <div className="text-lg">
-                      📦
-                    </div>
+                          const minimum =
+                            configuredWholesaleUnit ===
+                            "SET"
+                              ? wholesaleMoq
+                              : Math.max(
+                                  1,
+                                  Number(
+                                    product.moq ||
+                                      1
+                                  )
+                                );
 
-                    <p className="mt-1 text-xs font-black">
-                      Wholesale
-                    </p>
+                          setQuantity(
+                            Math.min(
+                              minimum,
+                              product.stock
+                            )
+                          );
+                        } else {
+                          setWholesaleUnit(
+                            "PIECE"
+                          );
 
-                    <p
-                      className={`mt-1 text-[9px] ${
+                          setQuantity(
+                            Math.min(
+                              Math.max(
+                                1,
+                                Number(
+                                  product.moq ||
+                                    1
+                                )
+                              ),
+                              product.stock
+                            )
+                          );
+                        }
+
+                        setCartMessage("");
+                      }}
+                      className={`rounded-xl border p-3 text-left transition ${
                         pricingType ===
                         "wholesale"
-                          ? "text-gray-300"
-                          : "text-gray-400"
+                          ? "border-black bg-black text-white"
+                          : "border-gray-200 bg-white hover:border-black"
                       }`}
                     >
-                      MOQ {product.moq}
-                    </p>
-                  </button>
+                      <div className="text-lg">
+                        📦
+                      </div>
 
+                      <p className="mt-1 text-xs font-black">
+                        Wholesale
+                      </p>
+
+                      <p
+                        className={`mt-1 text-[9px] ${
+                          pricingType ===
+                          "wholesale"
+                            ? "text-gray-300"
+                            : "text-gray-400"
+                        }`}
+                      >
+                        MOQ{" "}
+                        {displayedWholesaleMoq}
+                      </p>
+                    </button>
+                  )}
                 </div>
-
               </div>
+
+              {/* =================================================
+                  WHOLESALE UNIT
+              ================================================= */}
+
+              {pricingType ===
+                "wholesale" &&
+                canBuyWholesale &&
+                (
+                  configuredWholesaleUnit ===
+                    "SET" ||
+                  configuredWholesaleUnit ===
+                    "PIECE"
+                ) && (
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-black">
+                      Wholesale selling unit
+                    </p>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* PIECE */}
+
+                      {configuredWholesaleUnit ===
+                        "PIECE" && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            selectWholesaleUnit(
+                              "PIECE"
+                            )
+                          }
+                          className={`rounded-xl border p-3 text-left ${
+                            wholesaleUnit ===
+                            "PIECE"
+                              ? "border-black bg-black text-white"
+                              : "border-gray-200 bg-white"
+                          }`}
+                        >
+                          <p className="text-xs font-black">
+                            Per Piece
+                          </p>
+
+                          <p
+                            className={`mt-1 text-[9px] ${
+                              wholesaleUnit ===
+                              "PIECE"
+                                ? "text-gray-300"
+                                : "text-gray-400"
+                            }`}
+                          >
+                            Wholesale by piece
+                          </p>
+                        </button>
+                      )}
+
+                      {/* SET */}
+
+                      {configuredWholesaleUnit ===
+                        "SET" && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            selectWholesaleUnit(
+                              "SET"
+                            )
+                          }
+                          className={`rounded-xl border p-3 text-left ${
+                            wholesaleUnit ===
+                            "SET"
+                              ? "border-black bg-black text-white"
+                              : "border-gray-200 bg-white"
+                          }`}
+                        >
+                          <p className="text-xs font-black">
+                            Per Set
+                          </p>
+
+                          <p
+                            className={`mt-1 text-[9px] ${
+                              wholesaleUnit ===
+                              "SET"
+                                ? "text-gray-300"
+                                : "text-gray-400"
+                            }`}
+                          >
+                            Wholesale complete set
+                          </p>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+              {/* =================================================
+                  SET INFORMATION
+              ================================================= */}
+
+              {pricingType ===
+                "wholesale" &&
+                effectiveWholesaleUnit ===
+                  "SET" &&
+                setEnabled && (
+                  <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-black">
+                          {setName}
+                        </p>
+
+                        <p className="mt-1 text-[10px] text-gray-500">
+                          1 Set ={" "}
+                          {piecesPerSet}{" "}
+                          Pieces
+                        </p>
+                      </div>
+
+                      <span className="rounded-full bg-black px-2.5 py-1 text-[9px] font-bold text-white">
+                        SET
+                      </span>
+                    </div>
+
+                    {setComposition.length >
+                      0 && (
+                      <div className="mt-4">
+                        <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
+                          Set Composition
+                        </p>
+
+                        <div className="mt-2 space-y-2">
+                          {setComposition.map(
+                            (
+                              item,
+                              index
+                            ) => (
+                              <div
+                                key={`${item.value}-${item.variantType}-${index}`}
+                                className="flex items-center justify-between rounded-lg bg-white px-3 py-2"
+                              >
+                                <div>
+                                  <p className="text-[10px] font-bold">
+                                    {item.value}
+                                  </p>
+
+                                  <p className="text-[9px] text-gray-400">
+                                    {item.variantType.replace(
+                                      "_",
+                                      " + "
+                                    )}
+                                  </p>
+                                </div>
+
+                                <span className="text-[10px] font-black">
+                                  ×{" "}
+                                  {
+                                    item.quantity
+                                  }
+                                </span>
+                              </div>
+                            )
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="mt-3 flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2">
+                      <span className="text-sm">
+                        🔒
+                      </span>
+
+                      <p className="text-[10px] font-semibold text-gray-600">
+                        {setBreakAllowed
+                          ? "Set components can be sold separately."
+                          : "Complete set required — set cannot be broken."}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
               {/* =================================================
                   PRICE
               ================================================= */}
 
               <div className="mt-5 rounded-2xl bg-gray-50 p-4">
-
                 <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
                   {pricingType ===
                   "wholesale"
@@ -626,8 +1239,7 @@ export default function ProductDetailsPage({
                     : "Retail Price"}
                 </p>
 
-                <div className="mt-1 flex flex-wrap items-center gap-3">
-
+                <div className="mt-1 flex flex-wrap items-end gap-2">
                   <span className="text-3xl font-black">
                     ₹
                     {selectedPrice.toLocaleString(
@@ -635,11 +1247,15 @@ export default function ProductDetailsPage({
                     )}
                   </span>
 
+                  <span className="mb-1 text-[10px] font-bold text-gray-500">
+                    {priceUnitLabel}
+                  </span>
+
                   {pricingType ===
                     "retail" &&
                     product.mrp >
                       product.retailPrice && (
-                      <span className="text-sm text-gray-400 line-through">
+                      <span className="mb-1 text-sm text-gray-400 line-through">
                         ₹
                         {product.mrp.toLocaleString(
                           "en-IN"
@@ -650,130 +1266,156 @@ export default function ProductDetailsPage({
                   {pricingType ===
                     "retail" &&
                     discount > 0 && (
-                      <span className="text-xs font-black">
-                        {discount}% OFF
-                      </span>
-                    )}
-
+                    <span className="mb-1 text-xs font-black">
+                      {discount}% OFF
+                    </span>
+                  )}
                 </div>
 
                 {pricingType ===
                   "wholesale" && (
-                  <p className="mt-1 text-[10px] text-gray-500">
+                  <p className="mt-2 text-[10px] text-gray-500">
                     Price updates automatically according to quantity.
                   </p>
                 )}
-
               </div>
 
               {/* =================================================
                   WHOLESALE TIERS
               ================================================= */}
 
-              {product.wholesaleTiers.length >
-                0 && (
-                <div className="mt-4 rounded-2xl border border-gray-200 p-4">
+              {pricingType ===
+                "wholesale" &&
+                activeWholesaleTiers.length >
+                  0 && (
+                  <div className="mt-4 rounded-2xl border border-gray-200 p-4">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-black">
+                        Wholesale Pricing
+                      </p>
 
-                  <div className="flex items-center justify-between">
+                      <span className="text-[9px] font-bold text-gray-400">
+                        MOQ{" "}
+                        {displayedWholesaleMoq}
+                      </span>
+                    </div>
 
-                    <p className="text-xs font-black">
-                      Wholesale Pricing
-                    </p>
+                    <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {activeWholesaleTiers.map(
+                        (
+                          tier,
+                          index
+                        ) => {
+                          const isSelected =
+                            quantity >=
+                              Number(
+                                tier.minQuantity
+                              ) &&
+                            (
+                              tier.maxQuantity ===
+                                undefined ||
+                              quantity <=
+                                Number(
+                                  tier.maxQuantity
+                                )
+                            );
 
-                    <span className="text-[9px] font-bold text-gray-400">
-                      MOQ {product.moq}
-                    </span>
-
-                  </div>
-
-                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-
-                    {product.wholesaleTiers.map(
-                      (tier, index) => {
-                        const isSelected =
-                          pricingType ===
-                            "wholesale" &&
-                          quantity >=
-                            tier.minQuantity &&
-                          (
-                            tier.maxQuantity ===
-                              undefined ||
-                            quantity <=
-                              tier.maxQuantity
-                          );
-
-                        return (
-                          <button
-                            type="button"
-                            key={`${tier.minQuantity}-${index}`}
-                            onClick={() => {
-                              setPricingType(
-                                "wholesale"
-                              );
-
-                              const nextQuantity =
-                                Math.max(
-                                  tier.minQuantity,
-                                  product.moq
+                          return (
+                            <button
+                              type="button"
+                              key={`${tier.minQuantity}-${index}`}
+                              onClick={() => {
+                                setPricingType(
+                                  "wholesale"
                                 );
 
-                              setQuantity(
-                                Math.min(
-                                  nextQuantity,
-                                  product.stock
-                                )
-                              );
+                                const nextQuantity =
+                                  Math.max(
+                                    Number(
+                                      tier.minQuantity
+                                    ),
+                                    effectiveWholesaleUnit ===
+                                      "SET"
+                                      ? wholesaleMoq
+                                      : Number(
+                                          product.moq ||
+                                            1
+                                        )
+                                  );
 
-                              setCartMessage("");
-                            }}
-                            className={`rounded-xl border p-3 text-center transition ${
-                              isSelected
-                                ? "border-black bg-black text-white"
-                                : "border-gray-200 bg-gray-50 hover:border-black"
-                            }`}
-                          >
-                            <p className="text-[9px] opacity-60">
-                              {tier.maxQuantity
-                                ? `${tier.minQuantity}-${tier.maxQuantity}`
-                                : `${tier.minQuantity}+`}
-                            </p>
+                                setQuantity(
+                                  Math.min(
+                                    nextQuantity,
+                                    product.stock
+                                  )
+                                );
 
-                            <p className="mt-1 text-sm font-black">
-                              ₹
-                              {tier.price.toLocaleString(
-                                "en-IN"
-                              )}
-                            </p>
-                          </button>
-                        );
-                      }
-                    )}
+                                setCartMessage(
+                                  ""
+                                );
+                              }}
+                              className={`rounded-xl border p-3 text-center transition ${
+                                isSelected
+                                  ? "border-black bg-black text-white"
+                                  : "border-gray-200 bg-gray-50 hover:border-black"
+                              }`}
+                            >
+                              <p className="text-[9px] opacity-60">
+                                {tier.maxQuantity
+                                  ? `${tier.minQuantity}-${tier.maxQuantity}`
+                                  : `${tier.minQuantity}+`}{" "}
+                                {effectiveWholesaleUnit ===
+                                "SET"
+                                  ? "sets"
+                                  : "pcs"}
+                              </p>
 
+                              <p className="mt-1 text-sm font-black">
+                                ₹
+                                {Number(
+                                  tier.price
+                                ).toLocaleString(
+                                  "en-IN"
+                                )}
+                              </p>
+
+                              <p className="mt-0.5 text-[8px] opacity-60">
+                                {effectiveWholesaleUnit ===
+                                "SET"
+                                  ? "per set"
+                                  : "per piece"}
+                              </p>
+                            </button>
+                          );
+                        }
+                      )}
+                    </div>
                   </div>
-
-                </div>
-              )}
+                )}
 
               {/* =================================================
                   QUANTITY
               ================================================= */}
 
               <div className="mt-5">
-
                 <div className="flex items-center justify-between">
-
                   <p className="text-xs font-black">
                     Quantity
                   </p>
 
                   <p className="text-[10px] text-gray-400">
-                    {product.stock} available
+                    {product.stock}{" "}
+                    {pricingType ===
+                      "wholesale" &&
+                    effectiveWholesaleUnit ===
+                      "SET"
+                      ? "sets"
+                      : "pieces"}{" "}
+                    available
                   </p>
-
                 </div>
 
                 <div className="mt-2 flex items-center gap-3">
-
                   {/* MINUS */}
 
                   <button
@@ -783,7 +1425,7 @@ export default function ProductDetailsPage({
                         Math.max(
                           pricingType ===
                             "wholesale"
-                            ? product.moq
+                            ? wholesaleMoq
                             : 1,
                           quantity - 1
                         )
@@ -791,10 +1433,12 @@ export default function ProductDetailsPage({
                     }
                     disabled={
                       quantity <=
-                      (pricingType ===
-                      "wholesale"
-                        ? product.moq
-                        : 1)
+                      (
+                        pricingType ===
+                        "wholesale"
+                          ? wholesaleMoq
+                          : 1
+                      )
                     }
                     className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 text-lg font-bold disabled:opacity-40"
                   >
@@ -828,8 +1472,28 @@ export default function ProductDetailsPage({
                     +
                   </button>
 
-                </div>
+                  <div className="ml-1">
+                    <p className="text-[10px] font-bold text-gray-500">
+                      {pricingType ===
+                        "wholesale" &&
+                      effectiveWholesaleUnit ===
+                        "SET"
+                        ? "Sets"
+                        : "Pieces"}
+                    </p>
 
+                    {pricingType ===
+                      "wholesale" &&
+                      effectiveWholesaleUnit ===
+                        "SET" && (
+                      <p className="text-[9px] text-gray-400">
+                        ={" "}
+                        {actualPieceQuantity}{" "}
+                        pieces
+                      </p>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* =================================================
@@ -837,15 +1501,12 @@ export default function ProductDetailsPage({
               ================================================= */}
 
               <div className="mt-5 flex items-center justify-between rounded-2xl border border-gray-200 p-4">
-
                 <div className="flex items-center gap-3">
-
                   <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gray-100 text-lg">
                     🏪
                   </div>
 
                   <div>
-
                     <p className="text-[9px] uppercase tracking-wider text-gray-400">
                       Sold by
                     </p>
@@ -854,9 +1515,7 @@ export default function ProductDetailsPage({
                       {product.sellerName ||
                         "ANJIVO Seller"}
                     </p>
-
                   </div>
-
                 </div>
 
                 {product.sellerVerified && (
@@ -864,7 +1523,6 @@ export default function ProductDetailsPage({
                     ✓ Verified
                   </span>
                 )}
-
               </div>
 
               {/* =================================================
@@ -882,10 +1540,11 @@ export default function ProductDetailsPage({
               ================================================= */}
 
               <div className="mt-5 grid grid-cols-2 gap-3">
-
                 <button
                   type="button"
-                  onClick={handleAddToCart}
+                  onClick={
+                    handleAddToCart
+                  }
                   disabled={
                     addingToCart ||
                     product.stock <= 0
@@ -899,7 +1558,9 @@ export default function ProductDetailsPage({
 
                 <button
                   type="button"
-                  onClick={handleBuyNow}
+                  onClick={
+                    handleBuyNow
+                  }
                   disabled={
                     addingToCart ||
                     product.stock <= 0
@@ -908,7 +1569,6 @@ export default function ProductDetailsPage({
                 >
                   Buy Now
                 </button>
-
               </div>
 
               {/* =================================================
@@ -931,7 +1591,6 @@ export default function ProductDetailsPage({
               ================================================= */}
 
               <div className="mt-5 grid grid-cols-3 gap-2 border-t border-gray-100 pt-5">
-
                 <div className="text-center">
                   <div>🔒</div>
 
@@ -955,15 +1614,10 @@ export default function ProductDetailsPage({
                     Tracked
                   </p>
                 </div>
-
               </div>
-
             </div>
-
           </div>
-
         </section>
-
       </main>
 
       <Footer />
