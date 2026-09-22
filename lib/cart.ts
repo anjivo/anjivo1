@@ -7,11 +7,19 @@ import {
 
 import { db } from "@/lib/firebase";
 
-export type WholesaleTier = {
-  minQuantity: number;
-  maxQuantity?: number;
-  price: number;
-};
+import type {
+  SetCompositionItem,
+  WholesaleTier,
+  WholesaleUnit,
+} from "@/types/product";
+
+/* =========================================================
+   TYPES
+========================================================= */
+
+export type CartPricingType =
+  | "retail"
+  | "wholesale";
 
 export type CartItem = {
   id: string;
@@ -25,25 +33,62 @@ export type CartItem = {
   image?: string;
 
   mrp: number;
-
   retailPrice: number;
 
   wholesalePrice: number;
-
   wholesaleTiers: WholesaleTier[];
 
+  /*
+   * Quantity meaning:
+   *
+   * Retail + wholesale PIECE:
+   * quantity = number of pieces
+   *
+   * Wholesale SET:
+   * quantity = number of sets
+   */
   quantity: number;
 
   moq: number;
 
   selectedPrice: number;
 
-  pricingType:
-    | "retail"
-    | "wholesale";
+  pricingType: CartPricingType;
 
   stock: number;
+
+  /* =======================================================
+     SET / PACK INFORMATION
+  ======================================================= */
+
+  sellingMode?: "PIECE" | "SET" | "BOTH";
+
+  wholesaleUnit?: WholesaleUnit;
+
+  /*
+   * Number of pieces contained in one set.
+   *
+   * Example:
+   * 1 set = 6 pieces
+   */
+  piecesPerSet?: number;
+
+  setName?: string;
+
+  setBreakAllowed?: boolean;
+
+  setComposition?: SetCompositionItem[];
+
+  /*
+   * Explicitly stores whether this cart line is a set.
+   * This makes old and new cart records easier to handle.
+   */
+  isSet?: boolean;
 };
+
+/* =========================================================
+   CART
+========================================================= */
 
 export type Cart = {
   userId: string;
@@ -55,10 +100,22 @@ export type Cart = {
   subtotal: number;
 };
 
-/* ----------------------------------------
-   Wholesale Price Calculator
----------------------------------------- */
+/* =========================================================
+   WHOLESALE PRICE CALCULATOR
+========================================================= */
 
+/**
+ * Returns the wholesale price according to quantity.
+ *
+ * For PIECE wholesale:
+ * quantity = pieces
+ *
+ * For SET wholesale:
+ * quantity = sets
+ *
+ * Therefore the tiers always operate on the product's
+ * configured wholesale unit.
+ */
 export function getWholesalePrice(
   item: {
     wholesalePrice: number;
@@ -66,132 +123,131 @@ export function getWholesalePrice(
   },
   quantity: number
 ): number {
-  const tiers =
-    Array.isArray(
-      item.wholesaleTiers
-    )
-      ? [...item.wholesaleTiers]
-          .filter(
-            (tier) =>
-              Number(
-                tier.minQuantity
-              ) > 0 &&
-              Number(
-                tier.price
-              ) > 0
-          )
-          .sort(
-            (a, b) =>
-              b.minQuantity -
-              a.minQuantity
-          )
-      : [];
+  const tiers = Array.isArray(item.wholesaleTiers)
+    ? [...item.wholesaleTiers]
+        .filter(
+          (tier) =>
+            Number(tier.minQuantity) > 0 &&
+            Number(tier.price) > 0
+        )
+        .sort(
+          (a, b) =>
+            Number(b.minQuantity) -
+            Number(a.minQuantity)
+        )
+    : [];
 
   for (const tier of tiers) {
-    const min =
-      Number(
-        tier.minQuantity
-      );
+    const min = Number(tier.minQuantity);
 
     const max =
-      tier.maxQuantity ===
-        undefined ||
-      tier.maxQuantity ===
-        null
+      tier.maxQuantity === undefined ||
+      tier.maxQuantity === null
         ? undefined
-        : Number(
-            tier.maxQuantity
-          );
+        : Number(tier.maxQuantity);
 
     if (
       quantity >= min &&
-      (max === undefined ||
-        quantity <= max)
+      (max === undefined || quantity <= max)
     ) {
-      return Number(
-        tier.price
-      );
+      return Number(tier.price);
     }
   }
 
-  return Number(
-    item.wholesalePrice || 0
-  );
+  return Number(item.wholesalePrice || 0);
 }
 
-/* ----------------------------------------
-   Selected Price
----------------------------------------- */
+/* =========================================================
+   SELECTED PRICE
+========================================================= */
 
 export function getSelectedPrice(
   item: CartItem
 ): number {
-  if (
-    item.pricingType ===
-    "wholesale"
-  ) {
+  if (item.pricingType === "wholesale") {
     return getWholesalePrice(
       item,
       item.quantity
     );
   }
 
-  return Number(
-    item.retailPrice || 0
+  return Number(item.retailPrice || 0);
+}
+
+/* =========================================================
+   PIECES IN CART
+========================================================= */
+
+/**
+ * Returns actual piece quantity represented by a cart item.
+ *
+ * Retail / wholesale piece:
+ *   quantity = pieces
+ *
+ * Wholesale set:
+ *   quantity × piecesPerSet
+ */
+export function getCartItemPieceQuantity(
+  item: CartItem
+): number {
+  if (
+    item.pricingType === "wholesale" &&
+    item.isSet &&
+    Number(item.piecesPerSet) > 0
+  ) {
+    return (
+      item.quantity *
+      Number(item.piecesPerSet)
+    );
+  }
+
+  return item.quantity;
+}
+
+/* =========================================================
+   CART ITEM TOTAL
+========================================================= */
+
+export function getCartItemTotal(
+  item: CartItem
+): number {
+  return (
+    getSelectedPrice(item) *
+    item.quantity
   );
 }
 
-/* ----------------------------------------
-   Calculate Subtotal
----------------------------------------- */
+/* =========================================================
+   CART SUBTOTAL
+========================================================= */
 
 export function getCartSubtotal(
   cart: Cart
 ): number {
   return cart.items.reduce(
-    (total, item) => {
-      const price =
-        getSelectedPrice(
-          item
-        );
-
-      return (
-        total +
-        price *
-          item.quantity
-      );
-    },
+    (total, item) =>
+      total + getCartItemTotal(item),
     0
   );
 }
 
-/* ----------------------------------------
-   Get Seller Subtotal
----------------------------------------- */
+/* =========================================================
+   SELLER SUBTOTAL
+========================================================= */
 
 export function getSellerSubtotal(
   items: CartItem[]
 ): number {
   return items.reduce(
-    (total, item) => {
-      const price =
-        getSelectedPrice(
-          item
-        );
-
-      return (
-        total +
-        price *
-          item.quantity
-      );
-    },
+    (total, item) =>
+      total + getCartItemTotal(item),
     0
   );
 }
 
-/* ----------------------------------------
+/* =========================================================
    GROUP CART BY SELLER
----------------------------------------- */
+========================================================= */
 
 export function groupCartBySeller(
   cart: Cart
@@ -203,24 +259,199 @@ export function groupCartBySeller(
 
   for (const item of cart.items) {
     const sellerId =
-      item.sellerId ||
-      "unknown-seller";
+      item.sellerId || "unknown-seller";
 
     if (!groups[sellerId]) {
       groups[sellerId] = [];
     }
 
-    groups[sellerId].push(
-      item
-    );
+    groups[sellerId].push(item);
   }
 
   return groups;
 }
 
-/* ----------------------------------------
-   Get Cart
----------------------------------------- */
+/* =========================================================
+   CART ITEM KEY
+========================================================= */
+
+/**
+ * Different configurations of the same product must remain
+ * separate in the cart.
+ *
+ * Examples:
+ *
+ * Product A + Retail
+ * Product A + Wholesale Piece
+ * Product A + Wholesale Set
+ *
+ * These must not merge together.
+ */
+export function getCartItemKey(
+  item: Pick<
+    CartItem,
+    | "id"
+    | "sellerId"
+    | "pricingType"
+    | "wholesaleUnit"
+    | "piecesPerSet"
+    | "setName"
+  >
+): string {
+  return [
+    item.id,
+    item.sellerId,
+    item.pricingType,
+    item.wholesaleUnit || "NONE",
+    item.piecesPerSet || 0,
+    item.setName || "",
+  ].join("::");
+}
+
+/* =========================================================
+   NORMALIZE CART ITEM
+========================================================= */
+
+function normalizeCartItem(
+  item: any
+): CartItem {
+  const wholesaleTiers =
+    Array.isArray(item.wholesaleTiers)
+      ? item.wholesaleTiers
+          .map((tier: any) => ({
+            minQuantity: Number(
+              tier?.minQuantity ?? 0
+            ),
+
+            maxQuantity:
+              tier?.maxQuantity === undefined ||
+              tier?.maxQuantity === null
+                ? undefined
+                : Number(
+                    tier.maxQuantity
+                  ),
+
+            price: Number(
+              tier?.price ?? 0
+            ),
+          }))
+          .filter(
+            (tier: WholesaleTier) =>
+              tier.minQuantity > 0 &&
+              tier.price > 0
+          )
+      : [];
+
+  const isSet =
+    Boolean(item.isSet) ||
+    (
+      item.pricingType === "wholesale" &&
+      item.wholesaleUnit === "SET"
+    );
+
+  const piecesPerSet =
+    Number(item.piecesPerSet) > 0
+      ? Number(item.piecesPerSet)
+      : undefined;
+
+  const cartItem: CartItem = {
+    id: item.id || "",
+
+    sellerId:
+      item.sellerId || "",
+
+    sellerName:
+      item.sellerName || "",
+
+    name:
+      item.name || "Product",
+
+    slug:
+      item.slug || "",
+
+    image:
+      item.image || "",
+
+    mrp:
+      Number(item.mrp || 0),
+
+    retailPrice:
+      Number(item.retailPrice || 0),
+
+    wholesalePrice:
+      Number(item.wholesalePrice || 0),
+
+    wholesaleTiers,
+
+    quantity:
+      Math.max(
+        1,
+        Number(item.quantity || 1)
+      ),
+
+    moq:
+      Math.max(
+        1,
+        Number(item.moq || 1)
+      ),
+
+    selectedPrice: 0,
+
+    pricingType:
+      item.pricingType ===
+      "wholesale"
+        ? "wholesale"
+        : "retail",
+
+    stock:
+      Math.max(
+        0,
+        Number(item.stock || 0)
+      ),
+
+    sellingMode:
+      item.sellingMode === "SET" ||
+      item.sellingMode === "BOTH"
+        ? item.sellingMode
+        : item.sellingMode === "PIECE"
+        ? "PIECE"
+        : undefined,
+
+    wholesaleUnit:
+      item.wholesaleUnit === "SET"
+        ? "SET"
+        : item.wholesaleUnit === "PIECE"
+        ? "PIECE"
+        : undefined,
+
+    piecesPerSet,
+
+    setName:
+      item.setName || undefined,
+
+    setBreakAllowed:
+      typeof item.setBreakAllowed ===
+      "boolean"
+        ? item.setBreakAllowed
+        : undefined,
+
+    setComposition:
+      Array.isArray(item.setComposition)
+        ? item.setComposition
+        : undefined,
+
+    isSet,
+  };
+
+  cartItem.selectedPrice =
+    getSelectedPrice(cartItem);
+
+  return cartItem;
+}
+
+/* =========================================================
+   GET CART
+========================================================= */
 
 export async function getCart(
   userId: string
@@ -256,121 +487,8 @@ export async function getCart(
   const items: CartItem[] =
     Array.isArray(data.items)
       ? data.items.map(
-          (item: any) => {
-            const wholesaleTiers =
-              Array.isArray(
-                item.wholesaleTiers
-              )
-                ? item.wholesaleTiers.map(
-                    (tier: any) => ({
-                      minQuantity:
-                        Number(
-                          tier.minQuantity ??
-                            0
-                        ),
-
-                      maxQuantity:
-                        tier.maxQuantity ===
-                          undefined ||
-                        tier.maxQuantity ===
-                          null
-                          ? undefined
-                          : Number(
-                              tier.maxQuantity
-                            ),
-
-                      price:
-                        Number(
-                          tier.price ??
-                            0
-                        ),
-                    })
-                  )
-                : [];
-
-            const cartItem: CartItem =
-              {
-                id:
-                  item.id || "",
-
-                sellerId:
-                  item.sellerId || "",
-
-                sellerName:
-                  item.sellerName ||
-                  "",
-
-                name:
-                  item.name ||
-                  "Product",
-
-                slug:
-                  item.slug || "",
-
-                image:
-                  item.image || "",
-
-                mrp:
-                  Number(
-                    item.mrp || 0
-                  ),
-
-                retailPrice:
-                  Number(
-                    item.retailPrice ||
-                      0
-                  ),
-
-                wholesalePrice:
-                  Number(
-                    item.wholesalePrice ||
-                      0
-                  ),
-
-                wholesaleTiers,
-
-                quantity:
-                  Math.max(
-                    1,
-                    Number(
-                      item.quantity ||
-                        1
-                    )
-                  ),
-
-                moq:
-                  Math.max(
-                    1,
-                    Number(
-                      item.moq || 1
-                    )
-                  ),
-
-                selectedPrice:
-                  Number(
-                    item.selectedPrice ||
-                      0
-                  ),
-
-                pricingType:
-                  item.pricingType ===
-                  "wholesale"
-                    ? "wholesale"
-                    : "retail",
-
-                stock:
-                  Number(
-                    item.stock || 0
-                  ),
-              };
-
-            cartItem.selectedPrice =
-              getSelectedPrice(
-                cartItem
-              );
-
-            return cartItem;
-          }
+          (item: any) =>
+            normalizeCartItem(item)
         )
       : [];
 
@@ -386,16 +504,14 @@ export async function getCart(
   };
 
   cart.subtotal =
-    getCartSubtotal(
-      cart
-    );
+    getCartSubtotal(cart);
 
   return cart;
 }
 
-/* ----------------------------------------
-   Save Cart
----------------------------------------- */
+/* =========================================================
+   SAVE CART
+========================================================= */
 
 export async function saveCart(
   userId: string,
@@ -409,34 +525,53 @@ export async function saveCart(
 
   const normalizedItems =
     items.map((item) => {
-      const normalized: CartItem =
-        {
-          ...item,
+      const normalized =
+        normalizeCartItem(item);
 
-          quantity:
-            Math.max(
-              1,
-              Number(
-                item.quantity || 1
-              )
-            ),
+      /*
+       * Keep quantity valid.
+       */
+      normalized.quantity =
+        Math.max(
+          1,
+          Math.floor(
+            Number(
+              normalized.quantity || 1
+            )
+          )
+        );
 
-          moq:
-            Math.max(
-              1,
-              Number(
-                item.moq || 1
-              )
-            ),
+      /*
+       * Wholesale MOQ.
+       */
+      if (
+        normalized.pricingType ===
+          "wholesale" &&
+        normalized.quantity <
+          normalized.moq
+      ) {
+        normalized.quantity =
+          normalized.moq;
+      }
 
-          stock:
-            Math.max(
-              0,
-              Number(
-                item.stock || 0
-              )
-            ),
-        };
+      /*
+       * Stock:
+       *
+       * For SET products stock is still
+       * represented as available SETS.
+       *
+       * The secure checkout API will perform
+       * the final server-side component stock
+       * validation.
+       */
+      if (
+        normalized.stock > 0 &&
+        normalized.quantity >
+          normalized.stock
+      ) {
+        normalized.quantity =
+          normalized.stock;
+      }
 
       normalized.selectedPrice =
         getSelectedPrice(
@@ -478,9 +613,9 @@ export async function saveCart(
   );
 }
 
-/* ----------------------------------------
-   Add To Cart
----------------------------------------- */
+/* =========================================================
+   ADD TO CART
+========================================================= */
 
 export async function addToCart(
   userId: string,
@@ -508,40 +643,34 @@ export async function addToCart(
   const cart =
     await getCart(userId);
 
-  const pricingType =
-    item.pricingType;
+  const incomingKey =
+    getCartItemKey(item);
 
   const existingIndex =
     cart.items.findIndex(
       (cartItem) =>
-        cartItem.id ===
-          item.id &&
-        cartItem.sellerId ===
-          item.sellerId &&
-        cartItem.pricingType ===
-          pricingType
+        getCartItemKey(
+          cartItem
+        ) === incomingKey
     );
 
-  if (
-    existingIndex >= 0
-  ) {
+  if (existingIndex >= 0) {
     const existing =
       cart.items[
         existingIndex
       ];
 
     existing.quantity +=
-      quantity;
+      Math.max(
+        1,
+        Math.floor(
+          Number(quantity || 1)
+        )
+      );
 
-    if (
-      existing.stock > 0 &&
-      existing.quantity >
-        existing.stock
-    ) {
-      existing.quantity =
-        existing.stock;
-    }
-
+    /*
+     * Wholesale MOQ.
+     */
     if (
       existing.pricingType ===
         "wholesale" &&
@@ -552,24 +681,41 @@ export async function addToCart(
         existing.moq;
     }
 
+    /*
+     * Stock.
+     */
+    if (
+      existing.stock > 0 &&
+      existing.quantity >
+        existing.stock
+    ) {
+      existing.quantity =
+        existing.stock;
+    }
+
     existing.selectedPrice =
       getSelectedPrice(
         existing
       );
   } else {
-    const newItem: CartItem =
-      {
+    const newItem =
+      normalizeCartItem({
         ...item,
 
         quantity:
           Math.max(
             1,
-            quantity
+            Math.floor(
+              Number(
+                quantity || 1
+              )
+            )
           ),
+      });
 
-        selectedPrice: 0,
-      };
-
+    /*
+     * Wholesale MOQ.
+     */
     if (
       newItem.pricingType ===
         "wholesale" &&
@@ -580,6 +726,9 @@ export async function addToCart(
         newItem.moq;
     }
 
+    /*
+     * Stock.
+     */
     if (
       newItem.stock > 0 &&
       newItem.quantity >
@@ -604,14 +753,12 @@ export async function addToCart(
     cart.items
   );
 
-  return getCart(
-    userId
-  );
+  return getCart(userId);
 }
 
-/* ----------------------------------------
-   Update Cart Quantity
----------------------------------------- */
+/* =========================================================
+   UPDATE CART QUANTITY
+========================================================= */
 
 export async function updateCartQuantity(
   userId: string,
@@ -620,20 +767,54 @@ export async function updateCartQuantity(
   pricingType:
     | "retail"
     | "wholesale",
-  quantity: number
+  quantity: number,
+  options?: {
+    wholesaleUnit?: WholesaleUnit;
+    piecesPerSet?: number;
+    setName?: string;
+  }
 ): Promise<Cart> {
   const cart =
     await getCart(userId);
 
   const index =
     cart.items.findIndex(
-      (item) =>
-        item.id ===
-          productId &&
-        item.sellerId ===
-          sellerId &&
-        item.pricingType ===
-          pricingType
+      (item) => {
+        if (
+          item.id !== productId ||
+          item.sellerId !== sellerId ||
+          item.pricingType !==
+            pricingType
+        ) {
+          return false;
+        }
+
+        if (
+          options?.wholesaleUnit &&
+          item.wholesaleUnit !==
+            options.wholesaleUnit
+        ) {
+          return false;
+        }
+
+        if (
+          options?.piecesPerSet &&
+          item.piecesPerSet !==
+            options.piecesPerSet
+        ) {
+          return false;
+        }
+
+        if (
+          options?.setName !== undefined &&
+          item.setName !==
+            options.setName
+        ) {
+          return false;
+        }
+
+        return true;
+      }
     );
 
   if (index === -1) {
@@ -647,10 +828,13 @@ export async function updateCartQuantity(
     Math.max(
       1,
       Math.floor(
-        quantity
+        Number(quantity)
       )
     );
 
+  /*
+   * Wholesale MOQ.
+   */
   if (
     pricingType ===
       "wholesale" &&
@@ -661,6 +845,9 @@ export async function updateCartQuantity(
       item.moq;
   }
 
+  /*
+   * Stock.
+   */
   if (
     item.stock > 0 &&
     nextQuantity >
@@ -683,14 +870,12 @@ export async function updateCartQuantity(
     cart.items
   );
 
-  return getCart(
-    userId
-  );
+  return getCart(userId);
 }
 
-/* ----------------------------------------
-   Remove From Cart
----------------------------------------- */
+/* =========================================================
+   REMOVE FROM CART
+========================================================= */
 
 export async function removeFromCart(
   userId: string,
@@ -698,22 +883,54 @@ export async function removeFromCart(
   sellerId: string,
   pricingType:
     | "retail"
-    | "wholesale"
+    | "wholesale",
+  options?: {
+    wholesaleUnit?: WholesaleUnit;
+    piecesPerSet?: number;
+    setName?: string;
+  }
 ): Promise<Cart> {
   const cart =
     await getCart(userId);
 
   cart.items =
     cart.items.filter(
-      (item) =>
-        !(
-          item.id ===
-            productId &&
-          item.sellerId ===
-            sellerId &&
-          item.pricingType ===
+      (item) => {
+        if (
+          item.id !== productId ||
+          item.sellerId !== sellerId ||
+          item.pricingType !==
             pricingType
-        )
+        ) {
+          return true;
+        }
+
+        if (
+          options?.wholesaleUnit &&
+          item.wholesaleUnit !==
+            options.wholesaleUnit
+        ) {
+          return true;
+        }
+
+        if (
+          options?.piecesPerSet &&
+          item.piecesPerSet !==
+            options.piecesPerSet
+        ) {
+          return true;
+        }
+
+        if (
+          options?.setName !== undefined &&
+          item.setName !==
+            options.setName
+        ) {
+          return true;
+        }
+
+        return false;
+      }
     );
 
   await saveCart(
@@ -721,14 +938,12 @@ export async function removeFromCart(
     cart.items
   );
 
-  return getCart(
-    userId
-  );
+  return getCart(userId);
 }
 
-/* ----------------------------------------
-   Clear Cart
----------------------------------------- */
+/* =========================================================
+   CLEAR CART
+========================================================= */
 
 export async function clearCart(
   userId: string
