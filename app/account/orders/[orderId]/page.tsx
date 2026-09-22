@@ -56,6 +56,28 @@ function statusLabel(
    STATUS CLASS
 ========================================================= */
 
+function unitLabel(item: Order["items"][number]): string {
+  if (item.wholesaleUnit === "SET" || item.isSet) {
+    return "Set";
+  }
+
+  return "Piece";
+}
+
+function actualPieces(item: Order["items"][number]): number {
+  const piecesPerSet = Number(item.piecesPerSet || 0);
+
+  if (
+    item.pricingType === "wholesale" &&
+    (item.wholesaleUnit === "SET" || item.isSet) &&
+    piecesPerSet > 0
+  ) {
+    return item.quantity * piecesPerSet;
+  }
+
+  return item.quantity;
+}
+
 function statusClass(
   status: Order["status"]
 ): string {
@@ -288,6 +310,18 @@ export default function OrderDetailsPage() {
           </span>
         </div>
 
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-gray-500">
+          <span className="rounded-full bg-white px-3 py-2 font-semibold shadow-sm ring-1 ring-gray-200">
+            {order.items.length} item{order.items.length !== 1 ? "s" : ""}
+          </span>
+          <span className="rounded-full bg-white px-3 py-2 font-semibold shadow-sm ring-1 ring-gray-200">
+            {order.sellerIds.length} seller{order.sellerIds.length !== 1 ? "s" : ""}
+          </span>
+          <span className="rounded-full bg-white px-3 py-2 font-semibold shadow-sm ring-1 ring-gray-200">
+            {order.paymentMethod || "COD"}
+          </span>
+        </div>
+
         {/* =================================================
             MAIN GRID
         ================================================= */}
@@ -338,38 +372,76 @@ export default function OrderDetailsPage() {
                         {item.name}
                       </p>
 
-                      <p className="mt-1 text-[10px] uppercase tracking-wide text-gray-400">
-                        {
-                          item.pricingType
-                        }
-                      </p>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        <span className="rounded-full bg-gray-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-gray-600">
+                          {item.pricingType === "wholesale"
+                            ? "Wholesale"
+                            : "Retail"}
+                        </span>
 
-                      <div className="mt-2 flex flex-wrap justify-between gap-2 text-xs">
+                        {item.pricingType === "wholesale" &&
+                          (item.wholesaleUnit === "SET" ||
+                            item.isSet) && (
+                            <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                              Set / Pack
+                            </span>
+                          )}
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap justify-between gap-2 text-xs">
                         <span className="text-gray-500">
-                          Qty:{" "}
-                          {
-                            item.quantity
-                          }
+                          Qty: <strong className="text-gray-900">
+                            {item.quantity} {unitLabel(item)}
+                          </strong>
                         </span>
 
                         <span className="font-black text-gray-900">
                           ₹
-                          {(
-                            item.selectedPrice *
-                            item.quantity
-                          ).toLocaleString(
-                            "en-IN"
-                          )}
+                          {item.subtotal.toLocaleString("en-IN")}
                         </span>
                       </div>
 
                       <p className="mt-1 text-[10px] text-gray-400">
                         ₹
-                        {item.selectedPrice.toLocaleString(
-                          "en-IN"
-                        )}{" "}
-                        / unit
+                        {item.selectedPrice.toLocaleString("en-IN")}{" "}
+                        / {unitLabel(item).toLowerCase()}
                       </p>
+
+                      {item.pricingType === "wholesale" &&
+                        (item.wholesaleUnit === "SET" || item.isSet) && (
+                          <div className="mt-2 rounded-xl bg-amber-50 p-2 text-[10px] text-amber-800">
+                            {item.setName && (
+                              <p className="font-bold">
+                                {item.setName}
+                              </p>
+                            )}
+
+                            <p className={item.setName ? "mt-1" : ""}>
+                              {item.piecesPerSet
+                                ? `${item.quantity} set${item.quantity > 1 ? "s" : ""} × ${item.piecesPerSet} pieces = ${actualPieces(item)} pieces`
+                                : `${actualPieces(item)} pieces`}
+                            </p>
+
+                            {item.setBreakAllowed === false && (
+                              <p className="mt-1 font-semibold">
+                                🔒 Set cannot be broken
+                              </p>
+                            )}
+
+                            {Array.isArray(item.setComposition) &&
+                              item.setComposition.length > 0 && (
+                                <div className="mt-2 space-y-1">
+                                  {item.setComposition.map(
+                                    (composition, compositionIndex) => (
+                                      <p key={compositionIndex}>
+                                        {composition.value} × {composition.quantity}
+                                      </p>
+                                    )
+                                  )}
+                                </div>
+                              )}
+                          </div>
+                        )}
                     </div>
                   </div>
                 )
@@ -579,6 +651,29 @@ export default function OrderDetailsPage() {
             </section>
 
           </div>
+        </div>
+
+        <div className="mt-5 grid gap-3 sm:grid-cols-3">
+          <Link
+            href="/account/orders"
+            className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-center text-sm font-bold text-gray-700 transition hover:bg-gray-50"
+          >
+            ← My Orders
+          </Link>
+
+          <Link
+            href="/products"
+            className="rounded-2xl border border-gray-200 bg-white px-5 py-3 text-center text-sm font-bold text-gray-700 transition hover:bg-gray-50"
+          >
+            Continue Shopping
+          </Link>
+
+          <Link
+            href={`/order-success/${order.id}`}
+            className="rounded-2xl bg-black px-5 py-3 text-center text-sm font-bold text-white transition hover:bg-gray-800"
+          >
+            Order Summary
+          </Link>
         </div>
       </main>
 
