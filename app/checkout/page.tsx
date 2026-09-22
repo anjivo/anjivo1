@@ -6,7 +6,6 @@ import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
 import { getCart, groupCartBySeller } from "@/lib/cart";
-import { createCustomerOrder } from "@/lib/orders";
 import type { ShippingAddress } from "@/lib/orders";
 import type { Cart } from "@/lib/cart";
 
@@ -152,9 +151,7 @@ export default function CheckoutPage() {
 
   async function placeOrder() {
     if (!userId) {
-      setError(
-        "Please login before placing your order."
-      );
+      setError("Please login before placing your order.");
       return;
     }
 
@@ -171,17 +168,158 @@ export default function CheckoutPage() {
       setPlacingOrder(true);
       setError("");
 
-      const result =
-        await createCustomerOrder({
-          userId,
-          shippingAddress: address,
-          paymentMethod: "COD",
-        });
+      const currentUser = auth.currentUser;
+
+      if (!currentUser) {
+        setError(
+          "Your login session has expired. Please login again."
+        );
+        return;
+      }
+
+      const idToken = await currentUser.getIdToken();
+
+      /*
+       * Step 1: Validate the cart on the server.
+       *
+       * userId is included here because the current
+       * /api/checkout/validate route still expects it.
+       * The final order API does NOT trust a client userId.
+       */
+      const validationResponse = await fetch(
+        "/api/checkout/validate",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            userId,
+            items: cart.items.map((item) => ({
+              id: item.id,
+              productId: item.id,
+              sellerId: item.sellerId,
+              quantity: item.quantity,
+              pricingType: item.pricingType,
+            })),
+          }),
+        }
+      );
+
+      const validationResult =
+        await validationResponse.json();
+
+      if (
+        !validationResponse.ok ||
+        !validationResult.success
+      ) {
+        const validationErrors = Array.isArray(
+          validationResult.errors
+        )
+          ? validationResult.errors
+          : [];
+
+        if (validationErrors.length > 0) {
+          setError(
+            validationErrors
+              .map(
+                (item: { message?: string }) =>
+                  item.message || "Cart validation failed."
+              )
+              .join(" ")
+          );
+        } else {
+          setError(
+            validationResult.message ||
+              "Unable to validate your cart."
+          );
+        }
+
+        return;
+      }
+
+      /*
+       * Step 2: Create the order through the secure
+       * server API.
+       *
+       * IMPORTANT:
+       * Do not send userId here.
+       * /api/orders/create gets the UID from the
+       * verified Firebase ID token.
+       */
+      const validatedItems = Array.isArray(
+        validationResult.items
+      )
+        ? validationResult.items
+        : [];
+
+      if (validatedItems.length === 0) {
+        setError(
+          "No valid items were found for this order."
+        );
+        return;
+      }
+
+      const orderResponse = await fetch(
+        "/api/orders/create",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            shippingAddress: address,
+            paymentMethod: "COD",
+            items: validatedItems.map(
+              (item: {
+                productId?: string;
+                id?: string;
+                sellerId: string;
+                quantity: number;
+                pricingType: "retail" | "wholesale";
+              }) => ({
+                productId:
+                  item.productId || item.id || "",
+                sellerId: item.sellerId,
+                quantity: item.quantity,
+                pricingType: item.pricingType,
+              })
+            ),
+          }),
+        }
+      );
+
+      const orderResult = await orderResponse.json();
+
+      if (orderResponse.status === 401) {
+        setError(
+          "Your login session has expired. Please login again."
+        );
+        return;
+      }
+
+      if (
+        !orderResponse.ok ||
+        !orderResult.success
+      ) {
+        throw new Error(
+          orderResult.message ||
+            "Unable to create your order."
+        );
+      }
+
+      if (!orderResult.orderId) {
+        throw new Error(
+          "Order was created but order ID was not returned."
+        );
+      }
 
       window.location.href =
-        `/order-success/${result.orderId}`;
+        `/order-success/${orderResult.orderId}`;
     } catch (err) {
-      console.error(err);
+      console.error("Checkout error:", err);
 
       setError(
         err instanceof Error
