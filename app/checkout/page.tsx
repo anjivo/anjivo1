@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
-import { getCart, groupCartBySeller } from "@/lib/cart";
+import { getCart, groupCartBySeller, getCartItemPieceQuantity, getCartItemTotal } from "@/lib/cart";
 import type { ShippingAddress } from "@/lib/orders";
 import type { Cart } from "@/lib/cart";
 
@@ -195,13 +195,16 @@ export default function CheckoutPage() {
             Authorization: `Bearer ${idToken}`,
           },
           body: JSON.stringify({
-            userId,
             items: cart.items.map((item) => ({
               id: item.id,
               productId: item.id,
               sellerId: item.sellerId,
               quantity: item.quantity,
               pricingType: item.pricingType,
+              wholesaleUnit: item.wholesaleUnit,
+              piecesPerSet: item.piecesPerSet,
+              setName: item.setName,
+              setBreakAllowed: item.setBreakAllowed,
             })),
           }),
         }
@@ -279,13 +282,21 @@ export default function CheckoutPage() {
                 sellerId: string;
                 quantity: number;
                 pricingType: "retail" | "wholesale";
+                wholesaleUnit?: "PIECE" | "SET";
+                piecesPerSet?: number;
+                setName?: string;
+                setBreakAllowed?: boolean;
               }) => ({
                 productId:
                   item.productId || item.id || "",
                 sellerId: item.sellerId,
                 quantity: item.quantity,
                 pricingType: item.pricingType,
-              })
+                wholesaleUnit: item.wholesaleUnit,
+                piecesPerSet: item.piecesPerSet,
+                setName: item.setName,
+                setBreakAllowed: item.setBreakAllowed,
+              }))
             ),
           }),
         }
@@ -633,9 +644,13 @@ export default function CheckoutPage() {
                                 {item.name}
                               </p>
 
-                              <div className="mt-1 flex flex-wrap gap-2 text-xs">
+                              <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                 <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">
-                                  Qty: {item.quantity}
+                                  {item.pricingType === "wholesale" && item.isSet
+                                    ? `Qty: ${item.quantity} ${
+                                        item.quantity === 1 ? "Set" : "Sets"
+                                      }`
+                                    : `Qty: ${item.quantity}`}
                                 </span>
 
                                 <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">
@@ -644,16 +659,52 @@ export default function CheckoutPage() {
                                     ? "Wholesale"
                                     : "Retail"}
                                 </span>
+
+                                {item.isSet && (
+                                  <span className="rounded-full bg-slate-900 px-2 py-1 font-bold text-white">
+                                    SET / PACK
+                                  </span>
+                                )}
                               </div>
+
+                              {item.isSet && (
+                                <div className="mt-2 rounded-xl bg-amber-50 p-2.5 text-[11px] leading-5 text-amber-800">
+                                  <p className="font-bold">
+                                    {item.setName || "Complete Wholesale Set"}
+                                  </p>
+                                  <p>
+                                    1 Set = {item.piecesPerSet || 1} pieces
+                                    {" · "}
+                                    Total pieces:{" "}
+                                    {getCartItemPieceQuantity(item)}
+                                  </p>
+                                  {item.setBreakAllowed === false && (
+                                    <p className="mt-1 font-bold">
+                                      🔒 Complete set only — set cannot be broken.
+                                    </p>
+                                  )}
+                                  {item.setComposition &&
+                                    item.setComposition.length > 0 && (
+                                      <p className="mt-1 text-amber-700">
+                                        Composition:{" "}
+                                        {item.setComposition
+                                          .map(
+                                            (component) =>
+                                              `${component.value} × ${component.quantity}`
+                                          )
+                                          .join(", ")}
+                                      </p>
+                                    )}
+                                </div>
+                              )}
                             </div>
 
                             <div className="text-right">
                               <p className="font-bold text-slate-900">
                                 ₹
-                                {(
-                                  item.selectedPrice *
-                                  item.quantity
-                                ).toLocaleString("en-IN")}
+                                {getCartItemTotal(item).toLocaleString(
+                                  "en-IN"
+                                )}
                               </p>
 
                               <p className="text-xs text-slate-500">
@@ -661,8 +712,14 @@ export default function CheckoutPage() {
                                 {item.selectedPrice.toLocaleString(
                                   "en-IN"
                                 )}{" "}
-                                each
+                                {item.isSet ? "per set" : "each"}
                               </p>
+
+                              {item.isSet && (
+                                <p className="mt-1 text-[10px] text-slate-400">
+                                  {getCartItemPieceQuantity(item)} pieces represented
+                                </p>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -685,13 +742,35 @@ export default function CheckoutPage() {
               <div className="mt-6 space-y-4 text-sm">
                 <div className="flex justify-between">
                   <span className="text-slate-500">
-                    Items
+                    Cart Lines
+                  </span>
+
+                  <span className="font-semibold text-slate-900">
+                    {cart.items.length}
+                  </span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="text-slate-500">
+                    Total Units
                   </span>
 
                   <span className="font-semibold text-slate-900">
                     {cart.items.reduce(
-                      (sum, item) =>
-                        sum + item.quantity,
+                      (sum, item) => sum + item.quantity,
+                      0
+                    )}
+                  </span>
+                </div>
+
+                <div className="flex justify-between">
+                  <span className="text-slate-500">
+                    Total Pieces
+                  </span>
+
+                  <span className="font-semibold text-slate-900">
+                    {cart.items.reduce(
+                      (sum, item) => sum + getCartItemPieceQuantity(item),
                       0
                     )}
                   </span>
@@ -765,6 +844,14 @@ export default function CheckoutPage() {
                     </span>
                   </div>
                 </div>
+              </div>
+
+              <div className="mt-5 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-xs leading-5 text-emerald-800">
+                <p className="font-bold">Secure checkout validation</p>
+                <p className="mt-1">
+                  Product price, seller ownership, wholesale rules, MOQ and
+                  stock are verified again on the server before the order is created.
+                </p>
               </div>
 
               <button
