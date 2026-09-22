@@ -20,6 +20,16 @@ type CheckoutItemInput = {
   setBreakAllowed?: boolean;
 };
 
+type NormalizedCheckoutItem = Omit<
+  CheckoutItemInput,
+  "productId" | "sellerId" | "quantity" | "pricingType"
+> & {
+  productId: string;
+  sellerId: string;
+  quantity: number;
+  pricingType: PricingType;
+};
+
 type WholesaleTier = {
   minQuantity: number;
   maxQuantity?: number;
@@ -288,27 +298,26 @@ function normalizeComposition(
           : {}),
         ...(source.value
           ? {
-              value:
-                String(source.value),
+              value: String(source.value),
             }
           : {}),
         quantity,
         ...(source.size
           ? {
-              size:
-                String(source.size),
+              size: String(source.size),
             }
           : {}),
         ...(source.color
           ? {
-              color:
-                String(source.color),
+              color: String(source.color),
             }
           : {}),
       };
     })
     .filter(
-      (item): item is SetCompositionItem =>
+      (
+        item
+      ): item is SetCompositionItem =>
         item !== null
     );
 }
@@ -727,6 +736,19 @@ export async function POST(
         productId;
     }
 
+    // From this point onward, validation has guaranteed that these
+    // fields are present and correctly typed. Keeping a normalized
+    // array prevents TypeScript from treating quantity/sellerId/etc.
+    // as optional later in the checkout pipeline.
+    const normalizedItems: NormalizedCheckoutItem[] =
+      items.map((item) => ({
+        ...item,
+        productId: item.productId!,
+        sellerId: item.sellerId!,
+        quantity: item.quantity!,
+        pricingType: item.pricingType!,
+      }));
+
     /*
      * ---------------------------------------------------------
      * 6. PREVENT DUPLICATE LINES
@@ -741,7 +763,7 @@ export async function POST(
     const duplicateKeys =
       new Set<string>();
 
-    for (const item of items) {
+    for (const item of normalizedItems) {
       const key = [
         item.productId,
         item.sellerId,
@@ -772,7 +794,7 @@ export async function POST(
      */
     const productIds = Array.from(
       new Set(
-        items.map(
+        normalizedItems.map(
           (item) =>
             item.productId as string
         )
@@ -829,7 +851,7 @@ export async function POST(
      * ---------------------------------------------------------
      */
     const containsWholesale =
-      items.some(
+      normalizedItems.some(
         (item) =>
           item.pricingType ===
           "wholesale"
@@ -876,7 +898,7 @@ export async function POST(
     const validatedItems: ValidatedItem[] =
       [];
 
-    for (const item of items) {
+    for (const item of normalizedItems) {
       const product =
         products.get(
           item.productId as string
