@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 
 import {
   loginUser,
+  logoutUser,
 } from "@/lib/auth";
 
 import {
@@ -23,7 +24,7 @@ import {
   db,
 } from "@/lib/firebase";
 
-type LoginType = "BUYER" | "SELLER";
+type LoginType = "BUYER" | "SELLER" | "ADMIN";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -113,6 +114,37 @@ export default function LoginPage() {
         String(
           userData.sellerStatus ?? ""
         );
+
+      /*
+       * =========================
+       * ADMIN LOGIN
+       * =========================
+       */
+
+      if (loginType === "ADMIN") {
+        if (role !== "ADMIN") {
+          await logoutUser();
+          setError(
+            "This account does not have Admin access."
+          );
+          return;
+        }
+
+        const accountStatus = String(
+          userData.accountStatus ?? ""
+        ).toUpperCase();
+
+        if (accountStatus !== "ACTIVE") {
+          await logoutUser();
+          setError(
+            "This Admin account is not active. Please contact the ANJIVO owner."
+          );
+          return;
+        }
+
+        router.push("/admin");
+        return;
+      }
 
       /*
        * =========================
@@ -406,7 +438,7 @@ export default function LoginPage() {
               BUYER / SELLER SELECTOR
           ===================================== */}
 
-          <div className="mt-7 grid grid-cols-2 gap-3">
+          <div className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-3">
 
             {/* BUYER */}
 
@@ -483,6 +515,44 @@ export default function LoginPage() {
 
             </button>
 
+
+            {/* ADMIN */}
+
+            <button
+              type="button"
+              onClick={() => {
+                setLoginType("ADMIN");
+                setError("");
+                setSuccess("");
+              }}
+              className={`rounded-2xl border p-4 text-left transition ${
+                loginType === "ADMIN"
+                  ? "border-black bg-black text-white shadow-lg"
+                  : "border-gray-200 bg-white text-gray-900 hover:border-gray-400"
+              }`}
+            >
+
+              <div className="text-2xl">
+                🔐
+              </div>
+
+              <p className="mt-3 text-sm font-black">
+                Admin Login
+              </p>
+
+              <p
+                className={`mt-1 text-[10px] leading-4 ${
+                  loginType === "ADMIN"
+                    ? "text-gray-300"
+                    : "text-gray-500"
+                }`}
+              >
+                Restricted access for
+                ANJIVO administration.
+              </p>
+
+            </button>
+
           </div>
 
 
@@ -501,7 +571,9 @@ export default function LoginPage() {
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-black text-lg text-white">
                   {loginType === "BUYER"
                     ? "🛒"
-                    : "🏪"}
+                    : loginType === "SELLER"
+                      ? "🏪"
+                      : "🔐"}
                 </div>
 
                 <div>
@@ -509,20 +581,26 @@ export default function LoginPage() {
                   <p className="text-xs font-black uppercase tracking-wider text-gray-400">
                     {loginType === "BUYER"
                       ? "Buyer Login"
-                      : "Seller Login"}
+                      : loginType === "SELLER"
+                        ? "Seller Login"
+                        : "Admin Login"}
                   </p>
 
                   <h2 className="mt-1 text-lg font-black">
                     {loginType === "BUYER"
                       ? "Login to Buy"
-                      : "Login to Sell"}
+                      : loginType === "SELLER"
+                        ? "Login to Sell"
+                        : "Login as Admin"}
                   </h2>
 
                   <p className="mt-1 text-[11px] leading-5 text-gray-500">
 
                     {loginType === "BUYER"
                       ? "Access your orders, cart, wishlist and wholesale buying."
-                      : "Access your seller dashboard, products, orders and earnings."}
+                      : loginType === "SELLER"
+                        ? "Access your seller dashboard, products, orders and earnings."
+                        : "Restricted access to the ANJIVO administration panel."}
 
                   </p>
 
@@ -650,7 +728,9 @@ export default function LoginPage() {
                   ? "Signing in..."
                   : loginType === "BUYER"
                     ? "Login as Buyer"
-                    : "Login as Seller"}
+                    : loginType === "SELLER"
+                      ? "Login as Seller"
+                      : "Login as Admin"}
               </button>
 
             </form>
@@ -684,7 +764,7 @@ export default function LoginPage() {
 
                 </div>
 
-              ) : (
+              ) : loginType === "SELLER" ? (
 
                 <div className="text-center">
 
@@ -702,6 +782,21 @@ export default function LoginPage() {
                   <p className="mt-3 text-[10px] leading-4 text-gray-400">
                     Seller registration requires business
                     details and approval by ANJIVO.
+                  </p>
+
+                </div>
+
+              ) : (
+
+                <div className="text-center">
+
+                  <p className="text-xs text-gray-500">
+                    Admin access is restricted.
+                  </p>
+
+                  <p className="mt-2 text-[10px] leading-4 text-gray-400">
+                    Only an approved ANJIVO Admin account can
+                    access the administration panel.
                   </p>
 
                 </div>
