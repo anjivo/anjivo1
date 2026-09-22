@@ -182,9 +182,9 @@ export default function CheckoutPage() {
       /*
        * Step 1: Validate the cart on the server.
        *
-       * userId is included here because the current
-       * /api/checkout/validate route still expects it.
-       * The final order API does NOT trust a client userId.
+       * The server derives the user ID from the
+       * verified Firebase ID token.
+       * The client does not send or control the user ID.
        */
       const validationResponse = await fetch(
         "/api/checkout/validate",
@@ -296,7 +296,7 @@ export default function CheckoutPage() {
                 piecesPerSet: item.piecesPerSet,
                 setName: item.setName,
                 setBreakAllowed: item.setBreakAllowed,
-              }))
+              })
             ),
           }),
         }
