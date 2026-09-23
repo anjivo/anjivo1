@@ -1,8 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
+import {
+  deleteObject,
+  getDownloadURL,
+  getStorage,
+  ref,
+  uploadBytes,
+} from "firebase/storage";
 import { useParams, useRouter } from "next/navigation";
 import {
   collection,
@@ -14,7 +21,7 @@ import {
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 
-import { auth, db } from "@/lib/firebase";
+import app, { auth, db } from "@/lib/firebase";
 
 import {
   getSellerProduct,
@@ -31,6 +38,106 @@ type Tier = {
   maxQuantity: string;
   price: string;
 };
+
+type ImageItem =
+  | {
+      kind: "existing";
+      id: string;
+      url: string;
+    }
+  | {
+      kind: "new";
+      id: string;
+      file: File;
+      previewUrl: string;
+    };
+
+const MAX_PRODUCT_IMAGES = 10;
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION = 1600;
+
+const ALLOWED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/avif",
+];
+
+function createImageId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2, 10)}`;
+}
+
+async function compressImage(file: File): Promise<File> {
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    throw new Error(
+      `${file.name}: only JPG, PNG, WEBP or AVIF images are allowed.`
+    );
+  }
+
+  if (file.size > MAX_IMAGE_SIZE_BYTES) {
+    throw new Error(
+      `${file.name}: image must be 5 MB or smaller.`
+    );
+  }
+
+  if (typeof window === "undefined") {
+    return file;
+  }
+
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(
+    1,
+    MAX_IMAGE_DIMENSION / bitmap.width,
+    MAX_IMAGE_DIMENSION / bitmap.height
+  );
+
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    bitmap.close();
+    return file;
+  }
+
+  context.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close();
+
+  const blob = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/webp", 0.82)
+  );
+
+  if (!blob) {
+    return file;
+  }
+
+  const baseName = file.name.replace(/\.[^/.]+$/, "");
+  return new File(
+    [blob],
+    `${baseName}.webp`,
+    {
+      type: "image/webp",
+      lastModified: Date.now(),
+    }
+  );
+}
+
+async function tryDeleteStorageObject(url: string) {
+  if (!url) return;
+
+  try {
+    await deleteObject(ref(getStorage(app), url));
+  } catch {
+    // Existing images may come from an external URL or may already be deleted.
+    // Product data cleanup should not fail only because Storage cleanup failed.
+  }
+}
 
 function createDefaultTiers(
   moq = "10"
@@ -153,8 +260,17 @@ export default function EditSellerProductPage() {
   const [setCompositionText, setSetCompositionText] =
     useState("");
 
-  const [imageUrl, setImageUrl] =
+  const [imageItems, setImageItems] =
+    useState<ImageItem[]>([]);
+
+  const [imageBusy, setImageBusy] =
+    useState(false);
+
+  const [imageError, setImageError] =
     useState("");
+
+  const imageInputRef =
+    useRef<HTMLInputElement | null>(null);
 
   const [tiers, setTiers] =
     useState<Tier[]>([]);
@@ -354,9 +470,14 @@ export default function EditSellerProductPage() {
                 .join(", ") ?? ""
             );
 
-            setImageUrl(
-              loadedProduct.images?.[0] ??
-                ""
+            setImageItems(
+              (loadedProduct.images ?? [])
+                .slice(0, MAX_PRODUCT_IMAGES)
+                .map((url, index) => ({
+                  kind: "existing" as const,
+                  id: `existing-${index}-${url}`,
+                  url,
+                }))
             );
 
             /* ===============================================
@@ -567,6 +688,159 @@ export default function EditSellerProductPage() {
         ...(color ? { color } : {}),
       };
     });
+  }
+
+
+  /* =========================================================
+     IMAGE MANAGEMENT
+  ========================================================= */
+
+  async function handleImageSelection(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+
+    if (!files.length) return;
+
+    try {
+      setImageError("");
+      setImageBusy(true);
+
+      const currentCount = imageItems.length;
+      if (currentCount >= MAX_PRODUCT_IMAGES) {
+        throw new Error(
+          `Maximum ${MAX_PRODUCT_IMAGES} product images are allowed.`
+        );
+      }
+
+      const remainingSlots =
+        MAX_PRODUCT_IMAGES - currentCount;
+
+      if (files.length > remainingSlots) {
+        throw new Error(
+          `You can add only ${remainingSlots} more image${
+            remainingSlots === 1 ? "" : "s"
+          }. Maximum ${MAX_PRODUCT_IMAGES} images are allowed.`
+        );
+      }
+
+      const compressedFiles: ImageItem[] = [];
+
+      for (const file of files) {
+        const compressed = await compressImage(file);
+
+        compressedFiles.push({
+          kind: "new",
+          id: createImageId("new-image"),
+          file: compressed,
+          previewUrl: URL.createObjectURL(compressed),
+        });
+      }
+
+      setImageItems((current) => [
+        ...current,
+        ...compressedFiles,
+      ]);
+    } catch (err) {
+      setImageError(
+        err instanceof Error
+          ? err.message
+          : "Unable to add image."
+      );
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  function removeImage(index: number) {
+    setImageError("");
+
+    setImageItems((current) => {
+      const item = current[index];
+
+      if (item?.kind === "new") {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+
+      return current.filter(
+        (_, itemIndex) => itemIndex !== index
+      );
+    });
+  }
+
+  function moveImage(
+    index: number,
+    direction: "left" | "right"
+  ) {
+    setImageError("");
+
+    setImageItems((current) => {
+      const nextIndex =
+        direction === "left"
+          ? index - 1
+          : index + 1;
+
+      if (
+        index < 0 ||
+        index >= current.length ||
+        nextIndex < 0 ||
+        nextIndex >= current.length
+      ) {
+        return current;
+      }
+
+      const next = [...current];
+      [next[index], next[nextIndex]] = [
+        next[nextIndex],
+        next[index],
+      ];
+
+      return next;
+    });
+  }
+
+  async function uploadNewProductImages(
+    userId: string,
+    items: ImageItem[]
+  ): Promise<string[]> {
+    const storage = getStorage(app);
+    const finalUrls: string[] = [];
+
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index];
+
+      if (item.kind === "existing") {
+        finalUrls.push(item.url);
+        continue;
+      }
+
+      const storagePath =
+        `product-images/${userId}/${productId}/image-${Date.now()}-${index}.webp`;
+
+      const storageRef = ref(
+        storage,
+        storagePath
+      );
+
+      await uploadBytes(
+        storageRef,
+        item.file,
+        {
+          contentType:
+            item.file.type || "image/webp",
+          cacheControl:
+            "public,max-age=31536000,immutable",
+        }
+      );
+
+      const url =
+        await getDownloadURL(storageRef);
+
+      finalUrls.push(url);
+    }
+
+    return finalUrls;
   }
 
   /* =========================================================
@@ -1131,10 +1405,21 @@ export default function EditSellerProductPage() {
          IMAGE
       =============================================== */
 
-      const images =
-        imageUrl.trim()
-          ? [imageUrl.trim()]
-          : [];
+      if (
+        imageItems.length < 1
+      ) {
+        throw new Error(
+          "Add at least one product image."
+        );
+      }
+
+      if (
+        imageItems.length > MAX_PRODUCT_IMAGES
+      ) {
+        throw new Error(
+          `Maximum ${MAX_PRODUCT_IMAGES} product images are allowed.`
+        );
+      }
 
       /* ===============================================
          AUTH
@@ -1150,8 +1435,17 @@ export default function EditSellerProductPage() {
       }
 
       /* ===============================================
-         UPDATE
+         UPLOAD + UPDATE
       =============================================== */
+
+      setImageError("");
+      setImageBusy(true);
+
+      const images =
+        await uploadNewProductImages(
+          user.uid,
+          imageItems
+        );
 
       await updateSellerProduct(
         user.uid,
@@ -1197,6 +1491,51 @@ export default function EditSellerProductPage() {
         }
       );
 
+      const retainedExistingUrls =
+        new Set(
+          imageItems
+            .filter(
+              (item) =>
+                item.kind === "existing"
+            )
+            .map(
+              (item) => item.url
+            )
+        );
+
+      const removedExistingUrls =
+        (product.images ?? []).filter(
+          (url) =>
+            !retainedExistingUrls.has(url)
+        );
+
+      await Promise.all(
+        removedExistingUrls.map(
+          (url) =>
+            tryDeleteStorageObject(url)
+        )
+      );
+
+      setImageBusy(false);
+
+      setImageItems((current) => {
+        current.forEach((item) => {
+          if (item.kind === "new") {
+            URL.revokeObjectURL(
+              item.previewUrl
+            );
+          }
+        });
+
+        return images.map(
+          (url, index) => ({
+            kind: "existing" as const,
+            id: `saved-${index}-${url}`,
+            url,
+          })
+        );
+      });
+
       setSuccess(
         "Product updated successfully."
       );
@@ -1219,6 +1558,7 @@ export default function EditSellerProductPage() {
       );
     } finally {
       setSaving(false);
+      setImageBusy(false);
     }
   }
 
@@ -1482,58 +1822,182 @@ export default function EditSellerProductPage() {
           </section>
 
           {/* =================================================
-              IMAGE
+              IMAGE MANAGEMENT
           ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
-
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
               Step 2
             </p>
 
-            <h2 className="mt-1 text-xl font-black">
-              Product Image
-            </h2>
+            <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-black">
+                  Product Images
+                </h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  Add up to {MAX_PRODUCT_IMAGES} images. The first image is the main product image.
+                </p>
+              </div>
 
-            <p className="mt-1 text-xs text-gray-500">
-              Enter a publicly accessible image URL.
-            </p>
-
-            <div className="mt-5">
-
-              <input
-                type="url"
-                value={imageUrl}
-                onChange={(event) =>
-                  setImageUrl(
-                    event.target.value
-                  )
-                }
-                placeholder="https://example.com/product.jpg"
-                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-black"
-              />
-
+              <span className="w-fit rounded-full bg-gray-100 px-3 py-1.5 text-[10px] font-black text-gray-600">
+                {imageItems.length}/{MAX_PRODUCT_IMAGES}
+              </span>
             </div>
 
-            {imageUrl && (
-              <div className="mt-5 flex h-56 items-center justify-center overflow-hidden rounded-2xl bg-gray-100">
-
-                <img
-                  src={imageUrl}
-                  alt={
-                    name ||
-                    "Product preview"
-                  }
-                  className="h-full w-full object-contain"
-                  onError={(event) => {
-                    event.currentTarget.style.display =
-                      "none";
-                  }}
-                />
-
+            {imageError && (
+              <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3">
+                <p className="text-xs font-semibold text-red-700">
+                  {imageError}
+                </p>
               </div>
             )}
 
+            <div className="mt-5">
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/avif"
+                multiple
+                className="hidden"
+                onChange={handleImageSelection}
+              />
+
+              <button
+                type="button"
+                disabled={
+                  imageBusy ||
+                  imageItems.length >=
+                    MAX_PRODUCT_IMAGES
+                }
+                onClick={() =>
+                  imageInputRef.current?.click()
+                }
+                className="w-full rounded-2xl border-2 border-dashed border-gray-300 bg-gray-50 px-5 py-8 text-center transition hover:border-black disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <span className="block text-3xl">
+                  {imageBusy ? "⏳" : "📷"}
+                </span>
+
+                <span className="mt-2 block text-sm font-black text-gray-800">
+                  {imageBusy
+                    ? "Processing images..."
+                    : imageItems.length >=
+                        MAX_PRODUCT_IMAGES
+                    ? "Maximum images reached"
+                    : "Click to add product images"}
+                </span>
+
+                <span className="mt-1 block text-[10px] text-gray-400">
+                  JPG, PNG, WEBP or AVIF • Maximum 5 MB each
+                </span>
+              </button>
+            </div>
+
+            {imageItems.length > 0 && (
+              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                {imageItems.map(
+                  (item, index) => {
+                    const previewUrl =
+                      item.kind === "existing"
+                        ? item.url
+                        : item.previewUrl;
+
+                    return (
+                      <div
+                        key={item.id}
+                        className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
+                      >
+                        <div className="aspect-square overflow-hidden">
+                          <img
+                            src={previewUrl}
+                            alt={`${name || "Product"} image ${
+                              index + 1
+                            }`}
+                            className="h-full w-full object-cover"
+                          />
+                        </div>
+
+                        <div className="absolute left-2 top-2">
+                          <span className="rounded-full bg-black px-2 py-1 text-[9px] font-black text-white">
+                            {index === 0
+                              ? "MAIN"
+                              : `IMAGE ${index + 1}`}
+                          </span>
+                        </div>
+
+                        {item.kind === "new" && (
+                          <div className="absolute right-2 top-2">
+                            <span className="rounded-full bg-green-600 px-2 py-1 text-[8px] font-black text-white">
+                              NEW
+                            </span>
+                          </div>
+                        )}
+
+                        <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/80 to-transparent px-2 pb-2 pt-7">
+                          <button
+                            type="button"
+                            disabled={index === 0}
+                            onClick={() =>
+                              moveImage(
+                                index,
+                                "left"
+                              )
+                            }
+                            className="rounded-lg bg-white/90 px-2 py-1 text-[10px] font-black text-black disabled:cursor-not-allowed disabled:opacity-30"
+                            aria-label="Move image left"
+                          >
+                            ←
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={
+                              index ===
+                              imageItems.length - 1
+                            }
+                            onClick={() =>
+                              moveImage(
+                                index,
+                                "right"
+                              )
+                            }
+                            className="rounded-lg bg-white/90 px-2 py-1 text-[10px] font-black text-black disabled:cursor-not-allowed disabled:opacity-30"
+                            aria-label="Move image right"
+                          >
+                            →
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() =>
+                              removeImage(index)
+                            }
+                            className="rounded-lg bg-red-600 px-2 py-1 text-[10px] font-black text-white"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+                )}
+              </div>
+            )}
+
+            {imageItems.length === 0 && (
+              <div className="mt-5 rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
+                <p className="text-xs font-bold text-gray-500">
+                  No product images added yet.
+                </p>
+              </div>
+            )}
+
+            <div className="mt-5 rounded-2xl bg-gray-50 p-4">
+              <p className="text-[10px] font-semibold leading-5 text-gray-500">
+                Images are compressed before upload. Use the arrow buttons to change the order; the first image becomes the main product image. Removed Firebase Storage images are cleaned up after a successful product update.
+              </p>
+            </div>
           </section>
 
           {/* =================================================
