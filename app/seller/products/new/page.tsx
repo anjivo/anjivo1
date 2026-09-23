@@ -16,13 +16,21 @@ import {
 } from "firebase/firestore";
 
 import {
+  getDownloadURL,
+  getStorage,
+  ref,
+  uploadBytes,
+  deleteObject,
+} from "firebase/storage";
+
+import {
   useRouter,
 } from "next/navigation";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 
-import {
+import app, {
   auth,
   db,
 } from "@/lib/firebase";
@@ -45,6 +53,8 @@ import type {
   SetVariantType,
   SetCompositionItem,
 } from "@/types/product";
+
+const storage = getStorage(app);
 
 /* =========================================================
    TYPES
@@ -166,9 +176,14 @@ export default function NewSellerProductPage() {
   ] = useState("");
 
   const [
-    imageUrl,
-    setImageUrl,
-  ] = useState("");
+    imageFiles,
+    setImageFiles,
+  ] = useState<File[]>([]);
+
+  const [
+    imagePreviews,
+    setImagePreviews,
+  ] = useState<string[]>([]);
 
   /* =======================================================
      PRODUCT SELLING MODE
@@ -216,8 +231,8 @@ export default function NewSellerProductPage() {
   ======================================================= */
 
   const [
-    wholesaleSetName,
-    setWholesaleSetName,
+    setName,
+    setSetName,
   ] = useState("");
 
   const [
@@ -496,7 +511,7 @@ export default function NewSellerProductPage() {
         "PIECE"
       );
 
-      setWholesaleSetName("");
+      setSetName("");
 
       setSetSize("1");
 
@@ -553,7 +568,7 @@ export default function NewSellerProductPage() {
     if (
       unit === "PIECE"
     ) {
-      setWholesaleSetName("");
+      setSetName("");
 
       setSetSize("1");
 
@@ -690,6 +705,151 @@ export default function NewSellerProductPage() {
   }
 
   /* =========================================================
+     PRODUCT IMAGE UPLOAD
+  ========================================================= */
+
+  const MAX_PRODUCT_IMAGES = 10;
+  const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+  const ALLOWED_IMAGE_TYPES = [
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/avif",
+  ];
+
+  function handleImageSelection(
+    event: React.ChangeEvent<HTMLInputElement>
+  ) {
+    const selectedFiles = Array.from(
+      event.target.files || []
+    );
+
+    event.target.value = "";
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    setError("");
+
+    const availableSlots =
+      MAX_PRODUCT_IMAGES - imageFiles.length;
+
+    if (availableSlots <= 0) {
+      setError(
+        `You can upload a maximum of ${MAX_PRODUCT_IMAGES} product images.`
+      );
+      return;
+    }
+
+    const filesToAdd = selectedFiles.slice(
+      0,
+      availableSlots
+    );
+
+    if (selectedFiles.length > availableSlots) {
+      setError(
+        `Only ${availableSlots} more image${
+          availableSlots === 1 ? "" : "s"
+        } can be added. Maximum is ${MAX_PRODUCT_IMAGES} images.`
+      );
+    }
+
+    for (const file of filesToAdd) {
+      if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        setError(
+          `Unsupported image format: ${file.name}. Use JPG, PNG, WEBP or AVIF.`
+        );
+        return;
+      }
+
+      if (file.size > MAX_IMAGE_SIZE_BYTES) {
+        setError(
+          `${file.name} is larger than 5 MB. Please choose a smaller image.`
+        );
+        return;
+      }
+    }
+
+    setImageFiles((previous) => [
+      ...previous,
+      ...filesToAdd,
+    ]);
+  }
+
+  function removeImage(index: number) {
+    setImageFiles((previous) =>
+      previous.filter((_, fileIndex) => fileIndex !== index)
+    );
+  }
+
+  useEffect(() => {
+    const urls = imageFiles.map((file) =>
+      URL.createObjectURL(file)
+    );
+
+    setImagePreviews(urls);
+
+    return () => {
+      urls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [imageFiles]);
+
+  async function uploadProductImages(
+    files: File[],
+    sellerUid: string,
+    productSlug: string
+  ) {
+    const uploadedRefs: ReturnType<typeof ref>[] = [];
+    const downloadUrls: string[] = [];
+
+    try {
+      const uploadFolder = `products/${sellerUid}/${productSlug}-${Date.now()}`;
+
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const safeFileName = file.name
+          .toLowerCase()
+          .replace(/[^a-z0-9.\-_]+/g, "-");
+
+        const storageRef = ref(
+          storage,
+          `${uploadFolder}/${index + 1}-${crypto.randomUUID()}-${safeFileName}`
+        );
+
+        uploadedRefs.push(storageRef);
+
+        const snapshot = await uploadBytes(
+          storageRef,
+          file,
+          {
+            contentType: file.type,
+            cacheControl: "public,max-age=31536000,immutable",
+          }
+        );
+
+        const downloadUrl =
+          await getDownloadURL(snapshot.ref);
+
+        downloadUrls.push(downloadUrl);
+      }
+
+      return {
+        downloadUrls,
+        uploadedRefs,
+      };
+    } catch (error) {
+      await Promise.allSettled(
+        uploadedRefs.map((storageRef) =>
+          deleteObject(storageRef)
+        )
+      );
+
+      throw error;
+    }
+  }
+
+  /* =========================================================
      VALIDATION
   ========================================================= */
 
@@ -721,6 +881,14 @@ export default function NewSellerProductPage() {
       !categoryName.trim()
     ) {
       return "Selected category is invalid.";
+    }
+
+    if (imageFiles.length === 0) {
+      return "Please upload at least one product image.";
+    }
+
+    if (imageFiles.length > MAX_PRODUCT_IMAGES) {
+      return `You can upload a maximum of ${MAX_PRODUCT_IMAGES} product images.`;
     }
 
     /* =======================================================
@@ -809,7 +977,7 @@ export default function NewSellerProductPage() {
       }
 
       if (
-        !wholesaleSetName.trim()
+        !setName.trim()
       ) {
         return "Enter a name for the wholesale set.";
       }
@@ -1262,6 +1430,8 @@ export default function NewSellerProductPage() {
       return;
     }
 
+    let uploadedImageRefs: ReturnType<typeof ref>[] = [];
+
     try {
       setSaving(true);
 
@@ -1300,17 +1470,6 @@ export default function NewSellerProductPage() {
           );
 
       /* =====================================================
-         IMAGE
-      ===================================================== */
-
-      const images =
-        imageUrl.trim()
-          ? [
-              imageUrl.trim(),
-            ]
-          : [];
-
-      /* =====================================================
          SLUG
       ===================================================== */
 
@@ -1326,6 +1485,29 @@ export default function NewSellerProductPage() {
 
         return;
       }
+
+      /* =====================================================
+         IMAGE UPLOAD
+      ===================================================== */
+
+      setSuccess(
+        `Uploading ${imageFiles.length} product image${
+          imageFiles.length === 1 ? "" : "s"
+        }...`
+      );
+
+      const uploadedImages =
+        await uploadProductImages(
+          imageFiles,
+          sellerId,
+          slug
+        );
+
+      uploadedImageRefs =
+        uploadedImages.uploadedRefs;
+
+      const images =
+        uploadedImages.downloadUrls;
 
       /* =====================================================
          COMPOSITION
@@ -1393,7 +1575,7 @@ export default function NewSellerProductPage() {
                   ),
 
                 setName:
-                  wholesaleSetName.trim(),
+                  setName.trim(),
 
                 composition:
                   setComposition,
@@ -1467,7 +1649,7 @@ export default function NewSellerProductPage() {
       );
 
       setSuccess(
-        "Product saved as draft successfully."
+        "Product saved as draft successfully with all images uploaded."
       );
 
       setTimeout(
@@ -1483,6 +1665,14 @@ export default function NewSellerProductPage() {
         "Create seller product error:",
         err
       );
+
+      if (uploadedImageRefs.length > 0) {
+        await Promise.allSettled(
+          uploadedImageRefs.map((storageRef) =>
+            deleteObject(storageRef)
+          )
+        );
+      }
 
       setError(
         err instanceof Error
@@ -1781,7 +1971,7 @@ export default function NewSellerProductPage() {
           </section>
 
           {/* =================================================
-              IMAGE
+              IMAGE UPLOAD
           ================================================= */}
 
           <section className="rounded-3xl border border-gray-200 bg-white p-5 sm:p-7">
@@ -1790,51 +1980,88 @@ export default function NewSellerProductPage() {
             </p>
 
             <h2 className="mt-1 text-xl font-black">
-              Product Image
+              Product Images
             </h2>
 
-            <p className="mt-1 text-xs text-gray-400">
-              Image upload/storage integration will be connected later.
-              For now use a public image URL.
+            <p className="mt-1 text-xs leading-5 text-gray-400">
+              Upload up to 10 product images directly from your device.
+              JPG, PNG, WEBP and AVIF are supported. Maximum 5 MB per image.
             </p>
 
             <div className="mt-5">
-              <label className="mb-2 block text-xs font-bold">
-                Product Image URL
+              <label
+                htmlFor="product-images"
+                className="flex min-h-40 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-300 bg-gray-50 px-5 py-8 text-center transition hover:border-black hover:bg-white"
+              >
+                <div className="text-4xl">📸</div>
+
+                <p className="mt-3 text-sm font-black">
+                  Choose Product Images
+                </p>
+
+                <p className="mt-1 text-[10px] text-gray-500">
+                  Select multiple images at once · {imageFiles.length}/{MAX_PRODUCT_IMAGES} selected
+                </p>
+
+                <span className="mt-4 rounded-xl bg-black px-5 py-2.5 text-xs font-bold text-white">
+                  + Add Images
+                </span>
               </label>
 
               <input
-                type="url"
-                value={
-                  imageUrl
+                id="product-images"
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/avif"
+                multiple
+                onChange={handleImageSelection}
+                disabled={
+                  saving ||
+                  imageFiles.length >= MAX_PRODUCT_IMAGES
                 }
-                onChange={(
-                  event
-                ) =>
-                  setImageUrl(
-                    event.target.value
-                  )
-                }
-                placeholder="https://example.com/product-image.jpg"
-                className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none transition focus:border-black"
+                className="sr-only"
               />
             </div>
 
-            {imageUrl && (
-              <div className="mt-4 overflow-hidden rounded-2xl border border-gray-200 bg-gray-50">
-                <img
-                  src={
-                    imageUrl
-                  }
-                  alt="Product preview"
-                  className="h-64 w-full object-contain"
-                  onError={(
-                    event
-                  ) => {
-                    event.currentTarget.style.display =
-                      "none";
-                  }}
-                />
+            {imageFiles.length > 0 && (
+              <div className="mt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-black">
+                    Selected Images ({imageFiles.length}/{MAX_PRODUCT_IMAGES})
+                  </p>
+
+                  <p className="text-[10px] text-gray-400">
+                    First image will be the main product image.
+                  </p>
+                </div>
+
+                <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
+                  {imagePreviews.map((preview, index) => (
+                    <div
+                      key={`${preview}-${index}`}
+                      className="group relative aspect-square overflow-hidden rounded-2xl border border-gray-200 bg-gray-50"
+                    >
+                      <img
+                        src={preview}
+                        alt={`Product image ${index + 1}`}
+                        className="h-full w-full object-cover"
+                      />
+
+                      <div className="absolute left-2 top-2 rounded-full bg-black px-2 py-1 text-[9px] font-black text-white">
+                        {index === 0 ? "MAIN" : index + 1}
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => removeImage(index)}
+                        disabled={saving}
+                        className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-sm font-black text-red-600 shadow-sm transition hover:bg-red-50 disabled:opacity-50"
+                        aria-label={`Remove image ${index + 1}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </section>
@@ -2184,12 +2411,12 @@ export default function NewSellerProductPage() {
                   <input
                     type="text"
                     value={
-                      wholesaleSetName
+                      setName
                     }
                     onChange={(
                       event
                     ) =>
-                      setWholesaleSetName(
+                      setSetName(
                         event.target.value
                       )
                     }
@@ -3003,7 +3230,7 @@ export default function NewSellerProductPage() {
               </div>
 
               <h3 className="mt-4 text-lg font-black">
-                {wholesaleSetName ||
+                {setName ||
                   (wholesaleUnit ===
                   "SET"
                     ? "Wholesale Set"
@@ -3107,12 +3334,13 @@ export default function NewSellerProductPage() {
                   saving ||
                   categoriesLoading ||
                   categories.length ===
-                    0
+                    0 ||
+                  imageFiles.length === 0
                 }
                 className="rounded-xl bg-black px-7 py-3 text-sm font-bold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saving
-                  ? "Saving Product..."
+                  ? "Uploading & Saving..."
                   : "Save Product as Draft"}
               </button>
             </div>
