@@ -31,6 +31,170 @@ export type SetCompositionItem = {
   color?: string;
 };
 
+/* =========================================================
+   PRODUCT VARIANTS
+   ========================================================= */
+
+export type ProductVariantType =
+  | "SIZE"
+  | "COLOR"
+  | "SIZE_COLOR"
+  | "CUSTOM";
+
+/**
+ * Individual purchasable variant.
+ *
+ * Examples:
+ *
+ * Size:
+ * S
+ *
+ * Color:
+ * Black
+ *
+ * Size + Color:
+ * M / Black
+ *
+ * Each variant can have its own:
+ * - SKU
+ * - stock
+ * - price
+ * - images
+ */
+export type ProductVariant = {
+  /**
+   * Unique variant ID inside the product.
+   *
+   * Example:
+   * "var_s_black"
+   */
+  id: string;
+
+  /**
+   * Seller-defined SKU.
+   */
+  sku: string;
+
+  /**
+   * Variant type.
+   */
+  variantType: ProductVariantType;
+
+  /**
+   * Display value.
+   *
+   * Examples:
+   * "S"
+   * "Black"
+   * "M / Black"
+   */
+  name: string;
+
+  /**
+   * Size value when applicable.
+   */
+  size?: string;
+
+  /**
+   * Color value when applicable.
+   */
+  color?: string;
+
+  /**
+   * Custom variant value.
+   *
+   * Example:
+   * "Pack A"
+   * "Regular"
+   */
+  value?: string;
+
+  /**
+   * Variant-specific selling price.
+   *
+   * Optional so products can continue using
+   * product-level retailPrice.
+   */
+  price?: number;
+
+  /**
+   * Variant-specific MRP.
+   */
+  mrp?: number;
+
+  /**
+   * Variant-specific inventory.
+   */
+  stock: number;
+
+  /**
+   * Variant-specific images.
+   *
+   * If empty, product-level images can be used.
+   */
+  images?: string[];
+
+  /**
+   * Whether customers can purchase this variant.
+   */
+  status: "active" | "inactive" | "out_of_stock";
+
+  /**
+   * Optional barcode / EAN / UPC.
+   */
+  barcode?: string;
+
+  /**
+   * Optional seller-specific metadata.
+   */
+  metadata?: Record<string, string | number | boolean>;
+
+  createdAt?: unknown;
+  updatedAt?: unknown;
+};
+
+/**
+ * Variant configuration for a product.
+ *
+ * Example:
+ *
+ * variantType = SIZE_COLOR
+ *
+ * sizes = ["S", "M", "L"]
+ *
+ * colors = ["Black", "White"]
+ */
+export type ProductVariantConfiguration = {
+  enabled: boolean;
+
+  type: ProductVariantType;
+
+  /**
+   * Available size values.
+   *
+   * Example:
+   * ["S", "M", "L", "XL"]
+   */
+  sizes?: string[];
+
+  /**
+   * Available color values.
+   *
+   * Example:
+   * ["Black", "White", "Blue"]
+   */
+  colors?: string[];
+
+  /**
+   * Generated/custom variants.
+   */
+  variants: ProductVariant[];
+};
+
+/* =========================================================
+   WHOLESALE CONFIGURATION
+   ========================================================= */
+
 export type WholesaleConfiguration = {
   enabled: boolean;
 
@@ -111,6 +275,10 @@ export type WholesaleConfiguration = {
   tiers: WholesaleTier[];
 };
 
+/* =========================================================
+   PRODUCT
+   ========================================================= */
+
 export type Product = {
   id: string;
 
@@ -127,6 +295,12 @@ export type Product = {
   sellerName?: string;
   sellerVerified?: boolean;
 
+  /**
+   * Product-level images.
+   *
+   * Maximum 10 images is enforced by
+   * the product upload/edit flow.
+   */
   images: string[];
 
   /**
@@ -196,10 +370,22 @@ export type Product = {
   wholesaleConfiguration?: WholesaleConfiguration;
 
   /**
+   * Product variant configuration.
+   *
+   * Optional temporarily so existing
+   * Firestore products do not break.
+   */
+  variantConfiguration?: ProductVariantConfiguration;
+
+  /**
    * Total inventory.
    *
    * For normal piece products:
    * number of pieces.
+   *
+   * For products with variants:
+   * this can represent the aggregate
+   * inventory across variants.
    *
    * For set products:
    * should be interpreted together with
