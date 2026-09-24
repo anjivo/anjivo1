@@ -77,7 +77,7 @@ export default function AdminNewProductPage() {
   const [categories, setCategories] = useState<Category[]>([]);
 
   // Basic information
-  const [name, setName] = useState("");
+  const [wholesaleSetName, setWholesaleSetName] = useState("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
   const [brand, setBrand] = useState("");
