@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { useRouter } from "next/navigation";
 import { doc, getDoc } from "firebase/firestore";
@@ -77,7 +77,7 @@ export default function AdminNewProductPage() {
   const [categories, setCategories] = useState<Category[]>([]);
 
   // Basic information
-  const [wholesaleSetName, setWholesaleSetName] = useState("");
+  const [name, setName] = useState<string>("");
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
   const [brand, setBrand] = useState("");
@@ -104,7 +104,7 @@ export default function AdminNewProductPage() {
 
   // Set configuration
   const [setBreakAllowed, setSetBreakAllowed] = useState(false);
-  const [setName, setSetName] = useState("");
+  const [wholesaleSetName, setWholesaleSetName] = useState("");
   const [setSize, setSetSize] = useState("");
   const [composition, setComposition] = useState("");
   const [moqSets, setMoqSets] = useState("1");
@@ -308,7 +308,7 @@ export default function AdminNewProductPage() {
         throw new Error("Stock cannot be negative.");
       if (
         (sellingMode === "SET" || sellingMode === "BOTH") &&
-        (!setName.trim() || !setSize.trim())
+        (!wholesaleSetName.trim() || !setSize.trim())
       ) {
         throw new Error("For set selling, enter set name and pieces per set.");
       }
@@ -431,7 +431,7 @@ export default function AdminNewProductPage() {
           saleUnit: wholesaleSaleUnit,
           setBreakAllowed,
           setSize: setSize.trim() ? Number(setSize) : undefined,
-          setName: setName.trim(),
+          setName: wholesaleSetName.trim(),
           composition: composition.trim(),
           moqSets: Math.max(1, Math.floor(toNumber(moqSets, 1))),
           priceUnit: wholesalePriceUnit,
@@ -738,8 +738,8 @@ export default function AdminNewProductPage() {
               <div className="mt-5 grid gap-5 sm:grid-cols-2">
                 <Field label="Set Name">
                   <input
-                    value={setName}
-                    onChange={(e) => setSetName(e.target.value)}
+                    value={wholesaleSetName}
+                    onChange={(e) => setWholesaleSetName(e.target.value)}
                     placeholder="Pack of 3 / Combo set"
                     className={inputClass}
                   />
@@ -1083,7 +1083,7 @@ function Field({
   children,
 }: {
   label: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <div className="mt-4">
