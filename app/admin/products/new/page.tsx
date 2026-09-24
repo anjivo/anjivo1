@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { onAuthStateChanged } from "firebase/auth";
+import { getDownloadURL, getStorage, ref, uploadBytesResumable } from "firebase/storage";
 import { useRouter } from "next/navigation";
 import { doc, getDoc } from "firebase/firestore";
 
@@ -17,6 +18,20 @@ import type { Category } from "@/types/category";
 type SellingMode = "PIECE" | "SET" | "BOTH";
 type SaleUnit = "PIECE" | "SET";
 type VariantType = "SIZE" | "COLOR" | "SIZE_COLOR" | "CUSTOM";
+
+type ProductImage = {
+  id: string;
+  file: File;
+  preview: string;
+  url: string;
+  progress: number;
+  uploading: boolean;
+  error: string;
+};
+
+const MAX_PRODUCT_IMAGES = 10;
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+
 
 type Tier = {
   minQuantity: string;
@@ -85,9 +100,9 @@ export default function AdminNewProductPage() {
   const [categoryName, setCategoryName] = useState("");
   const [tagsText, setTagsText] = useState("");
 
-  // Images
-  const [imageUrlsText, setImageUrlsText] = useState("");
-  const [imageUrl, setImageUrl] = useState("");
+  // Product images are selected locally, previewed, and uploaded to Firebase Storage on submit.
+  const [productImages, setProductImages] = useState<ProductImage[]>([]);
+  const [isUploadingImages, setIsUploadingImages] = useState(false);
 
   // Selling and pricing
   const [sellingMode, setSellingMode] = useState<SellingMode>("BOTH");
@@ -124,14 +139,10 @@ export default function AdminNewProductPage() {
   const [trending, setTrending] = useState(false);
   const [status, setStatus] = useState<"active" | "draft">("active");
 
-  const imageUrls = useMemo(() => {
-    const fromLines = imageUrlsText
-      .split(/\n|,/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const all = [...fromLines, imageUrl.trim()].filter(Boolean);
-    return Array.from(new Set(all));
-  }, [imageUrlsText, imageUrl]);
+  const imageUrls = useMemo(
+    () => productImages.filter((image) => Boolean(image.url)).map((image) => image.url),
+    [productImages]
+  );
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -166,6 +177,136 @@ export default function AdminNewProductPage() {
 
     return () => unsubscribe();
   }, [router]);
+
+  function handleImageSelection(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files ?? []);
+    // Allow selecting the same file again after removing it.
+    event.target.value = "";
+
+    if (!selectedFiles.length) return;
+
+    const remaining = MAX_PRODUCT_IMAGES - productImages.length;
+    if (remaining <= 0) {
+      setError(`You can upload up to ${MAX_PRODUCT_IMAGES} product images.`);
+      return;
+    }
+
+    const accepted: ProductImage[] = [];
+    const rejected: string[] = [];
+
+    for (const file of selectedFiles) {
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        rejected.push(`${file.name}: use JPG, PNG, or WebP format.`);
+        continue;
+      }
+      if (file.size > MAX_IMAGE_SIZE_BYTES) {
+        rejected.push(`${file.name}: image must be 5 MB or smaller.`);
+        continue;
+      }
+      accepted.push({
+        id: makeId(),
+        file,
+        preview: URL.createObjectURL(file),
+        url: "",
+        progress: 0,
+        uploading: false,
+        error: "",
+      });
+    }
+
+    const chosen = accepted.slice(0, remaining);
+    if (accepted.length > remaining) {
+      rejected.push(`Only ${remaining} more image(s) can be added (maximum ${MAX_PRODUCT_IMAGES}).`);
+    }
+
+    if (chosen.length) {
+      setProductImages((current) => [...current, ...chosen]);
+    }
+    setError(rejected.length ? rejected.join(" ") : "");
+  }
+
+  function removeProductImage(id: string) {
+    setProductImages((current) => {
+      const image = current.find((item) => item.id === id);
+      if (image?.preview) URL.revokeObjectURL(image.preview);
+      return current.filter((item) => item.id !== id);
+    });
+  }
+
+  async function uploadProductImages(): Promise<string[]> {
+    setIsUploadingImages(true);
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Admin session expired. Please login again.");
+
+      const urls: string[] = [];
+      for (const image of productImages) {
+        if (image.url) {
+          urls.push(image.url);
+          continue;
+        }
+
+        const extension =
+          image.file.type === "image/png"
+            ? "png"
+            : image.file.type === "image/webp"
+            ? "webp"
+            : "jpg";
+        const storagePath = `products/${user.uid}/${Date.now()}-${image.id}.${extension}`;
+        const storageRef = ref(getStorage(auth.app), storagePath);
+
+        await new Promise<void>((resolve, reject) => {
+          const task = uploadBytesResumable(storageRef, image.file, {
+            contentType: image.file.type,
+            customMetadata: { uploadedBy: user.uid, originalName: image.file.name },
+          });
+
+          task.on(
+            "state_changed",
+            (snapshot) => {
+              const progress = Math.round(
+                (snapshot.bytesTransferred / snapshot.totalBytes) * 100
+              );
+              setProductImages((current) =>
+                current.map((item) =>
+                  item.id === image.id ? { ...item, progress, uploading: true, error: "" } : item
+                )
+              );
+            },
+            (uploadError) => {
+              setProductImages((current) =>
+                current.map((item) =>
+                  item.id === image.id
+                    ? { ...item, uploading: false, error: uploadError.message }
+                    : item
+                )
+              );
+              reject(uploadError);
+            },
+            async () => {
+              try {
+                const downloadUrl = await getDownloadURL(task.snapshot.ref);
+                urls.push(downloadUrl);
+                setProductImages((current) =>
+                  current.map((item) =>
+                    item.id === image.id
+                      ? { ...item, url: downloadUrl, progress: 100, uploading: false, error: "" }
+                      : item
+                  )
+                );
+                resolve();
+              } catch (downloadError) {
+                reject(downloadError);
+              }
+            }
+          );
+        });
+      }
+      return urls;
+    } finally {
+      setIsUploadingImages(false);
+    }
+  }
 
   function handleCategoryChange(value: string) {
     setCategoryId(value);
@@ -275,8 +416,8 @@ export default function AdminNewProductPage() {
       if (!user) throw new Error("Admin session expired. Please login again.");
       if (!name.trim()) throw new Error("Product name is required.");
       if (!categoryId) throw new Error("Please select a category.");
-      if (!imageUrls.length) {
-        throw new Error("Please add at least one product image URL.");
+      if (!productImages.length) {
+        throw new Error("Please select at least one product image.");
       }
 
       const mrpValue = toNumber(mrp, NaN);
@@ -401,6 +542,11 @@ export default function AdminNewProductPage() {
         throw new Error("Generate and enable at least one product variant.");
       }
 
+      const uploadedImageUrls = await uploadProductImages();
+      if (!uploadedImageUrls.length) {
+        throw new Error("No product images were uploaded. Please select images and try again.");
+      }
+
       const finalSlug = slug.trim() || slugify(name);
       const tags = tagsText
         .split(",")
@@ -417,8 +563,8 @@ export default function AdminNewProductPage() {
         sellerId: user.uid,
         sellerName: "ANJIVO Official",
         sellerVerified: true,
-        images: imageUrls,
-        image: imageUrls[0],
+        images: uploadedImageUrls,
+        image: uploadedImageUrls[0],
         mrp: mrpValue,
         retailPrice: sellingMode === "PIECE" ? 0 : retailValue,
         wholesalePrice: wholesaleEnabled ? wholesaleValue : 0,
@@ -605,39 +751,75 @@ export default function AdminNewProductPage() {
           <section className={sectionClass}>
             <h2 className="text-lg font-black">2. Product Images</h2>
             <p className="mt-1 text-xs text-gray-500">
-              Paste publicly accessible image URLs. Add one URL per line or separated by commas.
+              Select up to {MAX_PRODUCT_IMAGES} images. JPG, PNG, or WebP; maximum 5 MB each.
+              Images upload to Firebase Storage when you click “List Product”.
             </p>
-            <textarea
-              value={imageUrlsText}
-              onChange={(e) => setImageUrlsText(e.target.value)}
-              rows={4}
-              placeholder={"https://.../front.jpg\nhttps://.../back.jpg"}
-              className={inputClass}
-            />
-            <Field label="Additional / primary image URL">
+
+            <label className="mt-5 flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-300 bg-gray-50 px-5 py-8 text-center hover:border-black">
+              <span className="text-3xl">＋</span>
+              <span className="mt-2 text-sm font-black">Choose product images</span>
+              <span className="mt-1 text-xs text-gray-500">
+                {productImages.length} / {MAX_PRODUCT_IMAGES} images selected
+              </span>
               <input
-                type="url"
-                value={imageUrl}
-                onChange={(e) => setImageUrl(e.target.value)}
-                placeholder="https://example.com/product.jpg"
-                className={inputClass}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                multiple
+                disabled={saving || productImages.length >= MAX_PRODUCT_IMAGES}
+                onChange={handleImageSelection}
+                className="sr-only"
               />
-            </Field>
-            {imageUrls.length > 0 && (
-              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {imageUrls.map((url, index) => (
+            </label>
+
+            {productImages.length > 0 && (
+              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+                {productImages.map((image, index) => (
                   <div
-                    key={`${url}-${index}`}
+                    key={image.id}
                     className="overflow-hidden rounded-xl border border-gray-200 bg-gray-50"
                   >
-                    <img
-                      src={url}
-                      alt={`${name || "Product"} ${index + 1}`}
-                      className="h-36 w-full object-contain"
-                    />
-                    <p className="truncate px-2 py-1 text-[10px] text-gray-500">
-                      Image {index + 1}
-                    </p>
+                    <div className="relative">
+                      <img
+                        src={image.preview}
+                        alt={`${name || "Product"} ${index + 1}`}
+                        className="h-36 w-full object-contain"
+                      />
+                      {!saving && (
+                        <button
+                          type="button"
+                          onClick={() => removeProductImage(image.id)}
+                          className="absolute right-2 top-2 rounded-full bg-black/80 px-2.5 py-1 text-xs font-bold text-white"
+                          aria-label={`Remove image ${index + 1}`}
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                    <div className="p-2">
+                      <p className="truncate text-[10px] font-bold text-gray-600">
+                        {image.file.name}
+                      </p>
+                      {image.url ? (
+                        <p className="mt-1 text-[10px] font-bold text-green-700">Uploaded</p>
+                      ) : (
+                        <p className="mt-1 text-[10px] text-gray-500">
+                          {image.uploading || isUploadingImages
+                            ? `Uploading: ${image.progress}%`
+                            : "Ready to upload"}
+                        </p>
+                      )}
+                      {(image.uploading || (isUploadingImages && !image.url)) && (
+                        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-200">
+                          <div
+                            className="h-full rounded-full bg-black transition-all"
+                            style={{ width: `${image.progress}%` }}
+                          />
+                        </div>
+                      )}
+                      {image.error && (
+                        <p className="mt-1 break-words text-[10px] text-red-600">{image.error}</p>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1068,7 +1250,11 @@ export default function AdminNewProductPage() {
               disabled={saving}
               className="rounded-xl bg-black px-7 py-3 text-sm font-bold text-white hover:bg-gray-800 disabled:opacity-50"
             >
-              {saving ? "Saving Product..." : "List Product"}
+              {isUploadingImages
+                ? "Uploading Images..."
+                : saving
+                ? "Saving Product..."
+                : "List Product"}
             </button>
           </div>
         </form>
