@@ -853,7 +853,7 @@ export default function AdminNewProductPage() {
               <input
                 type="checkbox"
                 checked={variantEnabled}
-                onChange={setVariantEnabled}
+                onChange={(e) => setVariantEnabled(e.target.checked)}
                 className="h-4 w-4"
               />
               This product has variants
