@@ -692,11 +692,11 @@ export default function AdminNewProductPage() {
             <div className="mt-5 rounded-2xl border border-gray-200 p-4">
               <label className="flex items-center gap-3 text-sm font-bold">
                 <input
-                  type="checkbox"
-                  checked={wholesaleEnabled}
-                  onChange={setWholesaleEnabled}
-                  className="h-4 w-4"
-                />
+  type="checkbox"
+  checked={wholesaleEnabled}
+  onChange={(e) => setWholesaleEnabled(e.target.checked)}
+  className="h-4 w-4"
+/>
                 Enable wholesale pricing
               </label>
               {wholesaleEnabled && (
