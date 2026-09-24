@@ -1,7 +1,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { adminAuth, adminDb } from "@/lib/firebase/admin";
+import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { FieldValue } from "firebase-admin/firestore";
 
 export const runtime = "nodejs";
