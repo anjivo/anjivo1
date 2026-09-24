@@ -28,7 +28,7 @@ import {
   updateAdminProduct,
 } from "@/lib/admin-products";
 
-import type { Product } from "@/types/product";
+import type { Product, ProductSellingMode, WholesaleUnit, ProductVariant, ProductVariantType, SetCompositionItem, SetVariantType } from "@/types/product";
 import type { Category } from "@/types/category";
 
 type Tier = {
@@ -100,6 +100,20 @@ export default function AdminEditProductPage() {
 
   const [trending, setTrending] =
     useState(false);
+
+  const [sellingMode, setSellingMode] = useState<ProductSellingMode>("BOTH");
+  const [wholesaleEnabled, setWholesaleEnabled] = useState(true);
+  const [saleUnit, setSaleUnit] = useState<WholesaleUnit>("PIECE");
+  const [setBreakAllowed, setSetBreakAllowed] = useState(false);
+  const [setSize, setSetSize] = useState("");
+  const [setName, setSetName] = useState("");
+  const [moqSets, setMoqSets] = useState("1");
+  const [variantsEnabled, setVariantsEnabled] = useState(false);
+  const [variantType, setVariantType] = useState<ProductVariantType>("SIZE_COLOR");
+  const [sizes, setSizes] = useState("");
+  const [colors, setColors] = useState("");
+  const [variants, setVariants] = useState<ProductVariant[]>([]);
+  const [composition, setComposition] = useState<SetCompositionItem[]>([]);
 
   const [tiers, setTiers] =
     useState<Tier[]>([
@@ -221,9 +235,22 @@ export default function AdminEditProductPage() {
         String(productData.wholesalePrice ?? "")
       );
 
-      setMoq(
-        String(productData.moq ?? "")
-      );
+      setMoq(String(productData.moq ?? ""));
+      setSellingMode(productData.sellingMode || "BOTH");
+      const wc = productData.wholesaleConfiguration;
+      setWholesaleEnabled(wc?.enabled ?? true);
+      setSaleUnit(wc?.saleUnit || "PIECE");
+      setSetBreakAllowed(wc?.setBreakAllowed ?? false);
+      setSetSize(String(wc?.setSize ?? ""));
+      setSetName(wc?.setName || "");
+      setMoqSets(String(wc?.moqSets ?? 1));
+      setComposition(wc?.composition || []);
+      const vc = productData.variantConfiguration;
+      setVariantsEnabled(vc?.enabled ?? false);
+      setVariantType(vc?.type || "SIZE_COLOR");
+      setSizes((vc?.sizes || []).join(", "));
+      setColors((vc?.colors || []).join(", "));
+      setVariants(vc?.variants || []);
 
       setStock(
         String(productData.stock ?? "")
@@ -399,7 +426,7 @@ export default function AdminEditProductPage() {
   }
 
   async function handleSave(
-    event: React.FormEvent
+    event: React.FormEvent<HTMLFormElement>
   ) {
     event.preventDefault();
 
@@ -516,12 +543,26 @@ export default function AdminEditProductPage() {
           moq: moqValue,
           stock: stockValue,
 
-          wholesaleTiers:
-            [...tiers].sort(
-              (a, b) =>
-                a.minQuantity -
-                b.minQuantity
-            ),
+          wholesaleTiers: [...tiers].sort((a, b) => a.minQuantity - b.minQuantity),
+          sellingMode,
+          wholesaleConfiguration: {
+            enabled: wholesaleEnabled,
+            saleUnit,
+            setBreakAllowed,
+            ...(setSize.trim() ? { setSize: Number(setSize) } : {}),
+            ...(setName.trim() ? { setName: setName.trim() } : {}),
+            ...(saleUnit === "SET" ? { moqSets: Math.max(1, Number(moqSets) || 1) } : {}),
+            composition,
+            priceUnit: saleUnit,
+            tiers: [...tiers].sort((a, b) => a.minQuantity - b.minQuantity),
+          },
+          variantConfiguration: {
+            enabled: variantsEnabled,
+            type: variantType,
+            sizes: sizes.split(",").map(x => x.trim()).filter(Boolean),
+            colors: colors.split(",").map(x => x.trim()).filter(Boolean),
+            variants: variants.map(v => ({ ...v, stock: Number(v.stock) || 0, ...(v.price !== undefined ? {price:Number(v.price)} : {}), ...(v.mrp !== undefined ? {mrp:Number(v.mrp)} : {}) })),
+          },
 
           status,
 
@@ -905,6 +946,35 @@ export default function AdminEditProductPage() {
                 />
               </div>
             </div>
+          </section>
+
+          {/* SELLING MODE + WHOLESALE CONFIGURATION */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-5">
+            <h2 className="text-lg font-bold text-slate-900">Wholesale / Retail Configuration</h2>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="text-sm font-semibold">Selling mode<select value={sellingMode} onChange={e=>setSellingMode(e.target.value as ProductSellingMode)} className="mt-2 w-full rounded-xl border px-4 py-3"><option value="PIECE">Piece only</option><option value="SET">Set only</option><option value="BOTH">Retail piece + wholesale</option></select></label>
+              <label className="text-sm font-semibold">Wholesale selling unit<select value={saleUnit} onChange={e=>setSaleUnit(e.target.value as WholesaleUnit)} className="mt-2 w-full rounded-xl border px-4 py-3"><option value="PIECE">Per piece</option><option value="SET">Complete set</option></select></label>
+            </div>
+            <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={wholesaleEnabled} onChange={e=>setWholesaleEnabled(e.target.checked)} /> Enable wholesale pricing</label>
+            {saleUnit === "SET" && <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <label className="text-sm font-semibold">Set name<input value={setName} onChange={e=>setSetName(e.target.value)} placeholder="e.g. 5-piece size set" className="mt-2 w-full rounded-xl border px-4 py-3" /></label>
+              <label className="text-sm font-semibold">Pieces per set<input type="number" min="1" value={setSize} onChange={e=>setSetSize(e.target.value)} className="mt-2 w-full rounded-xl border px-4 py-3" /></label>
+              <label className="text-sm font-semibold">Minimum sets<input type="number" min="1" value={moqSets} onChange={e=>setMoqSets(e.target.value)} className="mt-2 w-full rounded-xl border px-4 py-3" /></label>
+              <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={setBreakAllowed} onChange={e=>setSetBreakAllowed(e.target.checked)} /> Allow breaking set</label>
+            </div>}
+            <div>
+              <div className="flex items-center justify-between"><h3 className="font-semibold">Set composition (optional)</h3><button type="button" onClick={()=>setComposition(c=>[...c,{variantType:"SIZE",value:"",quantity:1}])} className="rounded-lg bg-slate-900 px-3 py-2 text-sm text-white">+ Add composition row</button></div>
+              {composition.map((c,i)=><div key={i} className="mt-3 grid gap-2 sm:grid-cols-4"><select value={c.variantType} onChange={e=>setComposition(a=>a.map((x,j)=>j===i?{...x,variantType:e.target.value as SetVariantType}:x))} className="rounded-lg border p-3"><option value="SIZE">Size</option><option value="COLOR">Color</option><option value="SIZE_COLOR">Size + color</option><option value="CUSTOM">Custom</option></select><input value={c.value} onChange={e=>setComposition(a=>a.map((x,j)=>j===i?{...x,value:e.target.value}:x))} placeholder="Value e.g. M / Black" className="rounded-lg border p-3"/><input type="number" min="1" value={c.quantity} onChange={e=>setComposition(a=>a.map((x,j)=>j===i?{...x,quantity:Number(e.target.value)||1}:x))} className="rounded-lg border p-3"/><button type="button" onClick={()=>setComposition(a=>a.filter((_,j)=>j!==i))} className="rounded-lg border border-red-200 text-red-600">Remove</button></div>)}
+            </div>
+          </section>
+          {/* VARIANTS */}
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
+            <div className="flex items-center justify-between gap-3"><h2 className="text-lg font-bold">Variants / SKU / Stock</h2><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={variantsEnabled} onChange={e=>setVariantsEnabled(e.target.checked)}/> Enable variants</label></div>
+            {variantsEnabled && <>
+              <div className="grid gap-4 sm:grid-cols-3"><label className="text-sm font-semibold">Variant type<select value={variantType} onChange={e=>setVariantType(e.target.value as ProductVariantType)} className="mt-2 w-full rounded-xl border p-3"><option value="SIZE">Size</option><option value="COLOR">Color</option><option value="SIZE_COLOR">Size + color</option><option value="CUSTOM">Custom</option></select></label><label className="text-sm font-semibold">Sizes (comma separated)<input value={sizes} onChange={e=>setSizes(e.target.value)} placeholder="S, M, L, XL" className="mt-2 w-full rounded-xl border p-3"/></label><label className="text-sm font-semibold">Colors (comma separated)<input value={colors} onChange={e=>setColors(e.target.value)} placeholder="Black, White, Blue" className="mt-2 w-full rounded-xl border p-3"/></label></div>
+              <div className="flex justify-end"><button type="button" onClick={()=>setVariants(v=>[...v,{id:`variant_${Date.now()}_${v.length}`,sku:"",variantType,name:"",stock:0,status:"active"}])} className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white">+ Add variant</button></div>
+              {variants.map((v,i)=><div key={v.id} className="grid gap-3 rounded-xl border p-4 sm:grid-cols-2 lg:grid-cols-4"><input value={v.name} onChange={e=>setVariants(a=>a.map((x,j)=>j===i?{...x,name:e.target.value}:x))} placeholder="Variant name (M / Black)" className="rounded-lg border p-3"/><input value={v.sku} onChange={e=>setVariants(a=>a.map((x,j)=>j===i?{...x,sku:e.target.value}:x))} placeholder="SKU" className="rounded-lg border p-3"/><input type="number" min="0" value={v.price??""} onChange={e=>setVariants(a=>a.map((x,j)=>j===i?{...x,price:e.target.value===""?undefined:Number(e.target.value)}:x))} placeholder="Variant price" className="rounded-lg border p-3"/><input type="number" min="0" value={v.stock} onChange={e=>setVariants(a=>a.map((x,j)=>j===i?{...x,stock:Number(e.target.value)||0}:x))} placeholder="Stock" className="rounded-lg border p-3"/><input value={v.size||""} onChange={e=>setVariants(a=>a.map((x,j)=>j===i?{...x,size:e.target.value}:x))} placeholder="Size" className="rounded-lg border p-3"/><input value={v.color||""} onChange={e=>setVariants(a=>a.map((x,j)=>j===i?{...x,color:e.target.value}:x))} placeholder="Color" className="rounded-lg border p-3"/><select value={v.status} onChange={e=>setVariants(a=>a.map((x,j)=>j===i?{...x,status:e.target.value as ProductVariant["status"]}:x))} className="rounded-lg border p-3"><option value="active">Active</option><option value="inactive">Inactive</option><option value="out_of_stock">Out of stock</option></select><button type="button" onClick={()=>setVariants(a=>a.filter((_,j)=>j!==i))} className="rounded-lg border border-red-200 text-red-600">Remove variant</button></div>)}
+            </>}
           </section>
 
           {/* WHOLESALE TIERS */}
