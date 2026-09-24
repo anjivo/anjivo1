@@ -773,12 +773,12 @@ export default function AdminNewProductPage() {
                 </Field>
               </div>
               <label className="mt-5 flex items-center gap-3 text-sm font-bold">
-                <input
-                  type="checkbox"
-                  checked={setBreakAllowed}
-                  onChange={setSetBreakAllowed}
-                  className="h-4 w-4"
-                />
+               <input
+  type="checkbox"
+  checked={setBreakAllowed}
+  onChange={(e) => setSetBreakAllowed(e.target.checked)}
+  className="h-4 w-4"
+/>
                 Allow breaking sets into individual pieces
               </label>
             </section>
