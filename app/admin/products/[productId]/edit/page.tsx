@@ -106,7 +106,7 @@ export default function AdminEditProductPage() {
   const [saleUnit, setSaleUnit] = useState<WholesaleUnit>("PIECE");
   const [setBreakAllowed, setSetBreakAllowed] = useState(false);
   const [setSize, setSetSize] = useState("");
-  const [setName, setSetName] = useState("");
+  const [wholesaleSetName, setWholesaleSetName] = useState("");
   const [moqSets, setMoqSets] = useState("1");
   const [variantsEnabled, setVariantsEnabled] = useState(false);
   const [variantType, setVariantType] = useState<ProductVariantType>("SIZE_COLOR");
@@ -242,7 +242,7 @@ export default function AdminEditProductPage() {
       setSaleUnit(wc?.saleUnit || "PIECE");
       setSetBreakAllowed(wc?.setBreakAllowed ?? false);
       setSetSize(String(wc?.setSize ?? ""));
-      setSetName(wc?.setName || "");
+      setWholesaleSetName(wc?.setName || "");
       setMoqSets(String(wc?.moqSets ?? 1));
       setComposition(wc?.composition || []);
       const vc = productData.variantConfiguration;
@@ -550,7 +550,7 @@ export default function AdminEditProductPage() {
             saleUnit,
             setBreakAllowed,
             ...(setSize.trim() ? { setSize: Number(setSize) } : {}),
-            ...(setName.trim() ? { setName: setName.trim() } : {}),
+            ...(wholesaleSetName.trim() ? { setName: wholesaleSetName.trim() } : {}),
             ...(saleUnit === "SET" ? { moqSets: Math.max(1, Number(moqSets) || 1) } : {}),
             composition,
             priceUnit: saleUnit,
@@ -957,7 +957,7 @@ export default function AdminEditProductPage() {
             </div>
             <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={wholesaleEnabled} onChange={e=>setWholesaleEnabled(e.target.checked)} /> Enable wholesale pricing</label>
             {saleUnit === "SET" && <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <label className="text-sm font-semibold">Set name<input value={setName} onChange={e=>setSetName(e.target.value)} placeholder="e.g. 5-piece size set" className="mt-2 w-full rounded-xl border px-4 py-3" /></label>
+              <label className="text-sm font-semibold">Set name<input value={wholesaleSetName} onChange={e=>setWholesaleSetName(e.target.value)} placeholder="e.g. 5-piece size set" className="mt-2 w-full rounded-xl border px-4 py-3" /></label>
               <label className="text-sm font-semibold">Pieces per set<input type="number" min="1" value={setSize} onChange={e=>setSetSize(e.target.value)} className="mt-2 w-full rounded-xl border px-4 py-3" /></label>
               <label className="text-sm font-semibold">Minimum sets<input type="number" min="1" value={moqSets} onChange={e=>setMoqSets(e.target.value)} className="mt-2 w-full rounded-xl border px-4 py-3" /></label>
               <label className="flex items-center gap-3 text-sm"><input type="checkbox" checked={setBreakAllowed} onChange={e=>setSetBreakAllowed(e.target.checked)} /> Allow breaking set</label>
