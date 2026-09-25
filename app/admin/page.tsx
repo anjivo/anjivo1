@@ -76,6 +76,15 @@ const moduleSections: ModuleSection[] = [
         icon: "📦",
       },
       {
+        title: "AI Listing Review",
+        description:
+          "Review AI-generated seller listings and approve or reject submissions.",
+        href: "/admin/ai-listings",
+        icon: "🤖",
+        badge: "Important",
+        badgeType: "important",
+      },
+      {
         title: "Categories",
         description:
           "Manage categories, subcategories and marketplace taxonomy.",
@@ -990,6 +999,13 @@ export default function AdminDashboard() {
               icon="📦"
               title="Review Products"
               description={`${stats.draftProducts} products need attention`}
+            />
+
+            <QuickAction
+              href="/admin/ai-listings"
+              icon="🤖"
+              title="AI Listing Review"
+              description="Review AI-generated product submissions"
             />
 
             <QuickAction
