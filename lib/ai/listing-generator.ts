@@ -9,6 +9,17 @@ export type GeneratedListing = {
   price: number;
   stock: number;
   keywords: string[];
+  images: string[];
+  sellerId: string;
+};
+
+export type GenerateListingInput = {
+  images: string[];
+  sellerId: string;
+  productName?: string;
+  category?: string;
+  brand?: string;
+  language?: string;
 };
 
 const openai = new OpenAI({
@@ -16,58 +27,110 @@ const openai = new OpenAI({
 });
 
 export async function generateListing(
-  productName: string,
-  category = "",
-  brand = ""
+  input: GenerateListingInput
 ): Promise<GeneratedListing> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is missing.");
   }
 
-  if (!productName.trim()) {
-    throw new Error("Product name is required.");
+  const {
+    images,
+    sellerId,
+    productName,
+    category,
+    brand,
+    language = "English",
+  } = input;
+
+  if (!sellerId) {
+    throw new Error("Seller ID is required.");
+  }
+
+  if (
+    (!productName || !productName.trim()) &&
+    (!images || images.length === 0)
+  ) {
+    throw new Error(
+      "Product name or at least one image is required."
+    );
   }
 
   const prompt = `
-Generate a professional ecommerce product listing for ANJIVO.
+You are an ecommerce product listing assistant for ANJIVO.
 
-Product name: ${productName}
+Create a professional product listing using the supplied information.
+
+Product name: ${productName || "Identify from the image"}
 Category: ${category || "Suggest an appropriate category"}
-Brand: ${brand || "Unbranded"}
+Brand: ${brand || "Identify only if clearly visible; otherwise Unbranded"}
+Language: ${language}
 
-Requirements:
-1. Create a clear SEO-friendly product title.
-2. Write an accurate, professional product description.
-3. Suggest an appropriate category.
-4. Use the supplied brand, or "Unbranded" if none is provided.
-5. Suggest relevant search keywords.
-6. Do not invent certifications, product specifications, or guarantees.
-7. Set price and stock to 0 because these must be supplied by the seller.
+Rules:
+1. Generate a clear, SEO-friendly product title.
+2. Write a useful ecommerce product description in the requested language.
+3. Suggest a relevant product category.
+4. Do not invent specifications, certifications, materials, or guarantees.
+5. Do not invent a brand if it is not known.
+6. Price and stock must be 0. The seller will set these values.
+7. Generate relevant search keywords.
+8. Return valid JSON only.
 
-Return valid JSON with exactly these fields:
-title, description, category, brand, price, stock, keywords.
+JSON format:
+{
+  "title": "Product title",
+  "description": "Product description",
+  "category": "Category",
+  "brand": "Brand or Unbranded",
+  "keywords": ["keyword1", "keyword2"]
+}
 `;
 
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
+  const userContent: OpenAI.Chat.Completions.ChatCompletionContentPart[] =
+    [
       {
-        role: "system",
-        content:
-          "You are an ecommerce product listing assistant. Return only valid JSON.",
+        type: "text",
+        text: prompt,
       },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
-    response_format: {
-      type: "json_object",
-    },
-    temperature: 0.4,
-  });
+    ];
 
-  const content = completion.choices[0]?.message?.content;
+  // Include product images for visual analysis.
+  for (const imageUrl of images || []) {
+    if (
+      typeof imageUrl === "string" &&
+      /^https?:\/\//i.test(imageUrl)
+    ) {
+      userContent.push({
+        type: "image_url",
+        image_url: {
+          url: imageUrl,
+          detail: "low",
+        },
+      });
+    }
+  }
+
+  const completion =
+    await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You generate accurate ecommerce product listings. Return only valid JSON.",
+        },
+        {
+          role: "user",
+          content: userContent,
+        },
+      ],
+      response_format: {
+        type: "json_object",
+      },
+      temperature: 0.4,
+    });
+
+  const content =
+    completion.choices[0]?.message?.content;
 
   if (!content) {
     throw new Error("AI returned an empty response.");
@@ -76,14 +139,16 @@ title, description, category, brand, price, stock, keywords.
   const parsed = JSON.parse(content);
 
   return {
-    title: String(parsed.title || productName),
+    title: String(parsed.title || productName || ""),
     description: String(parsed.description || ""),
-    category: String(parsed.category || category),
+    category: String(parsed.category || category || ""),
     brand: String(parsed.brand || brand || "Unbranded"),
     price: 0,
     stock: 0,
     keywords: Array.isArray(parsed.keywords)
       ? parsed.keywords.map(String)
       : [],
+    images: images || [],
+    sellerId,
   };
 }
