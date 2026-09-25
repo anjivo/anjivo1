@@ -11,7 +11,7 @@ import {
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
-let firebaseAdminApp: App;
+let firebaseAdminApp: App | undefined;
 
 export function getAdminApp(): App {
   if (firebaseAdminApp) {
@@ -36,7 +36,7 @@ export function getAdminApp(): App {
 
   if (!projectId || !clientEmail || !privateKey) {
     throw new Error(
-      "Missing Firebase Admin environment variables."
+      "Firebase Admin credentials are missing. Check server environment variables."
     );
   }
 
@@ -54,6 +54,40 @@ export function getAdminApp(): App {
   return firebaseAdminApp;
 }
 
-export const adminAuth = getAuth(getAdminApp());
+export function getAdminAuth() {
+  return getAuth(getAdminApp());
+}
 
-export const adminDb = getFirestore(getAdminApp());
+export function getAdminDb() {
+  return getFirestore(getAdminApp());
+}
+
+// Backward-compatible exports.
+// These initialize only when accessed at runtime.
+export const adminAuth = new Proxy(
+  {} as ReturnType<typeof getAuth>,
+  {
+    get(_target, property) {
+      const auth = getAdminAuth();
+      const value = Reflect.get(auth, property, auth);
+
+      return typeof value === "function"
+        ? value.bind(auth)
+        : value;
+    },
+  }
+);
+
+export const adminDb = new Proxy(
+  {} as ReturnType<typeof getFirestore>,
+  {
+    get(_target, property) {
+      const db = getAdminDb();
+      const value = Reflect.get(db, property, db);
+
+      return typeof value === "function"
+        ? value.bind(db)
+        : value;
+    }
+  }
+);
