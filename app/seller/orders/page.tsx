@@ -211,7 +211,13 @@ export default function SellerOrdersPage() {
 
   async function updateOrderStatus(
     orderId: string,
-    nextStatus: string
+    nextStatus: string,
+    shipment?: {
+      courierName?: string;
+      trackingNumber?: string;
+      trackingUrl?: string;
+      estimatedDelivery?: string;
+    }
   ) {
     const user = auth.currentUser;
 
@@ -245,6 +251,7 @@ export default function SellerOrdersPage() {
           body: JSON.stringify({
             orderId,
             status: nextStatus,
+            ...(shipment || {}),
           }),
         }
       );
@@ -604,7 +611,13 @@ function SellerOrderCard({
   updating: boolean;
   onStatusUpdate: (
     orderId: string,
-    nextStatus: string
+    nextStatus: string,
+    shipment?: {
+      courierName?: string;
+      trackingNumber?: string;
+      trackingUrl?: string;
+      estimatedDelivery?: string;
+    }
   ) => Promise<void>;
 }) {
   const address =
@@ -1007,7 +1020,13 @@ function SellerStatusActions({
   updating: boolean;
   onStatusUpdate: (
     orderId: string,
-    nextStatus: string
+    nextStatus: string,
+    shipment?: {
+      courierName?: string;
+      trackingNumber?: string;
+      trackingUrl?: string;
+      estimatedDelivery?: string;
+    }
   ) => Promise<void>;
 }) {
   const currentStatus =
@@ -1015,6 +1034,11 @@ function SellerStatusActions({
 
   const nextStatuses =
     SELLER_STATUS_FLOW[currentStatus] || [];
+
+  const [courierName, setCourierName] = useState("");
+  const [trackingNumber, setTrackingNumber] = useState("");
+  const [trackingUrl, setTrackingUrl] = useState("");
+  const [estimatedDelivery, setEstimatedDelivery] = useState("");
 
   if (nextStatuses.length === 0) {
     return (
@@ -1024,58 +1048,115 @@ function SellerStatusActions({
     );
   }
 
+  async function handleStatusClick(nextStatus: SellerFulfillmentStatus) {
+    const isShipping = nextStatus === "shipped";
+
+    if (isShipping && (!courierName.trim() || !trackingNumber.trim())) {
+      window.alert("Please enter courier name and AWB / tracking number before marking the order as shipped.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Are you sure you want to change order #${order.id} to ${formatStatus(nextStatus)}?`
+    );
+    if (!confirmed) return;
+
+    await onStatusUpdate(
+      order.id,
+      nextStatus,
+      isShipping
+        ? {
+            courierName: courierName.trim(),
+            trackingNumber: trackingNumber.trim(),
+            trackingUrl: trackingUrl.trim(),
+            estimatedDelivery: estimatedDelivery || undefined,
+          }
+        : undefined
+    );
+  }
+
   return (
-    <div className="flex flex-wrap gap-2">
-      {nextStatuses.map((nextStatus) => {
-        const isCancel = nextStatus === "cancelled";
-        const isReturn = nextStatus === "returned";
-        const isRefund = nextStatus === "refunded";
+    <div className="space-y-4">
+      {nextStatuses.includes("shipped") && (
+        <div className="grid gap-3 rounded-2xl border border-indigo-100 bg-indigo-50 p-4 sm:grid-cols-2">
+          <div className="sm:col-span-2">
+            <p className="text-xs font-black text-indigo-900">Shipment / Tracking Details</p>
+            <p className="mt-1 text-[10px] text-indigo-700">
+              Enter courier and AWB details before marking this order as shipped.
+            </p>
+          </div>
 
-        let buttonStyle =
-          "bg-black text-white hover:bg-gray-800";
+          <div>
+            <label className="text-[10px] font-bold text-gray-600">Courier Company *</label>
+            <input
+              value={courierName}
+              onChange={(event) => setCourierName(event.target.value)}
+              placeholder="e.g. Delhivery, Blue Dart"
+              className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-3 text-xs outline-none focus:border-indigo-500"
+              maxLength={100}
+            />
+          </div>
 
-        if (isCancel) {
-          buttonStyle =
-            "border border-red-200 bg-red-50 text-red-700 hover:bg-red-100";
-        }
+          <div>
+            <label className="text-[10px] font-bold text-gray-600">AWB / Tracking Number *</label>
+            <input
+              value={trackingNumber}
+              onChange={(event) => setTrackingNumber(event.target.value)}
+              placeholder="Enter AWB or tracking ID"
+              className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-3 text-xs outline-none focus:border-indigo-500"
+              maxLength={120}
+            />
+          </div>
 
-        if (isReturn) {
-          buttonStyle =
-            "border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100";
-        }
+          <div>
+            <label className="text-[10px] font-bold text-gray-600">Tracking URL (optional)</label>
+            <input
+              type="url"
+              value={trackingUrl}
+              onChange={(event) => setTrackingUrl(event.target.value)}
+              placeholder="https://..."
+              className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-3 text-xs outline-none focus:border-indigo-500"
+              maxLength={1000}
+            />
+          </div>
 
-        if (isRefund) {
-          buttonStyle =
-            "border border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200";
-        }
+          <div>
+            <label className="text-[10px] font-bold text-gray-600">Estimated Delivery (optional)</label>
+            <input
+              type="date"
+              value={estimatedDelivery}
+              onChange={(event) => setEstimatedDelivery(event.target.value)}
+              min={new Date().toISOString().slice(0, 10)}
+              className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-3 text-xs outline-none focus:border-indigo-500"
+            />
+          </div>
+        </div>
+      )}
 
-        return (
-          <button
-            key={nextStatus}
-            type="button"
-            disabled={updating}
-            onClick={() => {
-              const confirmed = window.confirm(
-                `Are you sure you want to change order #${order.id} to ${formatStatus(
-                  nextStatus
-                )}?`
-              );
+      <div className="flex flex-wrap gap-2">
+        {nextStatuses.map((nextStatus) => {
+          const isCancel = nextStatus === "cancelled";
+          const isReturn = nextStatus === "returned";
+          const isRefund = nextStatus === "refunded";
 
-              if (!confirmed) return;
+          let buttonStyle = "bg-black text-white hover:bg-gray-800";
+          if (isCancel) buttonStyle = "border border-red-200 bg-red-50 text-red-700 hover:bg-red-100";
+          if (isReturn) buttonStyle = "border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100";
+          if (isRefund) buttonStyle = "border border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200";
 
-              void onStatusUpdate(
-                order.id,
-                nextStatus
-              );
-            }}
-            className={`rounded-xl px-4 py-3 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${buttonStyle}`}
-          >
-            {updating
-              ? "Updating..."
-              : `Mark ${formatStatus(nextStatus)}`}
-          </button>
-        );
-      })}
+          return (
+            <button
+              key={nextStatus}
+              type="button"
+              disabled={updating}
+              onClick={() => void handleStatusClick(nextStatus)}
+              className={`rounded-xl px-4 py-3 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${buttonStyle}`}
+            >
+              {updating ? "Updating..." : `Mark ${formatStatus(nextStatus)}`}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
