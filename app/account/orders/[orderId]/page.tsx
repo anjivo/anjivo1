@@ -333,6 +333,19 @@ export default function OrderDetailsPage() {
     estimatedDelivery?: string | { toDate?: () => Date } | Date;
     shippedAt?: string | { toDate?: () => Date } | Date;
     deliveredAt?: string | { toDate?: () => Date } | Date;
+    sellerFulfillment?: Record<string, {
+      status?: string;
+      fulfillmentStatus?: string;
+      courierName?: string;
+      courier?: string;
+      trackingNumber?: string;
+      awbNumber?: string;
+      trackingUrl?: string;
+      estimatedDelivery?: string | { toDate?: () => Date } | Date;
+      shippedAt?: string | { toDate?: () => Date } | Date;
+      deliveredAt?: string | { toDate?: () => Date } | Date;
+      updatedAt?: unknown;
+    }>;
   };
 
   const currentStatus = normalizeStatus(
@@ -646,107 +659,141 @@ export default function OrderDetailsPage() {
                 Track the progress of your order from confirmation to delivery.
               </p>
 
-              {isTerminalStatus ? (
-                <div className="mt-4 rounded-xl bg-gray-50 p-4 text-sm font-semibold text-gray-700">
-                  {statusLabel(currentStatus as Order["status"])}
-                  <p className="mt-1 text-xs font-normal text-gray-500">
-                    Tracking timeline is not available for this order status.
-                  </p>
-                </div>
-              ) : (
-                <>
-                  <div className="mt-5 h-2 overflow-hidden rounded-full bg-gray-100">
-                    <div
-                      className="h-full rounded-full bg-green-500 transition-all"
-                      style={{ width: `${trackingProgress}%` }}
-                    />
-                  </div>
+              {(() => {
+                const sellerFulfillment = orderData.sellerFulfillment || {};
+                const sellerIds = Array.isArray(order.sellerIds) ? order.sellerIds : [];
+                const hasSellerFulfillment = sellerIds.some((sellerId) =>
+                  Boolean(sellerFulfillment[String(sellerId)])
+                );
 
-                  <div className="mt-5 space-y-4">
-                    {trackingStatuses.map((step, index) => {
-                      const stepIndex = currentStepIndex < 0 ? -1 : currentStepIndex;
-                      const completed = currentStatus === "delivered" || index <= stepIndex;
-                      const active = index === stepIndex && currentStatus !== "delivered";
+                // For multi-seller orders, display each seller's independently saved shipment.
+                // For legacy/single-seller orders, retain the top-level tracking fields as fallback.
+                const shipments = hasSellerFulfillment
+                  ? sellerIds.map((sellerId, index) => {
+                      const sellerIdString = String(sellerId);
+                      const shipment = sellerFulfillment[sellerIdString] || {};
+                      const status = normalizeStatus(
+                        shipment.fulfillmentStatus || shipment.status || "pending"
+                      );
+                      return {
+                        key: sellerIdString || `seller-${index}`,
+                        label: `Seller ${index + 1}`,
+                        status,
+                        courierName: shipment.courierName || shipment.courier || "",
+                        trackingNumber: shipment.awbNumber || shipment.trackingNumber || "",
+                        trackingUrl: shipment.trackingUrl || "",
+                        shippedAt: formatTrackingDate(shipment.shippedAt),
+                        deliveredAt: formatTrackingDate(shipment.deliveredAt),
+                        estimatedDelivery: formatTrackingDate(shipment.estimatedDelivery),
+                      };
+                    })
+                  : [{
+                      key: "order",
+                      label: "Order shipment",
+                      status: currentStatus,
+                      courierName,
+                      trackingNumber,
+                      trackingUrl,
+                      shippedAt: shippedAtText,
+                      deliveredAt: deliveredAtText,
+                      estimatedDelivery: estimatedDeliveryText,
+                    }];
+
+                return (
+                  <div className="mt-4 space-y-4">
+                    {shipments.map((shipment) => {
+                      const terminal = ["cancelled", "returned", "refunded"].includes(shipment.status);
+                      const stepIndex = trackingStatuses.findIndex((step) => step.key === shipment.status);
+                      const progress = shipment.status === "delivered"
+                        ? 100
+                        : terminal || stepIndex < 0
+                          ? 0
+                          : Math.round(((stepIndex + 1) / trackingStatuses.length) * 100);
+
                       return (
-                        <div key={step.key} className="flex gap-3">
-                          <div className="flex flex-col items-center">
-                            <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-black ${
-                              completed
-                                ? "bg-green-600 text-white"
-                                : active
-                                  ? "bg-black text-white"
-                                  : "bg-gray-100 text-gray-400"
-                            }`}>
-                              {completed ? "✓" : index + 1}
+                        <div key={shipment.key} className="rounded-2xl border border-gray-100 p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-sm font-black text-gray-900">{shipment.label}</p>
+                            <span className="rounded-full bg-gray-100 px-3 py-1 text-[10px] font-bold capitalize text-gray-700">
+                              {shipment.status.replace(/_/g, " ")}
+                            </span>
+                          </div>
+
+                          {terminal ? (
+                            <div className="mt-3 rounded-xl bg-gray-50 p-3 text-xs font-semibold text-gray-700">
+                              Shipment {shipment.status.replace(/_/g, " ")}.
                             </div>
-                            {index < trackingStatuses.length - 1 && (
-                              <div className={`mt-1 min-h-5 w-0.5 flex-1 ${
-                                completed && index < stepIndex ? "bg-green-300" : "bg-gray-200"
-                              }`} />
-                            )}
-                          </div>
-                          <div className="pb-2">
-                            <p className={`text-sm font-bold ${
-                              completed || active ? "text-gray-900" : "text-gray-400"
-                            }`}>
-                              {step.title}
+                          ) : (
+                            <>
+                              <div className="mt-4 h-2 overflow-hidden rounded-full bg-gray-100">
+                                <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${progress}%` }} />
+                              </div>
+                              <div className="mt-4 space-y-3">
+                                {trackingStatuses.map((step, index) => {
+                                  const completed = shipment.status === "delivered" || index < stepIndex;
+                                  const active = index === stepIndex && shipment.status !== "delivered";
+                                  return (
+                                    <div key={step.key} className="flex gap-3">
+                                      <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${
+                                        completed ? "bg-green-600 text-white" : active ? "bg-black text-white" : "bg-gray-100 text-gray-400"
+                                      }`}>
+                                        {completed ? "✓" : index + 1}
+                                      </div>
+                                      <div>
+                                        <p className={`text-xs font-bold ${completed || active ? "text-gray-900" : "text-gray-400"}`}>
+                                          {step.title}
+                                        </p>
+                                        {step.key === "shipped" && shipment.shippedAt && (
+                                          <p className="mt-1 text-[10px] text-green-700">{shipment.shippedAt}</p>
+                                        )}
+                                        {step.key === "delivered" && shipment.deliveredAt && (
+                                          <p className="mt-1 text-[10px] text-green-700">{shipment.deliveredAt}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
+
+                          {shipment.estimatedDelivery && (
+                            <div className="mt-3 rounded-xl bg-green-50 p-3 text-xs text-green-800">
+                              Estimated delivery: <strong>{shipment.estimatedDelivery}</strong>
+                            </div>
+                          )}
+
+                          {(shipment.courierName || shipment.trackingNumber || shipment.trackingUrl) ? (
+                            <div className="mt-3 rounded-xl bg-gray-50 p-3">
+                              <p className="text-xs font-black text-gray-800">Courier details</p>
+                              {shipment.courierName && (
+                                <p className="mt-2 text-xs text-gray-600">
+                                  Courier: <strong className="text-gray-900">{shipment.courierName}</strong>
+                                </p>
+                              )}
+                              {shipment.trackingNumber && (
+                                <p className="mt-1 break-all text-xs text-gray-600">
+                                  AWB / Tracking ID: <strong className="text-gray-900">{shipment.trackingNumber}</strong>
+                                </p>
+                              )}
+                              {shipment.trackingUrl && (
+                                <a href={shipment.trackingUrl} target="_blank" rel="noopener noreferrer"
+                                  className="mt-3 inline-flex rounded-lg bg-black px-4 py-2 text-xs font-bold text-white hover:bg-gray-800">
+                                  Track with courier
+                                </a>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="mt-3 rounded-xl bg-gray-50 p-3 text-[11px] leading-5 text-gray-500">
+                              Courier and tracking details will appear once this seller adds shipment information.
                             </p>
-                            <p className="mt-0.5 text-xs text-gray-500">{step.description}</p>
-                            {step.key === "shipped" && shippedAtText && (
-                              <p className="mt-1 text-[11px] font-semibold text-green-700">
-                                {shippedAtText}
-                              </p>
-                            )}
-                            {step.key === "delivered" && deliveredAtText && (
-                              <p className="mt-1 text-[11px] font-semibold text-green-700">
-                                {deliveredAtText}
-                              </p>
-                            )}
-                          </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
-                </>
-              )}
-
-              {estimatedDeliveryText && (
-                <div className="mt-3 rounded-xl bg-green-50 p-3 text-xs text-green-800">
-                  Estimated delivery: <strong>{estimatedDeliveryText}</strong>
-                </div>
-              )}
-
-              {(courierName || trackingNumber) && (
-                <div className="mt-4 rounded-xl border border-gray-100 p-3">
-                  <p className="text-xs font-black text-gray-800">Courier details</p>
-                  {courierName && (
-                    <p className="mt-2 text-xs text-gray-600">
-                      Courier: <strong className="text-gray-900">{courierName}</strong>
-                    </p>
-                  )}
-                  {trackingNumber && (
-                    <p className="mt-1 break-all text-xs text-gray-600">
-                      AWB / Tracking ID: <strong className="text-gray-900">{trackingNumber}</strong>
-                    </p>
-                  )}
-                  {trackingUrl && (
-                    <a
-                      href={trackingUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-3 inline-flex rounded-lg bg-black px-4 py-2 text-xs font-bold text-white hover:bg-gray-800"
-                    >
-                      Track with courier
-                    </a>
-                  )}
-                </div>
-              )}
-
-              {!courierName && !trackingNumber && (
-                <p className="mt-4 rounded-xl bg-gray-50 p-3 text-[11px] leading-5 text-gray-500">
-                  Courier name and tracking/AWB number will appear here once the seller or admin adds shipment details.
-                </p>
-              )}
+                );
+              })()}
             </section>
 
             {/* =================================================
