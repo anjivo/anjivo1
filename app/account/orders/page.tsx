@@ -57,71 +57,72 @@ function formatDate(value: unknown): string {
 }
 
 /* =========================================================
-   STATUS LABEL
+   NORMALIZE ORDER STATUS
+   Supports both customer-facing lowercase statuses and
+   server-side uppercase statuses such as PLACED / PENDING.
 ========================================================= */
 
-function statusLabel(
-  status: Order["status"]
-): string {
-  switch (status) {
-    case "confirmed":
-      return "Confirmed";
+function normalizeOrderStatus(status: unknown): string {
+  const value = String(status ?? "pending")
+    .trim()
+    .toLowerCase()
+    .replace(/[ -]+/g, "_");
 
-    case "processing":
-      return "Processing";
+  if (value === "placed" || value === "pending") return "pending";
+  if (value === "confirmed" || value === "accepted") return "confirmed";
+  if (value === "processing" || value === "in_progress") return "processing";
+  if (value === "packed" || value === "ready_to_ship") return "packed";
+  if (value === "shipped" || value === "in_transit") return "shipped";
+  if (value === "out_for_delivery" || value === "ofd") return "out_for_delivery";
+  if (value === "delivered") return "delivered";
+  if (value === "cancelled" || value === "canceled") return "cancelled";
+  if (value === "returned" || value === "return_requested") return "returned";
+  if (value === "refunded") return "refunded";
 
-    case "shipped":
-      return "Shipped";
+  return "pending";
+}
 
-    case "out_for_delivery":
-      return "Out for Delivery";
-
-    case "delivered":
-      return "Delivered";
-
-    case "cancelled":
-      return "Cancelled";
-
-    case "returned":
-      return "Returned";
-
-    case "refunded":
-      return "Refunded";
-
-    default:
-      return "Pending";
+function statusLabel(status: unknown): string {
+  switch (normalizeOrderStatus(status)) {
+    case "confirmed": return "Confirmed";
+    case "processing": return "Processing";
+    case "packed": return "Packed";
+    case "shipped": return "Shipped";
+    case "out_for_delivery": return "Out for Delivery";
+    case "delivered": return "Delivered";
+    case "cancelled": return "Cancelled";
+    case "returned": return "Returned";
+    case "refunded": return "Refunded";
+    default: return "Order Placed";
   }
 }
 
-/* =========================================================
-   STATUS CLASS
-========================================================= */
-
-function statusClass(
-  status: Order["status"]
-): string {
-  switch (status) {
+function statusClass(status: unknown): string {
+  switch (normalizeOrderStatus(status)) {
     case "delivered":
       return "bg-green-100 text-green-700";
-
     case "cancelled":
       return "bg-red-100 text-red-700";
-
     case "returned":
     case "refunded":
       return "bg-purple-100 text-purple-700";
-
     case "shipped":
     case "out_for_delivery":
       return "bg-blue-100 text-blue-700";
-
     case "confirmed":
     case "processing":
-      return "bg-yellow-100 text-yellow-700";
-
+    case "packed":
+      return "bg-yellow-100 text-yellow-800";
     default:
       return "bg-gray-100 text-gray-700";
   }
+}
+
+function statusProgress(status: unknown): number {
+  const normalized = normalizeOrderStatus(status);
+  const steps = ["pending", "confirmed", "processing", "packed", "shipped", "out_for_delivery", "delivered"];
+  if (["cancelled", "returned", "refunded"].includes(normalized)) return 0;
+  return Math.max(0, steps.indexOf(normalized));
 }
 
 /* =========================================================
@@ -342,6 +343,36 @@ export default function MyOrdersPage() {
                   ======================================= */}
 
                   <div className="my-4 border-t border-gray-100" />
+
+                  {/* CUSTOMER TRACKING PROGRESS */}
+                  {!["cancelled", "returned", "refunded"].includes(
+                    normalizeOrderStatus(order.status)
+                  ) && (
+                    <div className="mb-4">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-gray-500">
+                          Delivery progress
+                        </span>
+                        <span className="text-[11px] font-bold text-gray-700">
+                          {statusLabel(order.status)}
+                        </span>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-gray-100">
+                        <div
+                          className="h-full rounded-full bg-black transition-all"
+                          style={{
+                            width: `${((statusProgress(order.status) + 1) / 7) * 100}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="mt-2 flex justify-between text-[9px] font-medium text-gray-400">
+                        <span>Placed</span>
+                        <span>Packed</span>
+                        <span>Shipped</span>
+                        <span>Delivered</span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* =======================================
                       ORDER CONTENT
