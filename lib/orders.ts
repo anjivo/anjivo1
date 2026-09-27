@@ -86,6 +86,24 @@ export type OrderStatus =
   | "refunded";
 
 /* ----------------------------------------
+   Seller Fulfillment / Shipment
+---------------------------------------- */
+
+export type SellerFulfillment = {
+  status?: string;
+  fulfillmentStatus?: string;
+  courierName?: string;
+  courier?: string;
+  trackingNumber?: string;
+  awbNumber?: string;
+  trackingUrl?: string;
+  estimatedDelivery?: unknown;
+  shippedAt?: unknown;
+  deliveredAt?: unknown;
+  updatedAt?: unknown;
+};
+
+/* ----------------------------------------
    Order
 ---------------------------------------- */
 
@@ -123,6 +141,9 @@ export type Order = {
   estimatedDelivery?: unknown;
   shippedAt?: unknown;
   deliveredAt?: unknown;
+
+  // Per-seller shipment tracking for multi-seller orders.
+  sellerFulfillment?: Record<string, SellerFulfillment>;
 
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -416,6 +437,30 @@ function mapOrder(
 
     deliveredAt:
       data.deliveredAt,
+
+    sellerFulfillment:
+      data.sellerFulfillment &&
+      typeof data.sellerFulfillment === "object" &&
+      !Array.isArray(data.sellerFulfillment)
+        ? Object.fromEntries(
+            Object.entries(data.sellerFulfillment).map(([sellerId, raw]: [string, any]) => [
+              sellerId,
+              {
+                status: raw?.status || "",
+                fulfillmentStatus: raw?.fulfillmentStatus || "",
+                courierName: raw?.courierName || "",
+                courier: raw?.courier || "",
+                trackingNumber: raw?.trackingNumber || "",
+                awbNumber: raw?.awbNumber || "",
+                trackingUrl: raw?.trackingUrl || "",
+                estimatedDelivery: raw?.estimatedDelivery,
+                shippedAt: raw?.shippedAt,
+                deliveredAt: raw?.deliveredAt,
+                updatedAt: raw?.updatedAt,
+              } satisfies SellerFulfillment,
+            ])
+          )
+        : undefined,
 
     createdAt:
       data.createdAt,
