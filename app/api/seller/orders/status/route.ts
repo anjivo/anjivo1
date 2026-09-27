@@ -23,6 +23,12 @@ type SellerFulfillmentStatus =
 type RequestBody = {
   orderId?: string;
   status?: SellerFulfillmentStatus;
+  courierName?: string;
+  courier?: string;
+  trackingNumber?: string;
+  awbNumber?: string;
+  trackingUrl?: string;
+  estimatedDelivery?: string | number | null;
 };
 
 const ALLOWED_STATUSES: SellerFulfillmentStatus[] = [
@@ -82,6 +88,34 @@ function stringValue(
   return typeof value === "string"
     ? value.trim()
     : "";
+}
+
+function validHttpUrl(value: string): boolean {
+  if (!value) return true;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeEstimatedDelivery(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString();
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString();
+  }
+
+  return null;
 }
 
 function isAllowedStatus(
@@ -217,6 +251,19 @@ export async function POST(
     const nextStatus =
       body.status;
 
+    const courierName = stringValue(body.courierName || body.courier);
+    const trackingNumber = stringValue(body.trackingNumber || body.awbNumber);
+    const trackingUrl = stringValue(body.trackingUrl);
+    const estimatedDelivery = normalizeEstimatedDelivery(body.estimatedDelivery);
+
+    if (trackingUrl && !validHttpUrl(trackingUrl)) {
+      return jsonError("Tracking URL must be a valid HTTP or HTTPS URL.", 400);
+    }
+
+    if (body.estimatedDelivery && !estimatedDelivery) {
+      return jsonError("Estimated delivery must be a valid date.", 400);
+    }
+
     if (!orderId) {
       return jsonError(
         "Order ID is required.",
@@ -336,76 +383,97 @@ export async function POST(
         }
 
         /*
-         * Parent order status is NOT changed
-         * by this endpoint.
-         *
-         * This endpoint changes only the seller's
-         * fulfillment status.
+         * Status belongs to this seller's fulfillment. For multi-seller
+         * orders, keep seller-specific status/tracking under sellerFulfillment
+         * on the parent order and in the sellerOrders mirror.
          */
-        const currentStatus =
-          getCurrentFulfillmentStatus(
-            orderData
-          );
+        const sellerOrderRef = adminDb
+          .collection("sellerOrders")
+          .doc(`${orderId}_${sellerId}`);
 
-        if (
-          !canTransition(
-            currentStatus,
-            nextStatus
-          )
-        ) {
+        const sellerOrderSnapshot = await transaction.get(sellerOrderRef);
+        const sellerOrderData = sellerOrderSnapshot.exists
+          ? sellerOrderSnapshot.data() || {}
+          : {};
+
+        const currentStatus = getCurrentFulfillmentStatus(
+          sellerOrderSnapshot.exists ? sellerOrderData : orderData
+        );
+
+        if (!canTransition(currentStatus, nextStatus)) {
           throw new Error(
             `INVALID_TRANSITION:${currentStatus}:${nextStatus}`
           );
         }
 
-        /*
-         * Update only seller-specific fulfillment
-         * information. Financial/product/customer
-         * fields are intentionally untouched.
-         */
-        transaction.update(
-          orderRef,
-          {
-            fulfillmentStatus:
-              nextStatus,
-            updatedAt:
-              FieldValue.serverTimestamp(),
-          }
-        );
+        const now = FieldValue.serverTimestamp();
+        const trackingUpdates: DocumentData = {};
 
-        /*
-         * Seller-order mirror.
-         *
-         * If the project has a sellerOrders
-         * collection, update the matching seller
-         * document as well. Failure to find it does
-         * not block the canonical parent order update.
-         */
-        const sellerOrderRef =
-          adminDb
-            .collection("sellerOrders")
-            .doc(
-              `${orderId}_${sellerId}`
-            );
-
-        const sellerOrderSnapshot =
-          await transaction.get(
-            sellerOrderRef
-          );
-
-        if (
-          sellerOrderSnapshot.exists
-        ) {
-          transaction.update(
-            sellerOrderRef,
-            {
-              fulfillmentStatus:
-                nextStatus,
-              updatedAt:
-                FieldValue.serverTimestamp(),
-            }
-          );
+        // Only supplied tracking fields are updated; omitted values are preserved.
+        if (courierName) trackingUpdates.courierName = courierName;
+        if (trackingNumber) {
+          trackingUpdates.trackingNumber = trackingNumber;
+          trackingUpdates.awbNumber = trackingNumber;
         }
+        if (trackingUrl) trackingUpdates.trackingUrl = trackingUrl;
+        if (estimatedDelivery) {
+          trackingUpdates.estimatedDelivery = estimatedDelivery;
+        }
+
+        const sellerUpdate: DocumentData = {
+          fulfillmentStatus: nextStatus,
+          updatedAt: now,
+          ...trackingUpdates,
+        };
+
+        if (nextStatus === "shipped") {
+          sellerUpdate.shippedAt = now;
+        }
+        if (nextStatus === "delivered") {
+          sellerUpdate.deliveredAt = now;
+        }
+
+        if (sellerOrderSnapshot.exists) {
+          transaction.update(sellerOrderRef, sellerUpdate);
+        } else {
+          transaction.set(sellerOrderRef, {
+            orderId,
+            sellerId,
+            items: sellerItems,
+            fulfillmentStatus: nextStatus,
+            createdAt: now,
+            ...sellerUpdate,
+          });
+        }
+
+        // Keep a seller-specific tracking record on the canonical order.
+        // This avoids one seller overwriting another seller's shipment details.
+        const parentSellerUpdate: DocumentData = {
+          [`sellerFulfillment.${sellerId}.fulfillmentStatus`]: nextStatus,
+          [`sellerFulfillment.${sellerId}.updatedAt`]: now,
+        };
+
+        for (const [key, value] of Object.entries(trackingUpdates)) {
+          parentSellerUpdate[`sellerFulfillment.${sellerId}.${key}`] = value;
+        }
+
+        if (nextStatus === "shipped") {
+          parentSellerUpdate[`sellerFulfillment.${sellerId}.shippedAt`] = now;
+        }
+        if (nextStatus === "delivered") {
+          parentSellerUpdate[`sellerFulfillment.${sellerId}.deliveredAt`] = now;
+        }
+
+        // A parent-level status/tracking mirror is safe only for a single-seller order.
+        if (sellerIds.length === 1 && sellerIds[0] === sellerId) {
+          parentSellerUpdate.fulfillmentStatus = nextStatus;
+          parentSellerUpdate.updatedAt = now;
+          Object.assign(parentSellerUpdate, trackingUpdates);
+          if (nextStatus === "shipped") parentSellerUpdate.shippedAt = now;
+          if (nextStatus === "delivered") parentSellerUpdate.deliveredAt = now;
+        }
+
+        transaction.update(orderRef, parentSellerUpdate);
 
         /*
          * Audit log.
@@ -427,6 +495,10 @@ export async function POST(
               currentStatus,
             newStatus:
               nextStatus,
+            courierName: courierName || null,
+            trackingNumber: trackingNumber || null,
+            trackingUrl: trackingUrl || null,
+            estimatedDelivery: estimatedDelivery || null,
             affectedItemCount:
               sellerItems.length,
             actorUid: sellerId,
@@ -445,6 +517,10 @@ export async function POST(
         sellerId,
         fulfillmentStatus:
           nextStatus,
+        courierName: courierName || null,
+        trackingNumber: trackingNumber || null,
+        trackingUrl: trackingUrl || null,
+        estimatedDelivery: estimatedDelivery || null,
         message:
           "Seller order status updated successfully.",
       },
