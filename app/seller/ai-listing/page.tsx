@@ -1,402 +1,454 @@
-
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { onAuthStateChanged, User } from "firebase/auth";
-import {
-  ref,
-  uploadBytes,
-  getDownloadURL,
-} from "firebase/storage";
-import { useEffect } from "react";
-
-// IMPORTANT:
-// If your Firebase client exports use different names or path,
-// update this import to match your existing Firebase configuration.
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { auth, storage } from "@/lib/firebase";
 
 type Listing = {
   title?: string;
   name?: string;
   description?: string;
+  shortDescription?: string;
   category?: string;
+  subcategory?: string;
+  productType?: string;
   brand?: string;
-  price?: number | null;
-  stock?: number | null;
-  images?: string[];
-  imageUrls?: string[];
+  highlights?: string[];
   keywords?: string[];
   attributes?: Record<string, unknown>;
-  variants?: Array<{
-    sku?: string;
-    size?: string;
-    color?: string;
-    price?: number | null;
-    stock?: number | null;
-  }>;
+  attributeValues?: Record<string, unknown>;
+  variantOptions?: unknown[];
+  seo?: Record<string, unknown>;
+  confidence?: number;
+  missingInformation?: string[];
+  warnings?: string[];
   [key: string]: unknown;
 };
+
+const inputClass =
+  "w-full rounded-lg border border-gray-300 bg-white p-3 text-sm outline-none focus:border-blue-500";
 
 export default function SellerAIListingPage() {
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
   const [files, setFiles] = useState<File[]>([]);
-  const [previewUrls, setPreviewUrls] = useState<string[]>([]);
+  const [previews, setPreviews] = useState<string[]>([]);
+  const [sourceUrls, setSourceUrls] = useState<string[]>([]);
+  const [images, setImages] = useState<string[]>([]);
+
+  const [listing, setListing] = useState<Listing | null>(null);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [category, setCategory] = useState("");
-  const [brand, setBrand] = useState("");
   const [price, setPrice] = useState("");
   const [stock, setStock] = useState("");
-  const [keywords, setKeywords] = useState("");
 
-  const [variants, setVariants] = useState<
-    Array<{
-      sku: string;
-      size: string;
-      color: string;
-      price: string;
-      stock: string;
-    }>
-  >([]);
-
-  const [listing, setListing] = useState<Listing | null>(null);
-  const [uploadedImages, setUploadedImages] = useState<string[]>([]);
-
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState("");
+
+  const [status, setStatus] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
+    return onAuthStateChanged(auth, (u) => {
+      setUser(u);
       setAuthLoading(false);
     });
-
-    return () => unsubscribe();
   }, []);
 
-  function handleFileChange(
-    event: React.ChangeEvent<HTMLInputElement>
-  ) {
-    const selectedFiles = Array.from(event.target.files ?? []);
+  useEffect(() => {
+    return () => {
+      previews.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [previews]);
 
-    if (selectedFiles.length === 0) return;
+  function selectFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(e.target.files ?? []);
 
-    if (selectedFiles.length > 10) {
-      setError("Ek product ke liye maximum 10 images select karein.");
+    if (!selected.length) return;
+
+    if (
+      selected.length > 10 ||
+      selected.some(
+        (f) =>
+          !f.type.startsWith("image/") ||
+          f.size > 10 * 1024 * 1024
+      )
+    ) {
+      setError(
+        "Maximum 10 photos, each image up to 10 MB. Please select valid image files."
+      );
       return;
     }
 
-    const invalidFile = selectedFiles.find(
-      (file) =>
-        !file.type.startsWith("image/") ||
-        file.size > 10 * 1024 * 1024
+    setFiles(selected);
+
+    setPreviews(
+      selected.map((f) => URL.createObjectURL(f))
     );
 
-    if (invalidFile) {
-      setError("Sirf image files, maximum 10 MB per image.");
-      return;
-    }
-
-    previewUrls.forEach((url) => URL.revokeObjectURL(url));
-
-    setFiles(selectedFiles);
-    setPreviewUrls(
-      selectedFiles.map((file) => URL.createObjectURL(file))
-    );
-
+    setSourceUrls([]);
+    setImages([]);
     setListing(null);
-    setUploadedImages([]);
-    setMessage("");
+    setStatus("");
     setError("");
   }
 
-  async function uploadImages(): Promise<string[]> {
+  async function getToken() {
     if (!user) {
-      throw new Error("Please login first.");
+      throw new Error(
+        "Please login to your seller account."
+      );
     }
+
+    return user.getIdToken();
+  }
+
+  async function uploadOriginals(): Promise<string[]> {
+    if (sourceUrls.length) return sourceUrls;
 
     const urls: string[] = [];
 
     for (const file of files) {
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-
-      const storageRef = ref(
-        storage,
-        `ai-listings/${user.uid}/${Date.now()}-${safeName}`
+      const safeName = file.name.replace(
+        /[^a-zA-Z0-9._-]/g,
+        "_"
       );
 
-      await uploadBytes(storageRef, file, {
+      const objectRef = ref(
+        storage,
+        `ai-listings/${user!.uid}/${Date.now()}-${safeName}`
+      );
+
+      await uploadBytes(objectRef, file, {
         contentType: file.type,
       });
 
-      const url = await getDownloadURL(storageRef);
-      urls.push(url);
+      urls.push(await getDownloadURL(objectRef));
     }
+
+    setSourceUrls(urls);
 
     return urls;
   }
 
-  async function generateAIListing() {
+  async function generate() {
+    setBusy(true);
     setError("");
-    setMessage("");
-
-    if (!user) {
-      setError("Please login as a seller first.");
-      return;
-    }
-
-    if (files.length === 0) {
-      setError("Pehle product ki images select karein.");
-      return;
-    }
-
-    setLoading(true);
+    setStatus("Uploading product photos...");
 
     try {
-      const token = await user.getIdToken();
+      const token = await getToken();
 
-      // Upload original images to Firebase Storage.
-      const imageUrls = await uploadImages();
+      const originals = await uploadOriginals();
 
-      setUploadedImages(imageUrls);
+      setStatus(
+        "AI is identifying your product and preparing listing details..."
+      );
 
-      const response = await fetch("/api/ai/generate-listing", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          images: imageUrls,
-          productName: title || undefined,
-          category: category || undefined,
-          brand: brand || undefined,
-          language: "English",
-        }),
-      });
+      const response = await fetch(
+        "/api/ai/generate-listing",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            images: originals,
+            language: "English",
+            marketplace: "ANJIVO",
+            generateSEO: true,
+            generateAttributes: true,
+            generateHighlights: true,
+            generateKeywords: true,
+            generateVariants: true,
+          }),
+        }
+      );
 
       const data = await response.json();
 
-      if (!response.ok || !data.success) {
+      if (
+        !response.ok ||
+        !data.success ||
+        !data.listing
+      ) {
         throw new Error(
-          data.error || "AI listing generation failed."
+          data.error ||
+            "AI listing generation failed."
         );
       }
 
-      const result: Listing = data.listing;
+      const generated: Listing = data.listing;
 
-      setListing(result);
+      setListing(generated);
 
-      setTitle(String(result.title ?? result.name ?? ""));
-      setDescription(String(result.description ?? ""));
-      setCategory(String(result.category ?? ""));
-      setBrand(String(result.brand ?? ""));
-
-      setPrice(
-        result.price != null ? String(result.price) : ""
+      setTitle(
+        String(
+          generated.title ||
+            generated.name ||
+            ""
+        )
       );
 
-      setStock(
-        result.stock != null ? String(result.stock) : ""
+      setDescription(
+        String(generated.description || "")
       );
 
-      setKeywords(
-        Array.isArray(result.keywords)
-          ? result.keywords.join(", ")
-          : ""
+      setImages(originals);
+
+      // Automatically create a catalog-ready
+      // white-background image from the first original photo.
+
+      setStatus(
+        "Generating a clean product catalog image..."
       );
 
-      setVariants(
-        Array.isArray(result.variants)
-          ? result.variants.map((variant) => ({
-              sku: String(variant.sku ?? ""),
-              size: String(variant.size ?? ""),
-              color: String(variant.color ?? ""),
-              price:
-                variant.price != null
-                  ? String(variant.price)
-                  : "",
-              stock:
-                variant.stock != null
-                  ? String(variant.stock)
-                  : "",
-            }))
-          : []
-      );
+      try {
+        const imageResponse = await fetch(
+          "/api/ai/generate-images",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              draft: true,
+              imageUrl: originals[0],
+              productName: String(
+                generated.title ||
+                  generated.name ||
+                  "Product"
+              ),
+              scene: "white_background",
+            }),
+          }
+        );
 
-      setMessage(
-        "AI draft ready. Details check karke price aur stock confirm karein."
+        const imageData =
+          await imageResponse.json();
+
+        if (
+          imageResponse.ok &&
+          imageData.success &&
+          typeof imageData.image === "string" &&
+          imageData.image.startsWith("data:image/")
+        ) {
+          const blob = await (
+            await fetch(imageData.image)
+          ).blob();
+
+          const generatedRef = ref(
+            storage,
+            `ai-listings/${user!.uid}/generated-${Date.now()}-white-background.jpg`
+          );
+
+          await uploadBytes(
+            generatedRef,
+            blob,
+            {
+              contentType: "image/jpeg",
+            }
+          );
+
+          const generatedUrl =
+            await getDownloadURL(generatedRef);
+
+          setImages((prev) => [
+            ...prev,
+            generatedUrl,
+          ]);
+        } else {
+          setStatus(
+            "Listing details generated. AI image generation was unavailable; original photos are retained."
+          );
+        }
+      } catch {
+        setStatus(
+          "Listing details generated. AI image generation failed; original photos are retained."
+        );
+      }
+
+      setStatus(
+        "AI listing is ready. Check the generated details, enter price and stock, then confirm."
       );
-    } catch (err) {
+    } catch (e) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Something went wrong."
+        e instanceof Error
+          ? e.message
+          : "Unable to generate listing."
       );
+
+      setStatus("");
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  }
-
-  function addVariant() {
-    setVariants((previous) => [
-      ...previous,
-      {
-        sku: "",
-        size: "",
-        color: "",
-        price: "",
-        stock: "",
-      },
-    ]);
-  }
-
-  function updateVariant(
-    index: number,
-    field: string,
-    value: string
-  ) {
-    setVariants((previous) =>
-      previous.map((variant, i) =>
-        i === index
-          ? { ...variant, [field]: value }
-          : variant
-      )
-    );
-  }
-
-  function removeVariant(index: number) {
-    setVariants((previous) =>
-      previous.filter((_, i) => i !== index)
-    );
   }
 
   async function confirmListing() {
-    setError("");
-    setMessage("");
+    if (!listing) return;
 
-    if (!user) {
-      setError("Please login first.");
-      return;
-    }
+    const parsedPrice = Number(price);
+    const parsedStock = Number(stock);
 
-    if (!listing || uploadedImages.length === 0) {
-      setError("Pehle AI listing generate karein.");
-      return;
-    }
-
-    if (
-      !title.trim() ||
-      !description.trim() ||
-      !category.trim()
-    ) {
-      setError("Title, description aur category required hain.");
-      return;
+    if (!title.trim() || !description.trim()) {
+      return setError(
+        "Please confirm the product title and description."
+      );
     }
 
     if (
-      price.trim() === "" ||
-      stock.trim() === "" ||
-      !Number.isFinite(Number(price)) ||
-      !Number.isFinite(Number(stock)) ||
-      Number(price) < 0 ||
-      !Number.isInteger(Number(stock)) ||
-      Number(stock) < 0
+      !price.trim() ||
+      !Number.isFinite(parsedPrice) ||
+      parsedPrice <= 0
     ) {
-      setError("Valid selling price aur stock enter karein.");
-      return;
+      return setError(
+        "Enter the actual selling price."
+      );
     }
 
-    for (let i = 0; i < variants.length; i++) {
-      const variant = variants[i];
+    if (
+      !stock.trim() ||
+      !Number.isInteger(parsedStock) ||
+      parsedStock < 0
+    ) {
+      return setError(
+        "Enter the actual available stock quantity."
+      );
+    }
 
-      if (
-        !variant.sku.trim() ||
-        variant.price.trim() === "" ||
-        variant.stock.trim() === "" ||
-        !Number.isFinite(Number(variant.price)) ||
-        !Number.isInteger(Number(variant.stock)) ||
-        Number(variant.price) < 0 ||
-        Number(variant.stock) < 0
-      ) {
-        setError(
-          `Variant ${i + 1}: SKU, price aur stock sahi bharein.`
-        );
-        return;
-      }
+    if (!images.length) {
+      return setError(
+        "At least one product image is required."
+      );
     }
 
     setSaving(true);
+    setError("");
+
+    setStatus(
+      "Submitting listing for ANJIVO review..."
+    );
 
     try {
-      const token = await user.getIdToken();
+      const token = await getToken();
 
-      const response = await fetch("/api/ai/confirm-listing", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          listing: {
-            title: title.trim(),
-            description: description.trim(),
-            category: category.trim(),
-            brand: brand.trim(),
-            price: Number(price),
-            stock: Number(stock),
-            images: uploadedImages,
-            keywords: keywords
-              .split(",")
-              .map((keyword) => keyword.trim())
-              .filter(Boolean),
-            attributes: listing.attributes ?? {},
-            variants: variants.map((variant) => ({
-              sku: variant.sku.trim(),
-              size: variant.size.trim(),
-              color: variant.color.trim(),
-              price: Number(variant.price),
-              stock: Number(variant.stock),
-            })),
+      const keywords = Array.isArray(
+        listing.keywords
+      )
+        ? listing.keywords.filter(
+            (x): x is string =>
+              typeof x === "string"
+          )
+        : [];
+
+      const response = await fetch(
+        "/api/ai/confirm-listing",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
           },
-        }),
-      });
+          body: JSON.stringify({
+            listing: {
+              ...listing,
+
+              title: title.trim(),
+              name: title.trim(),
+              description: description.trim(),
+
+              shortDescription: String(
+                listing.shortDescription ||
+                  description
+              ).trim(),
+
+              category: String(
+                listing.category || ""
+              ),
+
+              subcategory: String(
+                listing.subcategory || ""
+              ),
+
+              productType: String(
+                listing.productType || ""
+              ),
+
+              brand: String(
+                listing.brand || ""
+              ),
+
+              price: parsedPrice,
+              stock: parsedStock,
+
+              images,
+              imageUrls: images,
+
+              keywords,
+
+              highlights: Array.isArray(
+                listing.highlights
+              )
+                ? listing.highlights
+                : [],
+
+              attributes:
+                listing.attributes &&
+                typeof listing.attributes ===
+                  "object"
+                  ? listing.attributes
+                  : {},
+
+              seo:
+                listing.seo &&
+                typeof listing.seo === "object"
+                  ? listing.seo
+                  : {},
+            },
+          }),
+        }
+      );
 
       const data = await response.json();
 
       if (!response.ok || !data.success) {
         throw new Error(
-          data.error || "Unable to save listing."
+          data.error ||
+            "Could not submit listing."
         );
       }
 
-      setMessage(
-        `Listing submitted successfully! Product ID: ${data.productId}. Status: ${data.status}`
+      setStatus(
+        `Listing submitted successfully. Product ID: ${
+          data.productId || "created"
+        }. Status: ${
+          data.status || "pending review"
+        }.`
       );
 
       setListing(null);
       setFiles([]);
-      setPreviewUrls([]);
-      setUploadedImages([]);
+      setPreviews([]);
+      setSourceUrls([]);
+      setImages([]);
+
       setTitle("");
       setDescription("");
-      setCategory("");
-      setBrand("");
       setPrice("");
       setStock("");
-      setKeywords("");
-      setVariants([]);
-    } catch (err) {
+    } catch (e) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to save listing."
+        e instanceof Error
+          ? e.message
+          : "Unable to submit listing."
       );
+
+      setStatus("");
     } finally {
       setSaving(false);
     }
@@ -404,8 +456,8 @@ export default function SellerAIListingPage() {
 
   if (authLoading) {
     return (
-      <main className="min-h-screen bg-gray-50 p-8">
-        <p className="text-gray-600">Checking login...</p>
+      <main className="min-h-screen p-8">
+        Checking seller login...
       </main>
     );
   }
@@ -417,9 +469,12 @@ export default function SellerAIListingPage() {
           <h1 className="text-2xl font-bold">
             ANJIVO AI Listing Studio
           </h1>
+
           <p className="mt-3 text-gray-600">
-            Listing generate karne ke liye pehle seller account se login karein.
+            Please login with your seller account
+            to create a listing.
           </p>
+
           <a
             href="/login"
             className="mt-5 inline-block rounded-lg bg-black px-5 py-3 text-white"
@@ -433,8 +488,8 @@ export default function SellerAIListingPage() {
 
   return (
     <main className="min-h-screen bg-gray-50 px-4 py-8">
-      <div className="mx-auto max-w-6xl">
-        <div className="mb-8">
+      <div className="mx-auto max-w-5xl">
+        <header className="mb-7">
           <p className="text-sm font-semibold uppercase tracking-wider text-blue-600">
             ANJIVO Seller Center
           </p>
@@ -444,306 +499,366 @@ export default function SellerAIListingPage() {
           </h1>
 
           <p className="mt-2 text-gray-600">
-            Upload product photos, generate AI details, edit and submit your listing.
+            Product ki photos upload karein. AI
+            title, description, category, keywords,
+            SEO aur catalog image banayega. Aapko
+            sirf details confirm karke price aur
+            stock bharna hai.
           </p>
-        </div>
+        </header>
 
         {error && (
-          <div className="mb-5 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
             {error}
           </div>
         )}
 
-        {message && (
-          <div className="mb-5 rounded-lg border border-green-200 bg-green-50 p-4 text-green-700">
-            {message}
+        {status && (
+          <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-blue-800">
+            {status}
           </div>
         )}
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Image upload */}
-          <section className="rounded-2xl border bg-white p-6 shadow-sm">
-            <h2 className="text-xl font-semibold">
-              1. Upload Product Images
-            </h2>
+        <section className="rounded-2xl border bg-white p-6 shadow-sm">
+          <h2 className="text-xl font-semibold">
+            1. Product photos
+          </h2>
 
-            <p className="mt-2 text-sm text-gray-500">
-              Maximum 10 images, 10 MB per image.
-            </p>
+          <p className="mt-1 text-sm text-gray-500">
+            1–10 clear photos, maximum 10 MB each.
+            Front, back and close-up photos help AI
+            identify the product.
+          </p>
 
-            <label className="mt-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 p-8 text-center hover:border-blue-500">
-              <span className="text-4xl">📷</span>
-              <span className="mt-3 font-semibold">
-                Select Product Photos
-              </span>
-              <span className="mt-1 text-sm text-gray-500">
-                JPG, PNG or WebP
-              </span>
+          <label className="mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 p-8 text-center hover:border-blue-500">
+            <span className="text-4xl">
+              📷
+            </span>
 
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={handleFileChange}
-              />
-            </label>
+            <span className="mt-3 font-semibold">
+              Select product photos
+            </span>
 
-            {previewUrls.length > 0 && (
-              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
-                {previewUrls.map((url, index) => (
-                  <div
-                    key={url}
-                    className="overflow-hidden rounded-lg border"
-                  >
-                    <img
-                      src={url}
-                      alt={`Product ${index + 1}`}
-                      className="h-36 w-full object-contain bg-gray-50"
-                    />
-                    <p className="truncate p-2 text-xs text-gray-500">
-                      {files[index]?.name}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
+            <span className="mt-1 text-sm text-gray-500">
+              JPG, PNG or WebP
+            </span>
 
-            <div className="mt-5">
-              <label className="mb-2 block text-sm font-medium">
-                Product Name (optional)
-              </label>
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Men's Cotton T-Shirt"
-                className="w-full rounded-lg border p-3 outline-none focus:border-blue-500"
-              />
-            </div>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={selectFiles}
+            />
+          </label>
 
-            <div className="mt-4">
-              <label className="mb-2 block text-sm font-medium">
-                Category (optional)
-              </label>
-              <input
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                placeholder="e.g. Men's Clothing"
-                className="w-full rounded-lg border p-3 outline-none focus:border-blue-500"
-              />
-            </div>
-
-            <div className="mt-4">
-              <label className="mb-2 block text-sm font-medium">
-                Brand (optional)
-              </label>
-              <input
-                value={brand}
-                onChange={(e) => setBrand(e.target.value)}
-                placeholder="Enter actual brand"
-                className="w-full rounded-lg border p-3 outline-none focus:border-blue-500"
-              />
-            </div>
-
-            <button
-              onClick={generateAIListing}
-              disabled={loading || files.length === 0}
-              className="mt-6 w-full rounded-xl bg-blue-600 px-5 py-4 font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-gray-400"
-            >
-              {loading
-                ? "Generating AI Listing..."
-                : "Generate AI Listing"}
-            </button>
-          </section>
-
-          {/* Listing review */}
-          <section className="rounded-2xl border bg-white p-6 shadow-sm">
-            <h2 className="text-xl font-semibold">
-              2. Review Product Details
-            </h2>
-
-            <p className="mt-2 text-sm text-gray-500">
-              AI output ko check aur edit karna zaroori hai.
-            </p>
-
-            <div className="mt-5">
-              <label className="mb-2 block text-sm font-medium">
-                Product Title
-              </label>
-              <input
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                className="w-full rounded-lg border p-3"
-                placeholder="Product title"
-              />
-            </div>
-
-            <div className="mt-4">
-              <label className="mb-2 block text-sm font-medium">
-                Description
-              </label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                rows={6}
-                className="w-full rounded-lg border p-3"
-                placeholder="Product description"
-              />
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-4">
-              <div>
-                <label className="mb-2 block text-sm font-medium">
-                  Selling Price (₹)
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  placeholder="Enter price"
-                  className="w-full rounded-lg border p-3"
-                />
-              </div>
-
-              <div>
-                <label className="mb-2 block text-sm font-medium">
-                  Available Stock
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={stock}
-                  onChange={(e) => setStock(e.target.value)}
-                  placeholder="Enter stock"
-                  className="w-full rounded-lg border p-3"
-                />
-              </div>
-            </div>
-
-            <div className="mt-4">
-              <label className="mb-2 block text-sm font-medium">
-                Keywords (comma separated)
-              </label>
-              <input
-                value={keywords}
-                onChange={(e) => setKeywords(e.target.value)}
-                placeholder="fashion, cotton, casual wear"
-                className="w-full rounded-lg border p-3"
-              />
-            </div>
-
-            <div className="mt-6 border-t pt-5">
-              <div className="flex items-center justify-between">
-                <h3 className="font-semibold">
-                  Product Variants
-                </h3>
-
-                <button
-                  onClick={addVariant}
-                  type="button"
-                  className="rounded-lg border px-3 py-2 text-sm font-medium hover:bg-gray-50"
-                >
-                  + Add Variant
-                </button>
-              </div>
-
-              {variants.length === 0 && (
-                <p className="mt-3 text-sm text-gray-500">
-                  No variants. Add size, color or other options if required.
-                </p>
-              )}
-
-              {variants.map((variant, index) => (
+          {previews.length > 0 && (
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+              {previews.map((url, i) => (
                 <div
-                  key={index}
-                  className="mt-4 rounded-xl border p-4"
+                  key={url}
+                  className="overflow-hidden rounded-lg border"
                 >
-                  <div className="mb-3 flex items-center justify-between">
-                    <span className="font-medium">
-                      Variant {index + 1}
-                    </span>
+                  <img
+                    src={url}
+                    alt={`Product photo ${i + 1}`}
+                    className="h-36 w-full bg-gray-50 object-contain"
+                  />
 
-                    <button
-                      type="button"
-                      onClick={() => removeVariant(index)}
-                      className="text-sm text-red-600"
-                    >
-                      Remove
-                    </button>
-                  </div>
+                  <p className="truncate p-2 text-xs text-gray-500">
+                    {files[i]?.name}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <input
-                      value={variant.sku}
-                      onChange={(e) =>
-                        updateVariant(index, "sku", e.target.value)
-                      }
-                      placeholder="SKU"
-                      className="rounded-lg border p-2"
-                    />
+          <button
+            onClick={generate}
+            disabled={busy || !files.length}
+            className="mt-5 w-full rounded-xl bg-blue-600 px-5 py-4 font-semibold text-white hover:bg-blue-700 disabled:bg-gray-400"
+          >
+            {busy
+              ? "AI is working..."
+              : listing
+                ? "Regenerate AI listing"
+                : "Generate listing automatically"}
+          </button>
+        </section>
 
-                    <input
-                      value={variant.size}
-                      onChange={(e) =>
-                        updateVariant(index, "size", e.target.value)
-                      }
-                      placeholder="Size"
-                      className="rounded-lg border p-2"
-                    />
+        {listing && (
+          <section className="mt-6 space-y-6 rounded-2xl border bg-white p-6 shadow-sm">
+            <div>
+              <h2 className="text-xl font-semibold">
+                2. Review and confirm AI details
+              </h2>
 
-                    <input
-                      value={variant.color}
-                      onChange={(e) =>
-                        updateVariant(index, "color", e.target.value)
-                      }
-                      placeholder="Color"
-                      className="rounded-lg border p-2"
-                    />
+              <p className="mt-1 text-sm text-gray-500">
+                AI suggestions ko verify karein.
+                Photo se confirm na hone wali details
+                ko fact na samjhein.
+              </p>
+            </div>
 
-                    <input
-                      type="number"
-                      min="0"
-                      value={variant.price}
-                      onChange={(e) =>
-                        updateVariant(index, "price", e.target.value)
-                      }
-                      placeholder="Price (₹)"
-                      className="rounded-lg border p-2"
-                    />
+            <div className="grid gap-3 sm:grid-cols-2">
+              {images.map((url, i) => (
+                <div
+                  key={`${url}-${i}`}
+                  className="overflow-hidden rounded-lg border"
+                >
+                  <img
+                    src={url}
+                    alt={`Listing image ${i + 1}`}
+                    className="h-56 w-full bg-gray-50 object-contain"
+                  />
 
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={variant.stock}
-                      onChange={(e) =>
-                        updateVariant(index, "stock", e.target.value)
-                      }
-                      placeholder="Stock"
-                      className="rounded-lg border p-2"
-                    />
-                  </div>
+                  <p className="p-2 text-xs text-gray-500">
+                    {i < sourceUrls.length
+                      ? "Original product photo"
+                      : "AI-generated catalog photo"}
+                  </p>
                 </div>
               ))}
             </div>
 
+            <div>
+              <label className="mb-2 block text-sm font-medium">
+                AI Product Title
+              </label>
+
+              <input
+                className={inputClass}
+                value={title}
+                onChange={(e) =>
+                  setTitle(e.target.value)
+                }
+              />
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg bg-gray-50 p-3">
+                <p className="text-xs text-gray-500">
+                  Category
+                </p>
+
+                <p className="font-medium">
+                  {String(
+                    listing.category ||
+                      "Needs confirmation"
+                  )}
+                </p>
+              </div>
+
+              <div className="rounded-lg bg-gray-50 p-3">
+                <p className="text-xs text-gray-500">
+                  Subcategory
+                </p>
+
+                <p className="font-medium">
+                  {String(
+                    listing.subcategory || "—"
+                  )}
+                </p>
+              </div>
+
+              <div className="rounded-lg bg-gray-50 p-3">
+                <p className="text-xs text-gray-500">
+                  Product type
+                </p>
+
+                <p className="font-medium">
+                  {String(
+                    listing.productType || "—"
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-2 block text-sm font-medium">
+                Product description
+              </label>
+
+              <textarea
+                className={inputClass}
+                rows={5}
+                value={description}
+                onChange={(e) =>
+                  setDescription(e.target.value)
+                }
+              />
+            </div>
+
+            {Array.isArray(listing.highlights) &&
+              listing.highlights.length > 0 && (
+                <div>
+                  <h3 className="mb-2 font-semibold">
+                    Key highlights
+                  </h3>
+
+                  <ul className="list-disc space-y-1 pl-5 text-sm">
+                    {listing.highlights.map(
+                      (x, i) => (
+                        <li key={i}>{x}</li>
+                      )
+                    )}
+                  </ul>
+                </div>
+              )}
+
+            {listing.attributes && (
+              <div>
+                <h3 className="mb-2 font-semibold">
+                  AI-identified attributes (verify
+                  before publishing)
+                </h3>
+
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {Object.entries(
+                    listing.attributes
+                  ).map(([k, v]) => (
+                    <div
+                      key={k}
+                      className="rounded-lg bg-gray-50 p-3 text-sm"
+                    >
+                      <span className="font-medium">
+                        {k}:{" "}
+                      </span>
+
+                      {typeof v === "string" ||
+                      typeof v === "number"
+                        ? String(v)
+                        : JSON.stringify(v)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {listing.seo && (
+              <div>
+                <h3 className="mb-2 font-semibold">
+                  SEO preview
+                </h3>
+
+                <div className="space-y-2 rounded-lg bg-gray-50 p-4 text-sm">
+                  {Object.entries(
+                    listing.seo
+                  )
+                    .filter(([k]) =>
+                      [
+                        "metaTitle",
+                        "metaDescription",
+                        "slug",
+                        "primaryKeyword",
+                        "secondaryKeywords",
+                        "tags",
+                        "searchTerms",
+                      ].includes(k)
+                    )
+                    .map(([k, v]) => (
+                      <p key={k}>
+                        <span className="font-medium">
+                          {k}:{" "}
+                        </span>
+
+                        {Array.isArray(v)
+                          ? v.join(", ")
+                          : String(v ?? "")}
+                      </p>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {Array.isArray(
+              listing.missingInformation
+            ) &&
+              listing.missingInformation.length >
+                0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                  <h3 className="font-semibold text-amber-900">
+                    Seller confirmation needed
+                  </h3>
+
+                  <ul className="mt-2 list-disc pl-5 text-sm text-amber-900">
+                    {listing.missingInformation.map(
+                      (x, i) => (
+                        <li key={i}>{x}</li>
+                      )
+                    )}
+                  </ul>
+                </div>
+              )}
+
+            {Array.isArray(listing.warnings) &&
+              listing.warnings.length > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                  {listing.warnings.map(
+                    (x, i) => (
+                      <p key={i}>• {x}</p>
+                    )
+                  )}
+                </div>
+              )}
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm font-medium">
+                  Actual selling price (₹) —
+                  required
+                </label>
+
+                <input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  className={inputClass}
+                  value={price}
+                  onChange={(e) =>
+                    setPrice(e.target.value)
+                  }
+                  placeholder="Enter your selling price"
+                />
+              </div>
+
+              <div>
+                <label className="mb-2 block text-sm font-medium">
+                  Available stock — required
+                </label>
+
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  className={inputClass}
+                  value={stock}
+                  onChange={(e) =>
+                    setStock(e.target.value)
+                  }
+                  placeholder="Enter available quantity"
+                />
+              </div>
+            </div>
+
             <button
               onClick={confirmListing}
-              disabled={saving || !listing}
-              className="mt-6 w-full rounded-xl bg-green-600 px-5 py-4 font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+              disabled={saving}
+              className="w-full rounded-xl bg-green-600 px-5 py-4 font-semibold text-white hover:bg-green-700 disabled:bg-gray-400"
             >
               {saving
                 ? "Submitting..."
-                : "Confirm & Submit for Review"}
+                : "Confirm & Submit Listing"}
             </button>
 
-            <p className="mt-3 text-xs text-gray-500">
-              Listing admin review ke liye submit hogi. Yeh button product ko directly publish nahi karta.
+            <p className="text-xs text-gray-500">
+              Price, stock, brand, exact material,
+              tax/HSN and compliance details are
+              not guessed by AI. Confirm them from
+              actual product and business records.
             </p>
           </section>
-        </div>
+        )}
       </div>
     </main>
   );
