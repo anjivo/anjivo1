@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   query,
   where,
   serverTimestamp,
@@ -513,6 +514,50 @@ export async function getOrderById(
   return mapOrder(
     orderSnap.id,
     data
+  );
+}
+
+
+
+/* ----------------------------------------
+   Subscribe to a Customer Order (Live)
+---------------------------------------- */
+
+export function subscribeToOrderById(
+  orderId: string,
+  userId: string,
+  onOrder: (order: Order | null) => void,
+  onError?: (error: Error) => void
+): () => void {
+  if (!orderId || !userId) {
+    onOrder(null);
+    return () => {};
+  }
+
+  const orderRef = doc(db, "orders", orderId);
+
+  return onSnapshot(
+    orderRef,
+    (orderSnap) => {
+      if (!orderSnap.exists()) {
+        onOrder(null);
+        return;
+      }
+
+      const data = orderSnap.data();
+
+      // Enforce customer ownership in the client as an additional check.
+      // Firestore Security Rules must enforce this on the server as well.
+      if (data.userId !== userId) {
+        onOrder(null);
+        return;
+      }
+
+      onOrder(mapOrder(orderSnap.id, data));
+    },
+    (error) => {
+      onError?.(error);
+    }
   );
 }
 
