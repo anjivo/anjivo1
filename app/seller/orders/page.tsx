@@ -25,19 +25,25 @@ type Filter =
   | "pending"
   | "confirmed"
   | "processing"
+  | "packed"
   | "shipped"
+  | "out_for_delivery"
   | "delivered"
   | "cancelled"
-  | "returned";
+  | "returned"
+  | "refunded";
 
 const filters: Filter[] = [
   "pending",
   "confirmed",
   "processing",
+  "packed",
   "shipped",
+  "out_for_delivery",
   "delivered",
   "cancelled",
   "returned",
+  "refunded",
 ];
 
 export default function SellerOrdersPage() {
@@ -65,6 +71,12 @@ export default function SellerOrdersPage() {
     useState("");
 
   const [error, setError] =
+    useState("");
+
+  const [updatingOrderId, setUpdatingOrderId] =
+    useState<string | null>(null);
+
+  const [statusMessage, setStatusMessage] =
     useState("");
 
   useEffect(() => {
@@ -194,6 +206,78 @@ export default function SellerOrdersPage() {
       );
     } finally {
       setLoadingOrders(false);
+    }
+  }
+
+  async function updateOrderStatus(
+    orderId: string,
+    nextStatus: string
+  ) {
+    const user = auth.currentUser;
+
+    if (!user) {
+      router.replace(
+        "/login?redirect=/seller/orders"
+      );
+      return;
+    }
+
+    if (!sellerId) {
+      setError("Seller account not found.");
+      return;
+    }
+
+    try {
+      setUpdatingOrderId(orderId);
+      setError("");
+      setStatusMessage("");
+
+      const idToken = await user.getIdToken();
+
+      const response = await fetch(
+        "/api/seller/orders/status",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            orderId,
+            status: nextStatus,
+          }),
+        }
+      );
+
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(
+          result.message ||
+            "Unable to update order status."
+        );
+      }
+
+      setStatusMessage(
+        `Order #${orderId} status updated to ${formatStatus(
+          nextStatus
+        )}.`
+      );
+
+      await loadOrders(sellerId);
+    } catch (err) {
+      console.error(
+        "Seller order status update error:",
+        err
+      );
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to update order status."
+      );
+    } finally {
+      setUpdatingOrderId(null);
     }
   }
 
@@ -338,6 +422,16 @@ export default function SellerOrdersPage() {
           </div>
         )}
 
+        {/* STATUS SUCCESS */}
+
+        {statusMessage && (
+          <div className="mt-5 rounded-2xl border border-green-200 bg-green-50 p-4">
+            <p className="text-xs font-black text-green-800">
+              {statusMessage}
+            </p>
+          </div>
+        )}
+
         {/* STATS */}
 
         <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -479,6 +573,10 @@ export default function SellerOrdersPage() {
                   <SellerOrderCard
                     key={order.id}
                     order={order}
+                    updating={
+                      updatingOrderId === order.id
+                    }
+                    onStatusUpdate={updateOrderStatus}
                   />
                 )
               )}
@@ -499,8 +597,15 @@ export default function SellerOrdersPage() {
 
 function SellerOrderCard({
   order,
+  updating,
+  onStatusUpdate,
 }: {
   order: SellerOrder;
+  updating: boolean;
+  onStatusUpdate: (
+    orderId: string,
+    nextStatus: string
+  ) => Promise<void>;
 }) {
   const address =
     order.shippingAddress;
@@ -814,9 +919,9 @@ function SellerOrderCard({
 
       {/* STATUS */}
 
-      <div className="flex flex-col gap-4 pt-5 lg:flex-row lg:items-end lg:justify-between">
+      <div className="flex flex-col gap-5 pt-5 lg:flex-row lg:items-end lg:justify-between">
 
-        <div>
+        <div className="flex-1">
 
           <label className="text-[10px] font-black uppercase tracking-wide text-gray-400">
             Seller Fulfillment Status
@@ -826,23 +931,23 @@ function SellerOrderCard({
             <StatusBadge
               status={getEffectiveStatus(order)}
             />
-
-            {order.fulfillmentStatus &&
-              order.fulfillmentStatus !== getEffectiveStatus(order) && (
-                <span className="rounded-full bg-gray-100 px-3 py-1 text-[9px] font-black uppercase text-gray-600">
-                  Fulfillment: {formatStatus(order.fulfillmentStatus)}
-                </span>
-              )}
           </div>
 
-          <p className="mt-2 text-[9px] text-gray-400">
-            Status updates will be enabled through the secure seller order API.
-          </p>
+          <div className="mt-4">
+            <p className="mb-3 text-[10px] font-black uppercase tracking-wide text-gray-400">
+              Update Order Status
+            </p>
+
+            <SellerStatusActions
+              order={order}
+              updating={updating}
+              onStatusUpdate={onStatusUpdate}
+            />
+          </div>
 
         </div>
 
         <div className="text-left lg:text-right">
-
           <p className="text-[9px] font-black uppercase tracking-wide text-gray-400">
             Order Total
           </p>
@@ -853,11 +958,124 @@ function SellerOrderCard({
               "en-IN"
             )}
           </p>
-
         </div>
 
       </div>
 
+    </div>
+  );
+}
+
+/* =========================================================
+   SELLER STATUS ACTIONS
+========================================================= */
+
+type SellerFulfillmentStatus =
+  | "pending"
+  | "confirmed"
+  | "processing"
+  | "packed"
+  | "shipped"
+  | "out_for_delivery"
+  | "delivered"
+  | "cancelled"
+  | "returned"
+  | "refunded";
+
+const SELLER_STATUS_FLOW: Record<
+  SellerFulfillmentStatus,
+  SellerFulfillmentStatus[]
+> = {
+  pending: ["confirmed", "cancelled"],
+  confirmed: ["processing", "cancelled"],
+  processing: ["packed", "cancelled"],
+  packed: ["shipped", "cancelled"],
+  shipped: ["out_for_delivery", "returned"],
+  out_for_delivery: ["delivered", "returned"],
+  delivered: ["returned"],
+  cancelled: [],
+  returned: ["refunded"],
+  refunded: [],
+};
+
+function SellerStatusActions({
+  order,
+  updating,
+  onStatusUpdate,
+}: {
+  order: SellerOrder;
+  updating: boolean;
+  onStatusUpdate: (
+    orderId: string,
+    nextStatus: string
+  ) => Promise<void>;
+}) {
+  const currentStatus =
+    getEffectiveStatus(order) as SellerFulfillmentStatus;
+
+  const nextStatuses =
+    SELLER_STATUS_FLOW[currentStatus] || [];
+
+  if (nextStatuses.length === 0) {
+    return (
+      <p className="rounded-xl bg-gray-50 p-3 text-xs font-bold text-gray-500">
+        This order has reached a final status.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {nextStatuses.map((nextStatus) => {
+        const isCancel = nextStatus === "cancelled";
+        const isReturn = nextStatus === "returned";
+        const isRefund = nextStatus === "refunded";
+
+        let buttonStyle =
+          "bg-black text-white hover:bg-gray-800";
+
+        if (isCancel) {
+          buttonStyle =
+            "border border-red-200 bg-red-50 text-red-700 hover:bg-red-100";
+        }
+
+        if (isReturn) {
+          buttonStyle =
+            "border border-orange-200 bg-orange-50 text-orange-700 hover:bg-orange-100";
+        }
+
+        if (isRefund) {
+          buttonStyle =
+            "border border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200";
+        }
+
+        return (
+          <button
+            key={nextStatus}
+            type="button"
+            disabled={updating}
+            onClick={() => {
+              const confirmed = window.confirm(
+                `Are you sure you want to change order #${order.id} to ${formatStatus(
+                  nextStatus
+                )}?`
+              );
+
+              if (!confirmed) return;
+
+              void onStatusUpdate(
+                order.id,
+                nextStatus
+              );
+            }}
+            className={`rounded-xl px-4 py-3 text-[10px] font-black transition disabled:cursor-not-allowed disabled:opacity-50 ${buttonStyle}`}
+          >
+            {updating
+              ? "Updating..."
+              : `Mark ${formatStatus(nextStatus)}`}
+          </button>
+        );
+      })}
     </div>
   );
 }
