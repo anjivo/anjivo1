@@ -113,6 +113,17 @@ export type Order = {
 
   status: OrderStatus;
 
+  // Live fulfillment / shipment data written by seller or admin workflows.
+  fulfillmentStatus?: string;
+  courierName?: string;
+  courier?: string;
+  trackingNumber?: string;
+  awbNumber?: string;
+  trackingUrl?: string;
+  estimatedDelivery?: unknown;
+  shippedAt?: unknown;
+  deliveredAt?: unknown;
+
   createdAt?: unknown;
   updatedAt?: unknown;
 };
@@ -153,6 +164,50 @@ function clean(value: unknown): string {
   return typeof value === "string"
     ? value.trim()
     : "";
+}
+
+/* ----------------------------------------
+   Normalize Firestore / API status values
+---------------------------------------- */
+
+function normalizeOrderStatus(value: unknown): OrderStatus {
+  const raw = String(value || "pending")
+    .trim()
+    .toLowerCase()
+    .replace(/[ -]+/g, "_");
+
+  const aliases: Record<string, OrderStatus> = {
+    placed: "pending",
+    order_placed: "pending",
+    accepted: "confirmed",
+    approved: "confirmed",
+    ready_to_ship: "packed",
+    dispatched: "shipped",
+    in_transit: "shipped",
+    on_the_way: "shipped",
+    outfordelivery: "out_for_delivery",
+    complete: "delivered",
+    completed: "delivered",
+  };
+
+  if (aliases[raw]) return aliases[raw];
+
+  const allowed: OrderStatus[] = [
+    "pending",
+    "confirmed",
+    "processing",
+    "packed",
+    "shipped",
+    "out_for_delivery",
+    "delivered",
+    "cancelled",
+    "returned",
+    "refunded",
+  ];
+
+  return allowed.includes(raw as OrderStatus)
+    ? (raw as OrderStatus)
+    : "pending";
 }
 
 /* ----------------------------------------
@@ -326,12 +381,41 @@ function mapOrder(
         data.totalAmount || 0
       ),
 
-    // Current server order API uses `orderStatus`.
-    // Keep `status` as a backward-compatible fallback for older orders.
-    status:
+    // Prefer fulfillmentStatus because seller/admin shipment actions update it.
+    // Normalize server-side uppercase values to the OrderStatus union.
+    status: normalizeOrderStatus(
+      data.fulfillmentStatus ||
       data.orderStatus ||
       data.status ||
-      "pending",
+      "pending"
+    ),
+
+    fulfillmentStatus:
+      data.fulfillmentStatus || "",
+
+    courierName:
+      data.courierName || "",
+
+    courier:
+      data.courier || "",
+
+    trackingNumber:
+      data.trackingNumber || "",
+
+    awbNumber:
+      data.awbNumber || "",
+
+    trackingUrl:
+      data.trackingUrl || "",
+
+    estimatedDelivery:
+      data.estimatedDelivery,
+
+    shippedAt:
+      data.shippedAt,
+
+    deliveredAt:
+      data.deliveredAt,
 
     createdAt:
       data.createdAt,
