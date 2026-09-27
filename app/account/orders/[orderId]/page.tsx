@@ -11,7 +11,7 @@ import Footer from "@/components/Footer";
 import { auth } from "@/lib/firebase";
 
 import {
-  getOrderById,
+  subscribeToOrderById,
   type Order,
 } from "@/lib/orders";
 
@@ -186,73 +186,63 @@ export default function OrderDetailsPage() {
     useState("");
 
   /* =======================================================
-     AUTH + ORDER
+     AUTH + LIVE ORDER SUBSCRIPTION
   ======================================================= */
 
   useEffect(() => {
     if (!orderId) {
-      setError(
-        "Invalid order ID."
-      );
-
+      setError("Invalid order ID.");
       setLoading(false);
-
       return;
     }
 
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            router.replace(
-              `/login?redirect=/account/orders/${orderId}`
-            );
+    let unsubscribeOrder: (() => void) | undefined;
+    let isActive = true;
 
-            return;
-          }
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      // Stop any previous user's order listener if auth changes.
+      unsubscribeOrder?.();
+      unsubscribeOrder = undefined;
 
-          try {
-            setLoading(true);
-            setError("");
+      if (!user) {
+        router.replace(`/login?redirect=/account/orders/${orderId}`);
+        return;
+      }
 
-            const result =
-              await getOrderById(
-                orderId,
-                user.uid
-              );
+      setLoading(true);
+      setError("");
 
-            if (!result) {
-              setError(
-                "Order not found."
-              );
+      unsubscribeOrder = subscribeToOrderById(
+        orderId,
+        user.uid,
+        (result) => {
+          if (!isActive) return;
 
-              return;
-            }
-
+          if (!result) {
+            setOrder(null);
+            setError("Order not found.");
+          } else {
             setOrder(result);
-          } catch (err) {
-            console.error(
-              "Order loading error:",
-              err
-            );
-
-            setError(
-              "Unable to load order."
-            );
-          } finally {
-            setLoading(false);
+            setError("");
           }
+
+          setLoading(false);
+        },
+        (err) => {
+          if (!isActive) return;
+          console.error("Live order subscription error:", err);
+          setError("Unable to load order. Please check your connection and try again.");
+          setLoading(false);
         }
       );
+    });
 
     return () => {
-      unsubscribe();
+      isActive = false;
+      unsubscribeOrder?.();
+      unsubscribeAuth();
     };
-  }, [
-    orderId,
-    router,
-  ]);
+  }, [orderId, router]);
 
   /* =======================================================
      LOADING
