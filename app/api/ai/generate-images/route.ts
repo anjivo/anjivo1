@@ -206,27 +206,36 @@ export async function POST(req: NextRequest) {
 
     const input = body as Record<string, unknown>;
 
-    const productId = input.productId;
+    const productId =
+      typeof input.productId === "string"
+        ? input.productId.trim()
+        : "";
     const imageUrl = input.imageUrl;
     const productName = input.productName;
     const scene = input.scene;
+    const draft = input.draft === true;
 
     if (
-      typeof productId !== "string" ||
       typeof imageUrl !== "string" ||
       typeof productName !== "string" ||
       typeof scene !== "string"
     ) {
       return jsonError(
-        "productId, imageUrl, productName and scene are required.",
+        "imageUrl, productName and scene are required.",
+        400
+      );
+    }
+
+    if (!draft && !productId) {
+      return jsonError(
+        "productId is required for product image generation.",
         400
       );
     }
 
     if (
-      productId.length < 1 ||
-      productId.length > 150 ||
-      productId.includes("/")
+      productId &&
+      (productId.length > 150 || productId.includes("/"))
     ) {
       return jsonError("Invalid product ID.", 400);
     }
@@ -243,27 +252,34 @@ export async function POST(req: NextRequest) {
       return jsonError("Invalid image scene.", 400);
     }
 
-    // 4. Verify product ownership.
-    const productRef = adminDb
-      .collection("products")
-      .doc(productId);
+    // 4. Resolve the product when this is a published-product request.
+    // Draft mode is intentionally supported for the seller AI listing
+    // workflow before a Firestore product document exists.
+    let productData: Record<string, unknown> | null = null;
 
-    const productDoc = await productRef.get();
+    if (!draft) {
+      const productRef = adminDb
+        .collection("products")
+        .doc(productId);
 
-    if (!productDoc.exists) {
-      return jsonError("Product not found.", 404);
-    }
+      const productDoc = await productRef.get();
 
-    const productData = productDoc.data();
+      if (!productDoc.exists) {
+        return jsonError("Product not found.", 404);
+      }
 
-    if (
-      !isAdmin &&
-      productData?.sellerId !== uid
-    ) {
-      return jsonError(
-        "You do not own this product.",
-        403
-      );
+      productData =
+        (productDoc.data() as Record<string, unknown>) || null;
+
+      if (
+        !isAdmin &&
+        productData?.sellerId !== uid
+      ) {
+        return jsonError(
+          "You do not own this product.",
+          403
+        );
+      }
     }
 
     // 5. Validate the reference image URL.
@@ -342,8 +358,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Verify image URL points to an image associated with
-    // the requested product.
+    // Verify ownership of the reference image.
+    // Draft AI listing uploads live under ai-listings/{uid}/.
     const productImages = Array.isArray(productData?.images)
       ? productData.images
       : [];
@@ -371,8 +387,7 @@ export async function POST(req: NextRequest) {
     const productImagePaths = productImageUrls
       .map((url) => {
         try {
-          const parsed = new URL(url);
-          return getStorageObjectPath(parsed);
+          return getStorageObjectPath(new URL(url));
         } catch {
           return null;
         }
@@ -384,13 +399,18 @@ export async function POST(req: NextRequest) {
 
     const belongsToProduct =
       productImagePaths.includes(objectPath) ||
-      objectPath.includes(`/${uid}/`) ||
       objectPath.startsWith(`products/${productId}/`) ||
       objectPath.startsWith(`products/${uid}/`);
 
-    if (!isAdmin && !belongsToProduct) {
+    const belongsToDraft =
+      objectPath.startsWith(`ai-listings/${uid}/`);
+
+    if (
+      !isAdmin &&
+      !(draft ? belongsToDraft : belongsToProduct)
+    ) {
       return jsonError(
-        "Reference image is not associated with your product.",
+        "Reference image is not associated with your seller account.",
         403
       );
     }
@@ -445,7 +465,8 @@ export async function POST(req: NextRequest) {
 
     // 9. Log the generation event.
     await adminDb.collection("ai_image_jobs").add({
-      productId,
+      productId: productId || null,
+      draft: draft,
       sellerId: productData?.sellerId || uid,
       requestedBy: uid,
       scene,
