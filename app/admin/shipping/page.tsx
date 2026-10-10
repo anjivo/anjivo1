@@ -108,10 +108,25 @@ type Order = {
   shippedAt?: unknown;
   deliveredAt?: unknown;
 
+  deliveryPartnerId?: string;
+  deliveryPartnerName?: string;
+  deliveryPartnerPhone?: string;
+  deliveryAssignmentStatus?: string;
+  assignedAt?: unknown;
+
   sellerFulfillment?: Record<string, SellerFulfillment>;
 
   createdAt?: unknown;
   updatedAt?: unknown;
+};
+
+type DeliveryPartner = {
+  id: string;
+  name: string;
+  phone: string;
+  vehicleType: string;
+  serviceArea: string;
+  status: "active" | "inactive";
 };
 
 type FilterStatus =
@@ -401,6 +416,12 @@ function mapOrder(id: string, data: any): Order {
     shippedAt: data.shippedAt,
     deliveredAt: data.deliveredAt,
 
+    deliveryPartnerId: data.deliveryPartnerId || "",
+    deliveryPartnerName: data.deliveryPartnerName || "",
+    deliveryPartnerPhone: data.deliveryPartnerPhone || "",
+    deliveryAssignmentStatus: data.deliveryAssignmentStatus || "",
+    assignedAt: data.assignedAt,
+
     sellerFulfillment,
 
     createdAt: data.createdAt,
@@ -414,6 +435,9 @@ function mapOrder(id: string, data: any): Order {
 
 export default function AdminShippingPage() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [deliveryPartners, setDeliveryPartners] = useState<DeliveryPartner[]>([]);
+  const [selectedDeliveryPartnerId, setSelectedDeliveryPartnerId] = useState("");
+  const [assigningPartner, setAssigningPartner] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [authorized, setAuthorized] = useState(false);
@@ -484,7 +508,7 @@ export default function AdminShippingPage() {
           }
 
           setAuthorized(true);
-          await loadOrders();
+          await Promise.all([loadOrders(), loadDeliveryPartners()]);
         } catch (err) {
           console.error(err);
           setError("Unable to verify admin access.");
@@ -525,6 +549,66 @@ export default function AdminShippingPage() {
       setError("Failed to load orders.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadDeliveryPartners() {
+    try {
+      const user = auth.currentUser;
+      if (!user) return;
+      const token = await user.getIdToken();
+      const response = await fetch("/api/admin/delivery-partners", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || "Unable to load delivery partners.");
+      }
+      setDeliveryPartners(
+        (Array.isArray(result.partners) ? result.partners : []).filter(
+          (partner: DeliveryPartner) => partner.status === "active",
+        ),
+      );
+    } catch (err) {
+      console.error("Load delivery partners error:", err);
+      setError(err instanceof Error ? err.message : "Unable to load delivery partners.");
+    }
+  }
+
+  async function assignDeliveryPartner(order: Order) {
+    const partner = deliveryPartners.find(
+      (item) => item.id === selectedDeliveryPartnerId,
+    );
+    if (!partner) {
+      setError("Please select an active delivery partner.");
+      return;
+    }
+
+    try {
+      setAssigningPartner(true);
+      setError("");
+      setSuccess("");
+      const payload = {
+        deliveryPartnerId: partner.id,
+        deliveryPartnerName: partner.name,
+        deliveryPartnerPhone: partner.phone,
+        deliveryAssignmentStatus: "assigned",
+        assignedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+      await updateDoc(doc(db, "orders", order.id), payload);
+      const applyAssignment = (item: Order): Order => item.id === order.id
+        ? { ...item, ...payload, assignedAt: new Date().toISOString() }
+        : item;
+      setOrders((previous) => previous.map(applyAssignment));
+      setSelectedOrder((previous) => previous ? applyAssignment(previous) : previous);
+      setSuccess(`Delivery partner ${partner.name} assigned to order ${order.id}.`);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to assign delivery partner. Please try again.");
+    } finally {
+      setAssigningPartner(false);
     }
   }
 
@@ -690,6 +774,7 @@ export default function AdminShippingPage() {
 
   function openShipment(order: Order) {
     setSelectedOrder(order);
+    setSelectedDeliveryPartnerId(order.deliveryPartnerId || "");
 
     setShipmentForm({
       courierName: order.courierName || "",
@@ -737,6 +822,8 @@ export default function AdminShippingPage() {
         order.shippingAddress?.pincode,
         order.courierName,
         order.courier,
+        order.deliveryPartnerName,
+        order.deliveryPartnerPhone,
         order.trackingNumber,
         order.awbNumber,
         ...order.sellerIds,
@@ -1021,7 +1108,7 @@ export default function AdminShippingPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-[1250px] w-full text-left">
+              <table className="min-w-[1350px] w-full text-left">
                 <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                   <tr>
                     <th className="px-5 py-4">
@@ -1044,6 +1131,9 @@ export default function AdminShippingPage() {
                       Courier / AWB
                     </th>
 
+                    <th className="px-5 py-4">
+                      Delivery Partner
+                    </th>
                     <th className="px-5 py-4">
                       Payment
                     </th>
@@ -1163,6 +1253,18 @@ export default function AdminShippingPage() {
                             <span className="font-medium">
                               {order.trackingNumber}
                             </span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* DELIVERY PARTNER */}
+                      <td className="px-5 py-4 align-top">
+                        <div className="font-medium text-gray-900">
+                          {order.deliveryPartnerName || "Not assigned"}
+                        </div>
+                        {order.deliveryPartnerPhone && (
+                          <div className="mt-1 text-xs text-gray-500">
+                            {order.deliveryPartnerPhone}
                           </div>
                         )}
                       </td>
@@ -1365,6 +1467,47 @@ export default function AdminShippingPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* DELIVERY STAFF ASSIGNMENT */}
+              <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+                <h3 className="text-sm font-bold text-gray-900">Assign Delivery Staff</h3>
+                <p className="mt-1 text-xs text-gray-600">
+                  Only active delivery partners are available for assignment.
+                </p>
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+                  <select
+                    value={selectedDeliveryPartnerId}
+                    onChange={(event) => setSelectedDeliveryPartnerId(event.target.value)}
+                    className="min-w-0 flex-1 rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm"
+                  >
+                    <option value="">Select delivery partner</option>
+                    {deliveryPartners.map((partner) => (
+                      <option key={partner.id} value={partner.id}>
+                        {partner.name} — {partner.phone} ({partner.vehicleType})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    disabled={assigningPartner || !selectedDeliveryPartnerId}
+                    onClick={() => assignDeliveryPartner(selectedOrder)}
+                    className="rounded-xl bg-blue-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {assigningPartner ? "Assigning..." : "Assign Staff"}
+                  </button>
+                </div>
+                {selectedOrder.deliveryPartnerName && (
+                  <p className="mt-3 text-xs font-medium text-blue-900">
+                    Currently assigned: {selectedOrder.deliveryPartnerName}
+                    {selectedOrder.deliveryPartnerPhone ? ` · ${selectedOrder.deliveryPartnerPhone}` : ""}
+                  </p>
+                )}
+                {deliveryPartners.length === 0 && (
+                  <p className="mt-2 text-xs text-amber-800">
+                    No active delivery partners found. Add and activate a partner first.
+                  </p>
+                )}
               </div>
 
               {/* SHIPMENT INFORMATION */}
