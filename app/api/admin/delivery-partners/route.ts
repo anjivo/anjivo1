@@ -83,6 +83,8 @@ function serializePartner(id: string, data: DocumentData) {
     vehicleType: String(data.vehicleType ?? "bike"),
     serviceArea: String(data.serviceArea ?? ""),
     status: data.status === "active" ? "active" : "inactive",
+    authUid: typeof data.authUid === "string" ? data.authUid : null,
+    hasLogin: typeof data.authUid === "string" && data.authUid.length > 0,
     createdAt: timestampToIso(data.createdAt),
     updatedAt: timestampToIso(data.updatedAt),
   };
@@ -123,8 +125,10 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// POST: Create a delivery partner profile
+// POST: Create a delivery partner profile and Firebase login
 export async function POST(request: NextRequest) {
+  let createdAuthUid: string | null = null;
+
   try {
     const auth = await requireAdmin(request);
 
@@ -154,9 +158,14 @@ export async function POST(request: NextRequest) {
         ? body.email.trim().toLowerCase()
         : "";
 
+    const temporaryPassword =
+      typeof body.temporaryPassword === "string"
+        ? body.temporaryPassword
+        : "";
+
     const vehicleType =
       typeof body.vehicleType === "string"
-        ? body.vehicleType
+        ? body.vehicleType.trim().toLowerCase()
         : "bike";
 
     const serviceArea =
@@ -181,11 +190,27 @@ export async function POST(request: NextRequest) {
     }
 
     if (
-      email &&
+      !email ||
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
     ) {
       return NextResponse.json(
-        { success: false, error: "Enter a valid email address." },
+        {
+          success: false,
+          error: "A valid email is required for the delivery partner login.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      temporaryPassword.length < 8 ||
+      temporaryPassword.length > 128
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Temporary password must be 8–128 characters.",
+        },
         { status: 400 }
       );
     }
@@ -229,45 +254,125 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Create a disabled Firebase account first.
+    let firebaseUser;
+
+    try {
+      firebaseUser = await adminAuth.createUser({
+        email,
+        password: temporaryPassword,
+        displayName: name,
+        disabled: true,
+        emailVerified: false,
+      });
+
+      createdAuthUid = firebaseUser.uid;
+    } catch (error) {
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error
+          ? String(error.code)
+          : "";
+
+      if (code === "auth/email-already-exists") {
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "This email is already registered in Firebase Authentication.",
+          },
+          { status: 409 }
+        );
+      }
+
+      if (
+        code === "auth/invalid-password" ||
+        code === "auth/weak-password"
+      ) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Firebase rejected this password. Use a stronger password.",
+          },
+          { status: 400 }
+        );
+      }
+
+      throw error;
+    }
+
     const docRef = adminDb.collection("deliveryPartners").doc();
 
-    await docRef.set({
-      name,
-      phone,
-      phoneNormalized: normalizedPhone,
-      email,
-      vehicleType,
-      serviceArea,
-      status: "inactive",
-      authUid: null,
-      createdBy: auth.uid,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
+    try {
+      await docRef.set({
+        name,
+        phone,
+        phoneNormalized: normalizedPhone,
+        email,
+        vehicleType,
+        serviceArea,
+        status: "inactive",
+        authUid: firebaseUser.uid,
+        createdBy: auth.uid,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      // Best-effort cleanup if saving the Firestore profile fails.
+      try {
+        await adminAuth.deleteUser(firebaseUser.uid);
+        createdAuthUid = null;
+      } catch (cleanupError) {
+        console.error(
+          "Unable to clean up delivery partner Auth account:",
+          cleanupError
+        );
+      }
+
+      throw error;
+    }
+
+    createdAuthUid = null;
 
     const saved = await docRef.get();
 
     return NextResponse.json(
       {
         success: true,
-        partner: serializePartner(
-          saved.id,
-          saved.data() ?? {}
-        ),
+        partner: serializePartner(saved.id, saved.data() ?? {}),
+        loginCreated: true,
+        loginEmail: email,
+        message:
+          "Delivery partner created. Login remains disabled until admin activation.",
       },
       { status: 201 }
     );
   } catch (error) {
     console.error("Create delivery partner error:", error);
 
+    if (createdAuthUid) {
+      try {
+        await adminAuth.deleteUser(createdAuthUid);
+      } catch (cleanupError) {
+        console.error(
+          "Delivery partner Auth cleanup error:",
+          cleanupError
+        );
+      }
+    }
+
     return NextResponse.json(
-      { success: false, error: "Unable to create delivery partner." },
+      {
+        success: false,
+        error: "Unable to create delivery partner. Check server logs.",
+      },
       { status: 500 }
     );
   }
 }
 
-// PATCH: Activate or deactivate a partner
+// PATCH: Activate or deactivate a partner and their Firebase login
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAdmin(request);
@@ -299,7 +404,10 @@ export async function PATCH(request: NextRequest) {
       (status !== "active" && status !== "inactive")
     ) {
       return NextResponse.json(
-        { success: false, error: "Valid partnerId and status are required." },
+        {
+          success: false,
+          error: "Valid partnerId and status are required.",
+        },
         { status: 400 }
       );
     }
@@ -317,11 +425,55 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    await ref.update({
-      status,
-      updatedAt: FieldValue.serverTimestamp(),
-      updatedBy: auth.uid,
-    });
+    const currentData = snapshot.data() ?? {};
+    const authUid =
+      typeof currentData.authUid === "string"
+        ? currentData.authUid
+        : null;
+
+    // Synchronize Firebase account access with partner status.
+    if (authUid) {
+      try {
+        await adminAuth.updateUser(authUid, {
+          disabled: status !== "active",
+        });
+      } catch (error) {
+        console.error("Update delivery partner Auth status error:", error);
+
+        return NextResponse.json(
+          {
+            success: false,
+            error:
+              "Unable to update the partner's login. The partner status was not changed.",
+          },
+          { status: 500 }
+        );
+      }
+    }
+
+    try {
+      await ref.update({
+        status,
+        updatedAt: FieldValue.serverTimestamp(),
+        updatedBy: auth.uid,
+      });
+    } catch (error) {
+      // Restore the previous Auth disabled state if Firestore update fails.
+      if (authUid) {
+        try {
+          await adminAuth.updateUser(authUid, {
+            disabled: currentData.status !== "active",
+          });
+        } catch (rollbackError) {
+          console.error(
+            "Unable to restore delivery partner Auth status:",
+            rollbackError
+          );
+        }
+      }
+
+      throw error;
+    }
 
     const updated = await ref.get();
 
