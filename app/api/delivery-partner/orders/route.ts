@@ -11,30 +11,22 @@ type PartnerAuth = {
   partnerPhone: string;
 };
 
+function errorResponse(message: string, status: number) {
+  return NextResponse.json({ success: false, error: message }, { status });
+}
+
 async function requireActiveDeliveryPartner(request: NextRequest) {
   const authorization = request.headers.get("authorization");
 
   if (!authorization?.startsWith("Bearer ")) {
-    return {
-      error: NextResponse.json(
-        { success: false, error: "Authentication required." },
-        { status: 401 },
-      ),
-    };
+    return { error: errorResponse("Authentication required.", 401) };
   }
 
   let decodedToken;
   try {
-    decodedToken = await adminAuth.verifyIdToken(
-      authorization.slice(7).trim(),
-    );
+    decodedToken = await adminAuth.verifyIdToken(authorization.slice(7).trim());
   } catch {
-    return {
-      error: NextResponse.json(
-        { success: false, error: "Invalid or expired token." },
-        { status: 401 },
-      ),
-    };
+    return { error: errorResponse("Invalid or expired token.", 401) };
   }
 
   const partnerSnapshot = await adminDb
@@ -44,23 +36,15 @@ async function requireActiveDeliveryPartner(request: NextRequest) {
     .get();
 
   if (partnerSnapshot.empty) {
-    return {
-      error: NextResponse.json(
-        { success: false, error: "Delivery partner profile not found." },
-        { status: 403 },
-      ),
-    };
+    return { error: errorResponse("Delivery partner profile not found.", 403) };
   }
 
   const partnerDoc = partnerSnapshot.docs[0];
   const partnerData = partnerDoc.data();
 
-  if (partnerData.status !== "active") {
+  if (String(partnerData.status ?? "").trim().toLowerCase() !== "active") {
     return {
-      error: NextResponse.json(
-        { success: false, error: "Your delivery partner account is inactive." },
-        { status: 403 },
-      ),
+      error: errorResponse("Your delivery partner account is inactive.", 403),
     };
   }
 
@@ -81,13 +65,15 @@ function timestampToIso(value: unknown): string | null {
     "toDate" in value &&
     typeof (value as { toDate?: unknown }).toDate === "function"
   ) {
-    return (value as { toDate: () => Date }).toDate().toISOString();
+    const date = (value as { toDate: () => Date }).toDate();
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
   return null;
 }
 
 function serializeOrder(id: string, data: DocumentData) {
   const rawItems = Array.isArray(data.items) ? data.items : [];
+
   return {
     id,
     customerId: String(data.customerId ?? data.userId ?? ""),
@@ -101,18 +87,39 @@ function serializeOrder(id: string, data: DocumentData) {
     })),
     subtotal: Number(data.subtotal ?? 0),
     shippingCharge: Number(data.shippingCharge ?? 0),
-    total: Number(data.total ?? 0),
+    // Support both field names because order schemas may store totalAmount.
+    total: Number(data.total ?? data.totalAmount ?? 0),
     paymentMethod: String(data.paymentMethod ?? ""),
     paymentStatus: String(data.paymentStatus ?? "PENDING"),
     status: String(data.status ?? data.orderStatus ?? "PLACED").toLowerCase(),
     orderStatus: String(data.orderStatus ?? data.status ?? "PLACED").toLowerCase(),
     fulfillmentStatus: String(data.fulfillmentStatus ?? "PENDING").toLowerCase(),
-    deliveryAssignmentStatus: String(data.deliveryAssignmentStatus ?? "assigned").toLowerCase(),
+    deliveryAssignmentStatus: String(
+      data.deliveryAssignmentStatus ?? "assigned",
+    ).toLowerCase(),
     deliveryPartnerId: String(data.deliveryPartnerId ?? ""),
     deliveryPartnerName: String(data.deliveryPartnerName ?? ""),
+    deliveryPartnerPhone: String(data.deliveryPartnerPhone ?? ""),
     createdAt: timestampToIso(data.createdAt),
     updatedAt: timestampToIso(data.updatedAt),
   };
+}
+
+function normalizeStatus(value: unknown): string {
+  return String(value ?? "").trim().toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
+}
+
+function isTerminalOrder(data: DocumentData): boolean {
+  const terminal = new Set([
+    "cancelled",
+    "canceled",
+    "refunded",
+    "returned",
+    "delivered",
+  ]);
+  return [data.status, data.orderStatus, data.fulfillmentStatus].some((value) =>
+    terminal.has(normalizeStatus(value)),
+  );
 }
 
 // GET: Return only orders assigned to the signed-in active delivery partner.
@@ -143,14 +150,12 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error("List assigned delivery orders error:", error);
-    return NextResponse.json(
-      { success: false, error: "Unable to load assigned orders." },
-      { status: 500 },
-    );
+    return errorResponse("Unable to load assigned orders.", 500);
   }
 }
 
-// PATCH: Allow a partner to update delivery progress for their own assigned order.
+// PATCH: Update delivery progress only for an order assigned to this partner.
+// Body: { orderId: string, status: "shipped" | "out_for_delivery" | "delivered" }
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireActiveDeliveryPartner(request);
@@ -160,68 +165,155 @@ export async function PATCH(request: NextRequest) {
     try {
       body = await request.json();
     } catch {
-      return NextResponse.json(
-        { success: false, error: "Invalid JSON body." },
-        { status: 400 },
-      );
+      return errorResponse("Invalid JSON body.", 400);
     }
 
     const orderId = typeof body.orderId === "string" ? body.orderId.trim() : "";
-    const requestedStatus = typeof body.status === "string" ? body.status.trim().toLowerCase() : "";
-    const allowedStatuses = ["shipped", "out_for_delivery", "delivered"];
+    const requestedStatus =
+      typeof body.status === "string" ? normalizeStatus(body.status) : "";
+    const allowedStatuses = new Set(["shipped", "out_for_delivery", "delivered"]);
 
-    if (!orderId || !allowedStatuses.includes(requestedStatus)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "A valid orderId and status (shipped, out_for_delivery, delivered) are required.",
-        },
-        { status: 400 },
+    if (
+      !orderId ||
+      orderId.length > 180 ||
+      orderId.includes("/") ||
+      !allowedStatuses.has(requestedStatus)
+    ) {
+      return errorResponse(
+        "A valid orderId and status (shipped, out_for_delivery, delivered) are required.",
+        400,
       );
     }
 
     const orderRef = adminDb.collection("orders").doc(orderId);
-    const orderSnapshot = await orderRef.get();
 
-    if (!orderSnapshot.exists) {
-      return NextResponse.json(
-        { success: false, error: "Order not found." },
-        { status: 404 },
+    const result = await adminDb.runTransaction(async (transaction) => {
+      const orderSnapshot = await transaction.get(orderRef);
+
+      if (!orderSnapshot.exists) {
+        return { ok: false as const, status: 404, error: "Order not found." };
+      }
+
+      const orderData = orderSnapshot.data() ?? {};
+      if (orderData.deliveryPartnerId !== auth.partner.partnerId) {
+        return {
+          ok: false as const,
+          status: 403,
+          error: "This order is not assigned to your account.",
+        };
+      }
+
+      if (isTerminalOrder(orderData)) {
+        const alreadyDelivered =
+          normalizeStatus(orderData.fulfillmentStatus) === "delivered" ||
+          normalizeStatus(orderData.orderStatus) === "delivered" ||
+          normalizeStatus(orderData.status) === "delivered";
+
+        if (alreadyDelivered && requestedStatus === "delivered") {
+          return {
+            ok: true as const,
+            alreadyDelivered: true,
+            order: serializeOrder(orderSnapshot.id, orderData),
+          };
+        }
+
+        return {
+          ok: false as const,
+          status: 409,
+          error: "This order is already delivered, cancelled, returned, or refunded.",
+        };
+      }
+
+      const currentFulfillment = normalizeStatus(orderData.fulfillmentStatus);
+      const currentOrderStatus = normalizeStatus(
+        orderData.orderStatus ?? orderData.status,
       );
-    }
-
-    const orderData = orderSnapshot.data() ?? {};
-    if (orderData.deliveryPartnerId !== auth.partner.partnerId) {
-      return NextResponse.json(
-        { success: false, error: "This order is not assigned to your account." },
-        { status: 403 },
+      const progressRank: Record<string, number> = {
+        pending: 0,
+        processing: 0,
+        confirmed: 0,
+        placed: 0,
+        shipped: 1,
+        picked_up: 1,
+        out_for_delivery: 2,
+        delivered: 3,
+      };
+      const currentRank = Math.max(
+        progressRank[currentFulfillment] ?? 0,
+        progressRank[currentOrderStatus] ?? 0,
       );
-    }
+      const requestedRank = progressRank[requestedStatus] ?? -1;
 
-    const currentStatus = String(orderData.status ?? orderData.orderStatus ?? "placed").toLowerCase();
-    if (currentStatus === "delivered" && requestedStatus !== "delivered") {
-      return NextResponse.json(
-        { success: false, error: "A delivered order cannot be moved back to an earlier status." },
-        { status: 409 },
-      );
-    }
+      if (requestedRank < currentRank) {
+        return {
+          ok: false as const,
+          status: 409,
+          error: "Delivery status cannot move backwards.",
+        };
+      }
 
-    const assignmentStatus =
-      requestedStatus === "shipped"
-        ? "picked_up"
-        : requestedStatus === "out_for_delivery"
-          ? "out_for_delivery"
-          : "delivered";
+      if (requestedStatus === "out_for_delivery" && currentRank < 1) {
+        return {
+          ok: false as const,
+          status: 409,
+          error: "Mark the order as shipped/picked up before out for delivery.",
+        };
+      }
 
-    await orderRef.update({
-      status: requestedStatus,
-      orderStatus: requestedStatus,
-      fulfillmentStatus: requestedStatus,
-      deliveryAssignmentStatus: assignmentStatus,
-      deliveryStatusUpdatedAt: FieldValue.serverTimestamp(),
-      deliveryStatusUpdatedBy: auth.partner.uid,
-      updatedAt: FieldValue.serverTimestamp(),
+      if (requestedStatus === "delivered" && currentRank < 2) {
+        return {
+          ok: false as const,
+          status: 409,
+          error: "Mark the order out for delivery before marking it delivered.",
+        };
+      }
+
+      const now = FieldValue.serverTimestamp();
+      const assignmentStatus =
+        requestedStatus === "shipped"
+          ? "picked_up"
+          : requestedStatus === "out_for_delivery"
+            ? "out_for_delivery"
+            : "delivered";
+
+      transaction.update(orderRef, {
+        // Keep the existing order status fields consistent with the current API.
+        status: requestedStatus,
+        orderStatus: requestedStatus,
+        fulfillmentStatus: requestedStatus,
+        deliveryAssignmentStatus: assignmentStatus,
+        deliveryStatusUpdatedAt: now,
+        deliveryStatusUpdatedBy: auth.partner.uid,
+        updatedAt: now,
+      });
+
+      const auditRef = adminDb.collection("auditLogs").doc();
+      transaction.set(auditRef, {
+        id: auditRef.id,
+        action: "DELIVERY_STATUS_UPDATED",
+        entityType: "order",
+        entityId: orderId,
+        actorUid: auth.partner.uid,
+        details: {
+          deliveryPartnerId: auth.partner.partnerId,
+          previousFulfillmentStatus: currentFulfillment || null,
+          newStatus: requestedStatus,
+        },
+        createdAt: now,
+      });
+
+      return { ok: true as const, alreadyDelivered: false };
     });
+
+    if (!result.ok) return errorResponse(result.error, result.status);
+
+    if (result.alreadyDelivered && "order" in result) {
+      return NextResponse.json({
+        success: true,
+        alreadyDelivered: true,
+        order: result.order,
+      });
+    }
 
     const updatedSnapshot = await orderRef.get();
     return NextResponse.json({
@@ -230,9 +322,6 @@ export async function PATCH(request: NextRequest) {
     });
   } catch (error) {
     console.error("Update delivery order status error:", error);
-    return NextResponse.json(
-      { success: false, error: "Unable to update delivery status." },
-      { status: 500 },
-    );
+    return errorResponse("Unable to update delivery status.", 500);
   }
 }
