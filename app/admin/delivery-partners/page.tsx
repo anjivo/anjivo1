@@ -21,6 +21,7 @@ type PartnerForm = {
   name: string;
   phone: string;
   email: string;
+  temporaryPassword: string;
   vehicleType: string;
   serviceArea: string;
 };
@@ -29,6 +30,7 @@ const EMPTY_FORM: PartnerForm = {
   name: "",
   phone: "",
   email: "",
+  temporaryPassword: "",
   vehicleType: "bike",
   serviceArea: "",
 };
@@ -147,7 +149,7 @@ export default function DeliveryPartnersPage() {
 
       setForm(EMPTY_FORM);
       setMessage(
-        "Partner added successfully. Status: Inactive. Activate after verification."
+        "Partner added successfully. Status: Inactive. Verify the partner before activating their account."
       );
     } catch (err) {
       setError(
@@ -290,14 +292,32 @@ export default function DeliveryPartnersPage() {
             />
           </FormField>
 
-          <FormField label="Email (optional)">
+          <FormField label="Login email">
             <input
+              required
               type="email"
+              autoComplete="email"
               value={form.email}
               onChange={(e) =>
                 updateField("email", e.target.value)
               }
               placeholder="partner@example.com"
+              className={inputClass}
+            />
+          </FormField>
+
+          <FormField label="Temporary login password">
+            <input
+              required
+              type="password"
+              autoComplete="new-password"
+              minLength={8}
+              maxLength={128}
+              value={form.temporaryPassword}
+              onChange={(e) =>
+                updateField("temporaryPassword", e.target.value)
+              }
+              placeholder="At least 8 characters"
               className={inputClass}
             />
           </FormField>
