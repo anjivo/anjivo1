@@ -185,6 +185,19 @@ export default function OrderDetailsPage() {
   const [error, setError] =
     useState("");
 
+  const [returnProductId, setReturnProductId] = useState("");
+  const [returnReason, setReturnReason] = useState("damaged");
+  const [returnDescription, setReturnDescription] = useState("");
+  const [returnQuantity, setReturnQuantity] = useState(1);
+  const [returnSubmitting, setReturnSubmitting] = useState(false);
+  const [returnMessage, setReturnMessage] = useState("");
+  const [returnError, setReturnError] = useState("");
+  const [existingReturns, setExistingReturns] = useState<Record<string, {
+    id: string;
+    returnStatus: string;
+    refundStatus: string;
+  }>>({});
+
   /* =======================================================
      AUTH + LIVE ORDER SUBSCRIPTION
   ======================================================= */
@@ -224,6 +237,12 @@ export default function OrderDetailsPage() {
           } else {
             setOrder(result);
             setError("");
+            if (normalizeStatus(result.status) === "delivered") {
+              const currentUser = auth.currentUser;
+              if (currentUser) {
+                void currentUser.getIdToken().then((token) => loadExistingReturns(result.id, token));
+              }
+            }
           }
 
           setLoading(false);
@@ -243,6 +262,99 @@ export default function OrderDetailsPage() {
       unsubscribeAuth();
     };
   }, [orderId, router]);
+
+  async function loadExistingReturns(currentOrderId: string, token: string) {
+    try {
+      const response = await fetch(
+        `/api/returns?orderId=${encodeURIComponent(currentOrderId)}`,
+        { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" },
+      );
+      const payload = await response.json();
+      if (!response.ok || !payload.success || !Array.isArray(payload.returns)) return;
+
+      const byProduct: Record<string, { id: string; returnStatus: string; refundStatus: string }> = {};
+      for (const item of payload.returns) {
+        if (item && typeof item.productId === "string") {
+          byProduct[item.productId] = {
+            id: String(item.id ?? ""),
+            returnStatus: String(item.returnStatus ?? "requested"),
+            refundStatus: String(item.refundStatus ?? "pending"),
+          };
+        }
+      }
+      setExistingReturns(byProduct);
+    } catch (err) {
+      console.error("Load existing returns error:", err);
+    }
+  }
+
+  async function submitReturnRequest(
+    item: Order["items"][number],
+  ) {
+    const user = auth.currentUser;
+    if (!user || !order) {
+      setReturnError("Please sign in again to request a return.");
+      return;
+    }
+
+    if (!returnReason.trim()) {
+      setReturnError("Please select a return reason.");
+      return;
+    }
+
+    if (returnQuantity < 1 || returnQuantity > item.quantity) {
+      setReturnError("Please choose a valid return quantity.");
+      return;
+    }
+
+    try {
+      setReturnSubmitting(true);
+      setReturnError("");
+      setReturnMessage("");
+
+      const token = await user.getIdToken();
+      const response = await fetch("/api/returns", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          orderId: order.id,
+          productId: item.productId,
+          quantity: returnQuantity,
+          reason: returnReason,
+          description: returnDescription.trim(),
+          images: [],
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.success) {
+        throw new Error(payload.error || "Return request could not be submitted.");
+      }
+
+      setExistingReturns((current) => ({
+        ...current,
+        [item.productId]: {
+          id: String(payload.returnRequest?.id ?? ""),
+          returnStatus: "requested",
+          refundStatus: "pending",
+        },
+      }));
+      setReturnMessage("Return request submitted successfully.");
+      setReturnProductId("");
+      setReturnDescription("");
+      setReturnQuantity(1);
+      await loadExistingReturns(order.id, token);
+    } catch (err) {
+      setReturnError(
+        err instanceof Error ? err.message : "Return request failed. Please try again.",
+      );
+    } finally {
+      setReturnSubmitting(false);
+    }
+  }
 
   /* =======================================================
      LOADING
@@ -561,6 +673,90 @@ export default function OrderDetailsPage() {
                               )}
                           </div>
                         )}
+
+                      {currentStatus === "delivered" && (
+                        <div className="mt-4 border-t border-gray-100 pt-3">
+                          {existingReturns[item.productId] ? (
+                            <div className="rounded-xl bg-blue-50 p-3 text-xs text-blue-800">
+                              Return request: <strong>{existingReturns[item.productId].returnStatus.replace(/_/g, " ")}</strong>
+                              {existingReturns[item.productId].refundStatus && (
+                                <span> · Refund: {existingReturns[item.productId].refundStatus.replace(/_/g, " ")}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReturnProductId((current) => current === item.productId ? "" : item.productId);
+                                setReturnQuantity(1);
+                                setReturnError("");
+                                setReturnMessage("");
+                              }}
+                              className="rounded-xl border border-gray-300 px-4 py-2 text-xs font-bold text-gray-800 hover:border-black"
+                            >
+                              {returnProductId === item.productId ? "Close Return Form" : "Request Return"}
+                            </button>
+                          )}
+
+                          {returnProductId === item.productId && !existingReturns[item.productId] && (
+                            <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 p-4">
+                              <h3 className="text-sm font-black">Request return for {item.name}</h3>
+                              <label className="mt-3 block text-xs font-bold text-gray-700">
+                                Reason
+                                <select
+                                  value={returnReason}
+                                  onChange={(event) => setReturnReason(event.target.value)}
+                                  className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm"
+                                >
+                                  <option value="damaged">Product damaged</option>
+                                  <option value="wrong_item">Wrong item received</option>
+                                  <option value="missing_item">Item/parts missing</option>
+                                  <option value="quality_issue">Quality issue</option>
+                                  <option value="size_issue">Size/fit issue</option>
+                                  <option value="not_as_described">Not as described</option>
+                                  <option value="other">Other</option>
+                                </select>
+                              </label>
+                              <label className="mt-3 block text-xs font-bold text-gray-700">
+                                Quantity to return
+                                <select
+                                  value={returnQuantity}
+                                  onChange={(event) => setReturnQuantity(Number(event.target.value))}
+                                  className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm"
+                                >
+                                  {Array.from({ length: Math.max(1, item.quantity) }, (_, index) => index + 1).map((quantity) => (
+                                    <option key={quantity} value={quantity}>{quantity}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="mt-3 block text-xs font-bold text-gray-700">
+                                Additional details (optional)
+                                <textarea
+                                  value={returnDescription}
+                                  onChange={(event) => setReturnDescription(event.target.value)}
+                                  maxLength={1000}
+                                  rows={3}
+                                  placeholder="Explain the issue..."
+                                  className="mt-1 w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm"
+                                />
+                              </label>
+                              {returnError && <p className="mt-3 text-xs font-semibold text-red-700">{returnError}</p>}
+                              {returnMessage && <p className="mt-3 text-xs font-semibold text-green-700">{returnMessage}</p>}
+                              <button
+                                type="button"
+                                disabled={returnSubmitting}
+                                onClick={() => void submitReturnRequest(item)}
+                                className="mt-3 rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"
+                              >
+                                {returnSubmitting ? "Submitting..." : "Submit Return Request"}
+                              </button>
+                              <p className="mt-2 text-[10px] leading-5 text-gray-500">
+                                Return request is available after delivery. Refund is not issued automatically when you submit this request.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )
