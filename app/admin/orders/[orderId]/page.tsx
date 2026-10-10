@@ -24,7 +24,9 @@ type OrderStatus =
   | "pending"
   | "confirmed"
   | "processing"
+  | "packed"
   | "shipped"
+  | "out_for_delivery"
   | "delivered"
   | "cancelled"
   | "returned";
@@ -40,6 +42,8 @@ type OrderItem = {
   name: string;
   quantity: number;
   selectedPrice: number;
+  subtotal?: number;
+  mrp?: number;
   pricingType: "retail" | "wholesale";
   sellerId: string;
   sellerName?: string;
@@ -85,7 +89,9 @@ const statuses: OrderStatus[] = [
   "pending",
   "confirmed",
   "processing",
+  "packed",
   "shipped",
+  "out_for_delivery",
   "delivered",
   "cancelled",
   "returned",
@@ -149,8 +155,9 @@ export default function AdminOrderDetailsPage() {
 
             if (
               !userSnapshot.exists() ||
-              userSnapshot.data().role !==
-                "ADMIN"
+              !["ADMIN", "SUPERADMIN"].includes(
+                String(userSnapshot.data().role ?? "").toUpperCase()
+              )
             ) {
               setError(
                 "Admin access required."
@@ -227,7 +234,7 @@ export default function AdminOrderDetailsPage() {
           ),
 
           name: String(
-            item.name ?? ""
+            item.productName ?? item.name ?? "Product"
           ),
 
           quantity: Number(
@@ -235,8 +242,10 @@ export default function AdminOrderDetailsPage() {
           ),
 
           selectedPrice: Number(
-            item.selectedPrice ?? 0
+            item.unitPrice ?? item.selectedPrice ?? item.price ?? 0
           ),
+          subtotal: Number(item.subtotal ?? 0),
+          mrp: Number(item.mrp ?? 0),
 
           pricingType:
             item.pricingType ===
@@ -275,23 +284,34 @@ export default function AdminOrderDetailsPage() {
         ? "ONLINE"
         : "COD";
 
-    const paymentStatus =
-      paymentStatuses.includes(
-        data.paymentStatus
-      )
-        ? data.paymentStatus
+    const rawPaymentStatus = String(data.paymentStatus ?? "pending").toLowerCase();
+    const paymentStatus: PaymentStatus =
+      paymentStatuses.includes(rawPaymentStatus as PaymentStatus)
+        ? (rawPaymentStatus as PaymentStatus)
         : "pending";
 
-    const status =
-      statuses.includes(data.status)
-        ? data.status
-        : "pending";
+    const rawStatus = String(
+      data.fulfillmentStatus ?? data.orderStatus ?? data.status ?? "pending"
+    ).toLowerCase().replace(/[ -]+/g, "_");
+    const statusAliases: Record<string, OrderStatus> = {
+      placed: "pending",
+      order_placed: "pending",
+      ready_to_ship: "packed",
+      dispatched: "shipped",
+      in_transit: "shipped",
+      out_for_delivery: "out_for_delivery",
+      outfordelivery: "out_for_delivery",
+    };
+    const normalizedStatus = statusAliases[rawStatus] ?? rawStatus;
+    const status: OrderStatus = statuses.includes(normalizedStatus as OrderStatus)
+      ? (normalizedStatus as OrderStatus)
+      : "pending";
 
     const loadedOrder: Order = {
       id: snapshot.id,
 
       userId: String(
-        data.userId ?? ""
+        data.userId ?? data.customerId ?? ""
       ),
 
       sellerIds:
@@ -312,7 +332,7 @@ export default function AdminOrderDetailsPage() {
       ),
 
       shippingCharge: Number(
-        data.shippingCharge ?? 0
+        data.shippingCharge ?? data.shipping ?? 0
       ),
 
       discount: Number(
@@ -320,7 +340,7 @@ export default function AdminOrderDetailsPage() {
       ),
 
       totalAmount: Number(
-        data.totalAmount ?? 0
+        data.totalAmount ?? data.total ?? data.grandTotal ?? 0
       ),
 
       status,
@@ -409,8 +429,12 @@ export default function AdminOrderDetailsPage() {
         ),
         {
           status,
-          updatedAt:
-            serverTimestamp(),
+          orderStatus:
+            status === "pending"
+              ? "PLACED"
+              : status.toUpperCase(),
+          fulfillmentStatus: status.toUpperCase(),
+          updatedAt: serverTimestamp(),
         }
       );
 
@@ -445,9 +469,8 @@ export default function AdminOrderDetailsPage() {
           order.id
         ),
         {
-          paymentStatus,
-          updatedAt:
-            serverTimestamp(),
+          paymentStatus: paymentStatus.toUpperCase(),
+          updatedAt: serverTimestamp(),
         }
       );
 
@@ -563,6 +586,83 @@ export default function AdminOrderDetailsPage() {
     <PageShell>
       <main className="mx-auto max-w-7xl px-4 py-6 sm:py-10">
 
+        <style jsx global>{`
+          @media print {
+            body * {
+              visibility: hidden !important;
+            }
+            #anjivo-packing-slip,
+            #anjivo-packing-slip * {
+              visibility: visible !important;
+            }
+            #anjivo-packing-slip {
+              display: block !important;
+              position: absolute !important;
+              left: 0 !important;
+              top: 0 !important;
+              width: 100% !important;
+              padding: 24px !important;
+              background: white !important;
+              color: black !important;
+            }
+            .print\\:hidden {
+              display: none !important;
+            }
+          }
+        `}</style>
+
+        <section id="anjivo-packing-slip" className="hidden print:block">
+          <div className="border-b-2 border-black pb-4">
+            <h1 className="text-2xl font-black">ANJIVO — PACKING SLIP</h1>
+            <p className="mt-2 text-sm">Order ID: {order.id}</p>
+            <p className="text-sm">Order Date: {order.createdAt && typeof order.createdAt === "object" && "toDate" in order.createdAt && typeof (order.createdAt as { toDate?: unknown }).toDate === "function" ? (order.createdAt as { toDate: () => Date }).toDate().toLocaleString("en-IN") : order.createdAt instanceof Date ? order.createdAt.toLocaleString("en-IN") : "See order dashboard"}</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-8 py-5">
+            <div>
+              <h2 className="font-bold">Ship To</h2>
+              <p className="mt-2 text-sm">{order.shippingAddress.fullName || customer?.name || "Customer"}</p>
+              <p className="text-sm">{order.shippingAddress.phone || customer?.phone || "—"}</p>
+              <p className="text-sm">{order.shippingAddress.addressLine1 || ""}{order.shippingAddress.addressLine2 ? `, ${order.shippingAddress.addressLine2}` : ""}</p>
+              <p className="text-sm">{[order.shippingAddress.city, order.shippingAddress.state, order.shippingAddress.pincode].filter(Boolean).join(", ")}</p>
+            </div>
+            <div>
+              <h2 className="font-bold">Payment</h2>
+              <p className="mt-2 text-sm">Method: {order.paymentMethod}</p>
+              <p className="text-sm">Status: {formatStatus(order.paymentStatus)}</p>
+            </div>
+          </div>
+
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="border-y-2 border-black text-left">
+                <th className="py-2 pr-2">Product</th>
+                <th className="py-2 px-2">Qty</th>
+                <th className="py-2 px-2 text-right">Unit Price</th>
+                <th className="py-2 pl-2 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {order.items.map((item, index) => (
+                <tr key={`${item.productId}-${index}`} className="border-b border-gray-300">
+                  <td className="py-2 pr-2">{item.name}</td>
+                  <td className="py-2 px-2">{item.quantity}</td>
+                  <td className="py-2 px-2 text-right">₹{item.selectedPrice.toLocaleString("en-IN")}</td>
+                  <td className="py-2 pl-2 text-right">₹{(item.subtotal || item.selectedPrice * item.quantity).toLocaleString("en-IN")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          <div className="ml-auto mt-5 max-w-xs space-y-2 text-sm">
+            <div className="flex justify-between"><span>Subtotal</span><span>₹{order.subtotal.toLocaleString("en-IN")}</span></div>
+            <div className="flex justify-between"><span>Shipping</span><span>₹{order.shippingCharge.toLocaleString("en-IN")}</span></div>
+            <div className="flex justify-between"><span>Discount</span><span>-₹{order.discount.toLocaleString("en-IN")}</span></div>
+            <div className="flex justify-between border-t border-black pt-2 text-base font-black"><span>Total</span><span>₹{order.totalAmount.toLocaleString("en-IN")}</span></div>
+          </div>
+          <p className="mt-10 border-t border-gray-300 pt-3 text-xs">Warehouse copy — please verify all items and quantities before dispatch.</p>
+        </section>
+
         {/* TOP NAV */}
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -580,6 +680,14 @@ export default function AdminOrderDetailsPage() {
           >
             Admin Dashboard
           </Link>
+
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="rounded-xl bg-black px-4 py-2.5 text-xs font-black text-white hover:bg-gray-800 print:hidden"
+          >
+            🖨️ Print Packing Slip
+          </button>
 
         </div>
 
@@ -1415,6 +1523,10 @@ function StatusBadge({
       "bg-blue-100 text-blue-700",
     processing:
       "bg-purple-100 text-purple-700",
+    packed:
+      "bg-fuchsia-100 text-fuchsia-700",
+    out_for_delivery:
+      "bg-orange-100 text-orange-700",
     shipped:
       "bg-indigo-100 text-indigo-700",
     delivered:
