@@ -18,7 +18,9 @@ type OrderStatus =
   | "pending"
   | "confirmed"
   | "processing"
+  | "packed"
   | "shipped"
+  | "out_for_delivery"
   | "delivered"
   | "cancelled"
   | "returned";
@@ -34,6 +36,10 @@ type OrderItem = {
   productId?: string;
   id?: string;
   name?: string;
+  productName?: string;
+  image?: string;
+  mrp?: number;
+  unitPrice?: number;
   sellerId?: string;
   sellerName?: string;
   quantity?: number;
@@ -76,7 +82,9 @@ type OrderFilter =
   | "pending"
   | "confirmed"
   | "processing"
+  | "packed"
   | "shipped"
+  | "out_for_delivery"
   | "delivered"
   | "cancelled"
   | "returned";
@@ -89,10 +97,10 @@ function stringValue(value: unknown): string {
   return String(value);
 }
 
-function numberValue(value: unknown): number {
+function numberValue(value: unknown, fallback = 0): number {
   const n = Number(value);
 
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function timestampValue(value: unknown): number {
@@ -101,222 +109,203 @@ function timestampValue(value: unknown): number {
   if (
     typeof value === "object" &&
     value !== null &&
+    "toMillis" in value &&
+    typeof (value as { toMillis?: unknown }).toMillis === "function"
+  ) {
+    return (value as { toMillis: () => number }).toMillis();
+  }
+
+  if (
+    typeof value === "object" &&
+    value !== null &&
     "seconds" in value
   ) {
-    return Number(
-      (value as { seconds?: unknown }).seconds ?? 0
-    );
+    return Number((value as { seconds?: unknown }).seconds ?? 0) * 1000;
   }
 
   if (value instanceof Date) {
     return value.getTime();
   }
 
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
   return 0;
 }
 
-function normalizeStatus(
-  value: unknown
-): OrderStatus {
-  const status = stringValue(value);
+function normalizeStatus(value: unknown): OrderStatus {
+  const raw = stringValue(value)
+    .trim()
+    .toLowerCase()
+    .replace(/[ -]+/g, "_");
 
-  const allowed: OrderStatus[] = [
-    "pending",
-    "confirmed",
-    "processing",
-    "shipped",
-    "delivered",
-    "cancelled",
-    "returned",
-  ];
+  const aliases: Record<string, OrderStatus> = {
+    placed: "pending",
+    order_placed: "pending",
+    pending: "pending",
+    accepted: "confirmed",
+    approved: "confirmed",
+    confirmed: "confirmed",
+    processing: "processing",
+    ready_to_ship: "packed",
+    packed: "packed",
+    dispatched: "shipped",
+    in_transit: "shipped",
+    on_the_way: "shipped",
+    shipped: "shipped",
+    outfordelivery: "out_for_delivery",
+    out_for_delivery: "out_for_delivery",
+    complete: "delivered",
+    completed: "delivered",
+    delivered: "delivered",
+    cancelled: "cancelled",
+    canceled: "cancelled",
+    returned: "returned",
+  };
 
-  return allowed.includes(
-    status as OrderStatus
-  )
-    ? (status as OrderStatus)
-    : "pending";
+  return aliases[raw] ?? "pending";
 }
 
-function normalizePaymentStatus(
-  value: unknown
-): PaymentStatus {
-  const status = stringValue(value);
+function normalizePaymentStatus(value: unknown): PaymentStatus {
+  const status = stringValue(value).trim().toLowerCase();
 
-  const allowed: PaymentStatus[] = [
-    "pending",
-    "paid",
-    "failed",
-    "refunded",
-    "cod",
-  ];
+  const aliases: Record<string, PaymentStatus> = {
+    pending: "pending",
+    paid: "paid",
+    success: "paid",
+    successful: "paid",
+    failed: "failed",
+    refunded: "refunded",
+    cod: "cod",
+  };
 
-  return allowed.includes(
-    status as PaymentStatus
-  )
-    ? (status as PaymentStatus)
-    : "pending";
+  return aliases[status] ?? "pending";
+}
+
+function formatShippingAddress(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  const address = value as Record<string, unknown>;
+  return [
+    address.fullName,
+    address.phone,
+    address.addressLine1,
+    address.addressLine2,
+    address.city,
+    address.state,
+    address.pincode,
+  ]
+    .map((part) => stringValue(part).trim())
+    .filter(Boolean)
+    .join(", ");
 }
 
 function mapOrder(
   id: string,
   data: Record<string, unknown>
 ): Order {
-  const rawItems = Array.isArray(
-    data.items
-  )
-    ? data.items
+  const rawItems = Array.isArray(data.items) ? data.items : [];
+
+  const items: OrderItem[] = rawItems.map((raw) => {
+    const item =
+      raw && typeof raw === "object"
+        ? (raw as Record<string, unknown>)
+        : {};
+
+    const quantity = numberValue(item.quantity);
+    const unitPrice = numberValue(
+      item.unitPrice ?? item.selectedPrice ?? item.price
+    );
+    const itemSubtotal = numberValue(
+      item.subtotal,
+      unitPrice * quantity
+    );
+
+    return {
+      productId: stringValue(item.productId) || undefined,
+      id: stringValue(item.id ?? item.productId) || undefined,
+      name:
+        stringValue(item.name ?? item.productName) || "Product",
+      productName:
+        stringValue(item.productName ?? item.name) || "Product",
+      image: stringValue(item.image) || undefined,
+      mrp: numberValue(item.mrp),
+      sellerId: stringValue(item.sellerId) || undefined,
+      sellerName: stringValue(item.sellerName) || undefined,
+      quantity,
+      price: unitPrice,
+      selectedPrice: unitPrice,
+      unitPrice,
+      pricingType:
+        item.pricingType === "wholesale" ? "wholesale" : "retail",
+      subtotal: itemSubtotal,
+    };
+  });
+
+  const itemSellerIds = items
+    .map((item) => item.sellerId)
+    .filter((sellerId): sellerId is string => Boolean(sellerId));
+
+  const rawSellerIds = Array.isArray(data.sellerIds)
+    ? data.sellerIds
+        .map((sellerId) => stringValue(sellerId))
+        .filter(Boolean)
     : [];
 
-  const items: OrderItem[] =
-    rawItems.map((raw) => {
-      const item =
-        raw as Record<string, unknown>;
-
-      return {
-        productId:
-          stringValue(
-            item.productId
-          ) || undefined,
-
-        id:
-          stringValue(
-            item.id
-          ) || undefined,
-
-        name:
-          stringValue(
-            item.name
-          ) || "Product",
-
-        sellerId:
-          stringValue(
-            item.sellerId
-          ) || undefined,
-
-        sellerName:
-          stringValue(
-            item.sellerName
-          ) || undefined,
-
-        quantity:
-          numberValue(
-            item.quantity
-          ),
-
-        price:
-          numberValue(
-            item.price
-          ),
-
-        selectedPrice:
-          numberValue(
-            item.selectedPrice
-          ),
-
-        pricingType:
-          item.pricingType ===
-          "wholesale"
-            ? "wholesale"
-            : "retail",
-
-        subtotal:
-          numberValue(
-            item.subtotal
-          ),
-      };
-    });
-
   const sellerIds = Array.from(
-    new Set(
-      items
-        .map(
-          (item) =>
-            item.sellerId
-        )
-        .filter(Boolean)
-    )
-  ) as string[];
+    new Set(rawSellerIds.length > 0 ? rawSellerIds : itemSellerIds)
+  );
+
+  const shippingAddress = formatShippingAddress(
+    data.shippingAddress ?? data.address
+  );
+
+  const addressObject =
+    data.shippingAddress &&
+    typeof data.shippingAddress === "object"
+      ? (data.shippingAddress as Record<string, unknown>)
+      : {};
 
   return {
     id,
-
-    userId:
-      stringValue(
-        data.userId
-      ),
-
+    userId: stringValue(data.userId ?? data.customerId),
     customerName:
-      stringValue(
-        data.customerName ||
-          data.name
-      ),
-
-    customerEmail:
-      stringValue(
-        data.customerEmail ||
-          data.email
-      ),
-
+      stringValue(data.customerName ?? data.name) ||
+      stringValue(addressObject.fullName) ||
+      "Guest",
+    customerEmail: stringValue(data.customerEmail ?? data.email),
     customerPhone:
-      stringValue(
-        data.customerPhone ||
-          data.phone
-      ),
-
+      stringValue(data.customerPhone ?? data.phone) ||
+      stringValue(addressObject.phone),
     items,
-
-    subtotal:
-      numberValue(
-        data.subtotal
-      ),
-
-    shipping:
-      numberValue(
-        data.shipping
-      ),
-
-    discount:
-      numberValue(
-        data.discount
-      ),
-
-    total:
-      numberValue(
-        data.total ||
-          data.grandTotal
-      ),
-
-    status:
-      normalizeStatus(
-        data.status
-      ),
-
-    paymentStatus:
-      normalizePaymentStatus(
-        data.paymentStatus
-      ),
-
-    paymentMethod:
-      stringValue(
-        data.paymentMethod
-      ),
-
+    subtotal: numberValue(data.subtotal),
+    shipping: numberValue(data.shippingCharge ?? data.shipping),
+    discount: numberValue(data.discount),
+    total: numberValue(
+      data.total ?? data.totalAmount ?? data.grandTotal
+    ),
+    status: normalizeStatus(
+      data.fulfillmentStatus ?? data.orderStatus ?? data.status
+    ),
+    paymentStatus: normalizePaymentStatus(data.paymentStatus),
+    paymentMethod: stringValue(data.paymentMethod),
     sellerIds,
-
     sellerCount:
-      sellerIds.length,
-
-    shippingAddress:
-      stringValue(
-        data.shippingAddress ||
-          data.address
-      ),
-
-    createdAt:
-      data.createdAt,
-
-    updatedAt:
-      data.updatedAt,
+      Number.isFinite(Number(data.sellerCount)) &&
+      Number(data.sellerCount) >= 0
+        ? Number(data.sellerCount)
+        : sellerIds.length,
+    shippingAddress,
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
   };
 }
 
@@ -380,8 +369,9 @@ export default function AdminOrdersPage() {
             }
 
             if (
-              userSnapshot.data()
-                .role !== "ADMIN"
+              !["ADMIN", "SUPERADMIN"].includes(
+                stringValue(userSnapshot.data().role).trim().toUpperCase()
+              )
             ) {
               window.location.href =
                 "/account";
@@ -486,8 +476,18 @@ export default function AdminOrdersPage() {
         ),
         {
           status,
-          updatedAt:
-            serverTimestamp(),
+          orderStatus:
+            status === "pending"
+              ? "PLACED"
+              : status === "confirmed"
+                ? "CONFIRMED"
+                : status === "processing" || status === "packed"
+                  ? "PROCESSING"
+                  : status === "shipped" || status === "out_for_delivery"
+                    ? "SHIPPED"
+                    : status.toUpperCase(),
+          fulfillmentStatus: status.toUpperCase(),
+          updatedAt: serverTimestamp(),
         }
       );
 
@@ -559,9 +559,8 @@ export default function AdminOrdersPage() {
           order.id
         ),
         {
-          paymentStatus,
-          updatedAt:
-            serverTimestamp(),
+          paymentStatus: paymentStatus.toUpperCase(),
+          updatedAt: serverTimestamp(),
         }
       );
 
@@ -651,6 +650,7 @@ export default function AdminOrdersPage() {
             order.customerName,
             order.customerEmail,
             order.customerPhone,
+            order.shippingAddress,
             order.paymentMethod,
             ...order.items.map(
               (item) =>
@@ -710,11 +710,23 @@ export default function AdminOrdersPage() {
               "processing"
           ).length,
 
+        packed:
+          orders.filter(
+            (order) =>
+              order.status === "packed"
+          ).length,
+
         shipped:
           orders.filter(
             (order) =>
               order.status ===
               "shipped"
+          ).length,
+
+        out_for_delivery:
+          orders.filter(
+            (order) =>
+              order.status === "out_for_delivery"
           ).length,
 
         delivered:
@@ -874,7 +886,7 @@ export default function AdminOrdersPage() {
 
         {/* STATUS CARDS */}
 
-        <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+        <div className="mt-7 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
 
           <OrderCount
             label="All"
@@ -923,6 +935,13 @@ export default function AdminOrdersPage() {
           />
 
           <OrderCount
+            label="Packed"
+            count={counts.packed}
+            active={filter === "packed"}
+            onClick={() => setFilter("packed")}
+          />
+
+          <OrderCount
             label="Shipped"
             count={counts.shipped}
             active={
@@ -931,6 +950,13 @@ export default function AdminOrdersPage() {
             onClick={() =>
               setFilter("shipped")
             }
+          />
+
+          <OrderCount
+            label="Out for delivery"
+            count={counts.out_for_delivery}
+            active={filter === "out_for_delivery"}
+            onClick={() => setFilter("out_for_delivery")}
           />
 
           <OrderCount
@@ -1257,8 +1283,16 @@ function OrderRow({
                 Processing
               </option>
 
+              <option value="packed">
+                Packed
+              </option>
+
               <option value="shipped">
                 Shipped
+              </option>
+
+              <option value="out_for_delivery">
+                Out for delivery
               </option>
 
               <option value="delivered">
@@ -1425,8 +1459,16 @@ function OrderModal({
                   Processing
                 </option>
 
+                <option value="packed">
+                  Packed
+                </option>
+
                 <option value="shipped">
                   Shipped
+                </option>
+
+                <option value="out_for_delivery">
+                  Out for delivery
                 </option>
 
                 <option value="delivered">
@@ -1699,8 +1741,14 @@ function OrderStatusBadge({
     processing:
       "bg-purple-100 text-purple-700",
 
+    packed:
+      "bg-cyan-100 text-cyan-700",
+
     shipped:
       "bg-indigo-100 text-indigo-700",
+
+    out_for_delivery:
+      "bg-sky-100 text-sky-700",
 
     delivered:
       "bg-green-100 text-green-700",
