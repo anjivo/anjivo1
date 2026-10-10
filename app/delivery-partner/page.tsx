@@ -357,8 +357,8 @@ export default function DeliveryPartnerDashboardPage() {
                   {!terminal && (
                     <div className="flex flex-col gap-2 border-t border-slate-100 bg-slate-50 px-5 py-4 sm:flex-row sm:justify-end sm:px-6">
                       {status !== "shipped" && status !== "out_for_delivery" && <button disabled={isUpdating} onClick={() => void updateStatus(order, "shipped")} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold hover:bg-slate-100 disabled:opacity-50">{isUpdating ? "Updating…" : "Mark picked up"}</button>}
-                      {status !== "out_for_delivery" && <button disabled={isUpdating} onClick={() => void updateStatus(order, "out_for_delivery")} className="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50">Out for delivery</button>}
-                      <button disabled={isUpdating || status === "delivered"} onClick={() => void updateStatus(order, "delivered")} className="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">Mark delivered</button>
+                      {status !== "out_for_delivery" && <button disabled={isUpdating || (status !== "shipped" && status !== "picked_up")} onClick={() => void updateStatus(order, "out_for_delivery")} className="rounded-xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50">Out for delivery</button>}
+                      <button disabled={isUpdating || status !== "out_for_delivery"} onClick={() => void updateStatus(order, "delivered")} className="rounded-xl bg-emerald-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">Mark delivered</button>
                     </div>
                   )}
                 </article>
