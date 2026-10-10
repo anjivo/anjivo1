@@ -64,8 +64,12 @@ type OrderItem = {
   sellerId?: string;
   sellerName?: string;
   name?: string;
+  productName?: string;
+  image?: string;
   quantity?: number;
   selectedPrice?: number;
+  unitPrice?: number;
+  mrp?: number;
   subtotal?: number;
   pricingType?: "retail" | "wholesale";
 };
@@ -183,6 +187,15 @@ function getTimestampValue(value: unknown): number {
     return value.getTime();
   }
 
+  if (
+    value &&
+    typeof value === "object" &&
+    "seconds" in value &&
+    typeof (value as { seconds?: unknown }).seconds === "number"
+  ) {
+    return (value as { seconds: number }).seconds * 1000;
+  }
+
   if (typeof value === "string" || typeof value === "number") {
     const time = new Date(value).getTime();
 
@@ -280,10 +293,14 @@ function mapOrder(id: string, data: any): Order {
         productId: item.productId || "",
         sellerId: item.sellerId || "",
         sellerName: item.sellerName || "",
-        name: item.name || "Product",
+        name: item.productName || item.name || "Product",
+        productName: item.productName || item.name || "Product",
+        image: item.image || "",
         quantity: Number(item.quantity || 0),
-        selectedPrice: Number(item.selectedPrice || 0),
-        subtotal: Number(item.subtotal || 0),
+        selectedPrice: Number(item.unitPrice ?? item.selectedPrice ?? item.price ?? 0),
+        unitPrice: Number(item.unitPrice ?? item.selectedPrice ?? item.price ?? 0),
+        mrp: Number(item.mrp || 0),
+        subtotal: Number(item.subtotal ?? (Number(item.quantity || 0) * Number(item.unitPrice ?? item.selectedPrice ?? item.price ?? 0))),
         pricingType:
           item.pricingType === "wholesale" ? "wholesale" : "retail",
       }))
@@ -323,14 +340,23 @@ function mapOrder(id: string, data: any): Order {
   return {
     id,
 
-    userId: data.userId || "",
+    userId: data.userId || data.customerId || "",
 
-    customerName: data.customerName || "",
+    customerName:
+      data.customerName || data.shippingAddress?.fullName || "",
     customerEmail: data.customerEmail || "",
 
     sellerIds: Array.isArray(data.sellerIds)
       ? data.sellerIds
-      : [],
+      : Array.isArray(data.items)
+        ? Array.from(
+            new Set(
+              data.items
+                .map((item: any) => item?.sellerId)
+                .filter(Boolean),
+            ),
+          )
+        : [],
 
     items,
 
@@ -438,9 +464,13 @@ export default function AdminShippingPage() {
           let isAdmin = false;
 
           userSnap.forEach((item) => {
+            const role = String(item.data()?.role || "")
+              .trim()
+              .toUpperCase();
+
             if (
               item.id === user.uid &&
-              item.data()?.role === "ADMIN"
+              (role === "ADMIN" || role === "SUPERADMIN")
             ) {
               isAdmin = true;
             }
@@ -514,8 +544,22 @@ export default function AdminShippingPage() {
       const status =
         nextStatus || order.status;
 
+      const orderStatusByFulfillment: Record<OrderStatus, string> = {
+        pending: "PLACED",
+        confirmed: "CONFIRMED",
+        processing: "PROCESSING",
+        packed: "PROCESSING",
+        shipped: "SHIPPED",
+        out_for_delivery: "SHIPPED",
+        delivered: "DELIVERED",
+        cancelled: "CANCELLED",
+        returned: "RETURNED",
+        refunded: "REFUNDED",
+      };
+
       const payload: Record<string, unknown> = {
-        fulfillmentStatus: status,
+        fulfillmentStatus: status.toUpperCase(),
+        orderStatus: orderStatusByFulfillment[status],
         status,
         updatedAt: serverTimestamp(),
       };
@@ -571,7 +615,7 @@ export default function AdminShippingPage() {
             ? {
                 ...item,
                 status,
-                fulfillmentStatus: status,
+                fulfillmentStatus: status.toUpperCase(),
                 courierName:
                   shipmentForm.courierName.trim() ||
                   item.courierName,
@@ -600,7 +644,7 @@ export default function AdminShippingPage() {
           ? {
               ...previous,
               status,
-              fulfillmentStatus: status,
+              fulfillmentStatus: status.toUpperCase(),
               courierName:
                 shipmentForm.courierName.trim() ||
                 previous.courierName,
