@@ -164,6 +164,16 @@ const moduleSections: ModuleSection[] = [
         href: "/admin/shipping",
         icon: "🚚",
       },
+    
+      {
+        title: "Delivery Partners",
+        description:
+          "Register, verify and manage ANJIVO's own delivery team.",
+        href: "/admin/delivery-partners",
+        icon: "🛵",
+        badge: "New",
+        badgeType: "new",
+      },
       {
         title: "RTO / NDR",
         description:
