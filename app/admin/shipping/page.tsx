@@ -5,6 +5,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   serverTimestamp,
   updateDoc,
@@ -481,24 +482,19 @@ export default function AdminShippingPage() {
         }
 
         try {
-          const userSnap = await getDocs(
-            collection(db, "users"),
-          );
+          // Read only the signed-in user's profile; do not query the entire users collection.
+          const userSnap = await getDoc(doc(db, "users", user.uid));
+          const role = String(userSnap.data()?.role || "")
+            .trim()
+            .toUpperCase();
+          const accountStatus = String(userSnap.data()?.accountStatus || "")
+            .trim()
+            .toUpperCase();
 
-          let isAdmin = false;
-
-          userSnap.forEach((item) => {
-            const role = String(item.data()?.role || "")
-              .trim()
-              .toUpperCase();
-
-            if (
-              item.id === user.uid &&
-              (role === "ADMIN" || role === "SUPERADMIN")
-            ) {
-              isAdmin = true;
-            }
-          });
+          const isAdmin =
+            userSnap.exists() &&
+            (role === "ADMIN" || role === "SUPERADMIN") &&
+            accountStatus !== "BLOCKED";
 
           if (!isAdmin) {
             setAuthorized(false);
@@ -589,24 +585,56 @@ export default function AdminShippingPage() {
       setAssigningPartner(true);
       setError("");
       setSuccess("");
-      const payload = {
-        deliveryPartnerId: partner.id,
-        deliveryPartnerName: partner.name,
-        deliveryPartnerPhone: partner.phone,
-        deliveryAssignmentStatus: "assigned",
-        assignedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      };
-      await updateDoc(doc(db, "orders", order.id), payload);
-      const applyAssignment = (item: Order): Order => item.id === order.id
-        ? { ...item, ...payload, assignedAt: new Date().toISOString() }
-        : item;
+      const user = auth.currentUser;
+      if (!user) {
+        throw new Error("Please sign in again.");
+      }
+
+      const token = await user.getIdToken();
+      const response = await fetch("/api/admin/shipping/assign-delivery", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          orderId: order.id,
+          deliveryPartnerId: partner.id,
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.success || !result.assignment) {
+        throw new Error(result.error || "Unable to assign delivery staff.");
+      }
+
+      const assignment = result.assignment;
+      const applyAssignment = (item: Order): Order =>
+        item.id === order.id
+          ? {
+              ...item,
+              deliveryPartnerId: assignment.deliveryPartnerId,
+              deliveryPartnerName: assignment.deliveryPartnerName,
+              deliveryPartnerPhone: assignment.deliveryPartnerPhone,
+              deliveryAssignmentStatus: "assigned",
+              assignedAt: new Date().toISOString(),
+            }
+          : item;
+
       setOrders((previous) => previous.map(applyAssignment));
-      setSelectedOrder((previous) => previous ? applyAssignment(previous) : previous);
-      setSuccess(`Delivery partner ${partner.name} assigned to order ${order.id}.`);
+      setSelectedOrder((previous) =>
+        previous ? applyAssignment(previous) : previous,
+      );
+      setSuccess(
+        `Delivery partner ${assignment.deliveryPartnerName} assigned to order ${order.id}.`,
+      );
     } catch (err) {
       console.error(err);
-      setError("Failed to assign delivery partner. Please try again.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to assign delivery partner. Please try again.",
+      );
     } finally {
       setAssigningPartner(false);
     }
