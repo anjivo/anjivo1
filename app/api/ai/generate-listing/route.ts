@@ -4,8 +4,6 @@
  * File: app/api/ai/generate-listing/route.ts
  *
  * Secure AI listing generation API.
- *
- * Features:
  * - Firebase ID token authentication
  * - Seller/admin role verification
  * - Seller ownership validation
@@ -17,8 +15,11 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-
-import { adminAuth, adminDb } from "@/lib/firebase-admin";
+import {
+  adminAuth,
+  adminDb,
+} from "@/lib/firebase-admin";
+import type { DecodedIdToken } from "firebase-admin/auth";
 
 import {
   generateListing,
@@ -26,7 +27,6 @@ import {
 } from "@/lib/ai/listing-generator";
 
 export const runtime = "nodejs";
-
 export const dynamic = "force-dynamic";
 
 /* =========================================================
@@ -34,19 +34,13 @@ export const dynamic = "force-dynamic";
 ========================================================= */
 
 const MAX_IMAGES = 10;
-
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
-
 const MAX_IMAGE_URL_LENGTH = 4096;
 
 const MAX_PRODUCT_NAME_LENGTH = 200;
-
 const MAX_CATEGORY_LENGTH = 100;
-
 const MAX_BRAND_LENGTH = 100;
-
 const MAX_LANGUAGE_LENGTH = 30;
-
 const MAX_HINT_LENGTH = 2000;
 
 const ALLOWED_IMAGE_HOSTS = new Set([
@@ -60,39 +54,26 @@ const ALLOWED_IMAGE_HOSTS = new Set([
 
 type GenerateListingBody = {
   images?: string[];
-
   productName?: string;
-
   category?: string;
-
   brand?: string;
-
   language?: string;
-
   descriptionHint?: string;
-
   sellerId?: string;
 
   variantHints?: {
     sizes?: string[];
-
     colors?: string[];
-
     attributes?: Record<string, string[]>;
   };
 
   generateSEO?: boolean;
-
   generateAttributes?: boolean;
-
   generateHighlights?: boolean;
-
   generateKeywords?: boolean;
-
   generateVariants?: boolean;
 
   marketplace?: string;
-
   existingListingId?: string;
 };
 
@@ -153,17 +134,6 @@ function isBooleanOrUndefined(
    5. IMAGE URL VALIDATION
 ========================================================= */
 
-/**
- * Only allow HTTPS Firebase Storage URLs.
- *
- * Note:
- * URL validation alone does not prove that a Storage
- * object belongs to the authenticated seller.
- *
- * The production Storage ownership check should verify
- * the actual object path and owner metadata using the
- * Firebase Admin Storage SDK before processing.
- */
 function isValidImageUrl(
   value: unknown
 ): value is string {
@@ -182,35 +152,27 @@ function isValidImageUrl(
       return false;
     }
 
-    const hostname =
-      url.hostname.toLowerCase();
+    const hostname = url.hostname.toLowerCase();
 
     if (!ALLOWED_IMAGE_HOSTS.has(hostname)) {
       return false;
     }
 
-    // Reject URLs containing credentials.
     if (url.username || url.password) {
       return false;
     }
 
-    // Restrict Firebase Storage URLs to known
-    // Firebase download and object URL structures.
     const pathname = url.pathname;
 
     const isFirebaseDownload =
-      hostname ===
-        "firebasestorage.googleapis.com" &&
+      hostname === "firebasestorage.googleapis.com" &&
       /^\/v0\/b\/[^/]+\/o\/.+/.test(pathname);
 
     const isGoogleStorageObject =
       hostname === "storage.googleapis.com" &&
       pathname.split("/").filter(Boolean).length >= 2;
 
-    return (
-      isFirebaseDownload ||
-      isGoogleStorageObject
-    );
+    return isFirebaseDownload || isGoogleStorageObject;
   } catch {
     return false;
   }
@@ -231,9 +193,7 @@ function validateRequestBody(
     return `Upload between 1 and ${MAX_IMAGES} images.`;
   }
 
-  if (
-    !body.images.every(isValidImageUrl)
-  ) {
+  if (!body.images.every(isValidImageUrl)) {
     return "Images must be valid HTTPS Firebase Storage URLs.";
   }
 
@@ -241,8 +201,7 @@ function validateRequestBody(
     body.productName !== undefined &&
     (
       typeof body.productName !== "string" ||
-      body.productName.length >
-        MAX_PRODUCT_NAME_LENGTH
+      body.productName.length > MAX_PRODUCT_NAME_LENGTH
     )
   ) {
     return "Invalid product name.";
@@ -252,8 +211,7 @@ function validateRequestBody(
     body.category !== undefined &&
     (
       typeof body.category !== "string" ||
-      body.category.length >
-        MAX_CATEGORY_LENGTH
+      body.category.length > MAX_CATEGORY_LENGTH
     )
   ) {
     return "Invalid product category.";
@@ -263,8 +221,7 @@ function validateRequestBody(
     body.brand !== undefined &&
     (
       typeof body.brand !== "string" ||
-      body.brand.length >
-        MAX_BRAND_LENGTH
+      body.brand.length > MAX_BRAND_LENGTH
     )
   ) {
     return "Invalid brand name.";
@@ -274,8 +231,7 @@ function validateRequestBody(
     body.language !== undefined &&
     (
       typeof body.language !== "string" ||
-      body.language.length >
-        MAX_LANGUAGE_LENGTH
+      body.language.length > MAX_LANGUAGE_LENGTH
     )
   ) {
     return "Invalid language.";
@@ -285,8 +241,7 @@ function validateRequestBody(
     body.descriptionHint !== undefined &&
     (
       typeof body.descriptionHint !== "string" ||
-      body.descriptionHint.length >
-        MAX_HINT_LENGTH
+      body.descriptionHint.length > MAX_HINT_LENGTH
     )
   ) {
     return "Product description hint is too long.";
@@ -300,9 +255,7 @@ function validateRequestBody(
     body.generateVariants,
   ];
 
-  if (
-    !booleanFields.every(isBooleanOrUndefined)
-  ) {
+  if (!booleanFields.every(isBooleanOrUndefined)) {
     return "Invalid generation options.";
   }
 
@@ -348,8 +301,7 @@ function validateRequestBody(
   }
 
   if (body.variantHints) {
-    const { sizes, colors, attributes } =
-      body.variantHints;
+    const { sizes, colors, attributes } = body.variantHints;
 
     if (
       sizes !== undefined &&
@@ -393,8 +345,7 @@ function validateRequestBody(
     }
 
     if (attributes) {
-      const entries =
-        Object.entries(attributes);
+      const entries = Object.entries(attributes);
 
       if (entries.length > 20) {
         return "Too many variant attribute groups.";
@@ -421,12 +372,10 @@ function validateRequestBody(
 }
 
 /* =========================================================
-   7. AUTHENTICATION
+   7. MAIN POST HANDLER
 ========================================================= */
 
-export async function POST(
-  request: NextRequest
-) {
+export async function POST(request: NextRequest) {
   try {
     /* -----------------------------------------------------
        7.1 Check request size
@@ -464,8 +413,7 @@ export async function POST(
       );
     }
 
-    const idToken =
-      authorization.slice(7).trim();
+    const idToken = authorization.slice(7).trim();
 
     if (!idToken) {
       return errorResponse(
@@ -475,15 +423,33 @@ export async function POST(
       );
     }
 
-    let decodedToken;
+    let decodedToken: DecodedIdToken;
 
     try {
-      decodedToken =
-        await adminAuth.verifyIdToken(
-          idToken,
-          true
+      // Retain revocation checking.
+      decodedToken = await adminAuth.verifyIdToken(
+        idToken,
+        true
+      );
+    } catch (error: unknown) {
+      // Actual cause is recorded server-side, not returned
+      // to the browser.
+      if (error instanceof Error) {
+        console.error(
+          "[ANJIVO AI] Firebase token verification failed:",
+          {
+            name: error.name,
+            message: error.message,
+            code: "code" in error ? error.code : undefined,
+          }
         );
-    } catch {
+      } else {
+        console.error(
+          "[ANJIVO AI] Firebase token verification failed:",
+          error
+        );
+      }
+
       return errorResponse(
         "Invalid, expired or revoked authentication token.",
         401,
@@ -534,14 +500,8 @@ export async function POST(
 
     if (
       userData?.status &&
-      [
-        "blocked",
-        "suspended",
-        "disabled",
-      ].includes(
-        String(
-          userData.status
-        ).toLowerCase()
+      ["blocked", "suspended", "disabled"].includes(
+        String(userData.status).toLowerCase()
       )
     ) {
       return errorResponse(
@@ -558,8 +518,7 @@ export async function POST(
     let body: GenerateListingBody;
 
     try {
-      body =
-        await request.json() as GenerateListingBody;
+      body = await request.json() as GenerateListingBody;
     } catch {
       return errorResponse(
         "Invalid JSON request body.",
@@ -580,8 +539,7 @@ export async function POST(
       );
     }
 
-    const validationError =
-      validateRequestBody(body);
+    const validationError = validateRequestBody(body);
 
     if (validationError) {
       return errorResponse(
@@ -598,7 +556,7 @@ export async function POST(
     let sellerId = uid;
 
     if (isAdmin && body.sellerId) {
-      sellerId = body.sellerId;
+      sellerId = body.sellerId.trim();
     }
 
     if (
@@ -610,6 +568,14 @@ export async function POST(
         "You cannot create listings for another seller.",
         403,
         "SELLER_OWNERSHIP_FAILED"
+      );
+    }
+
+    if (!sellerId) {
+      return errorResponse(
+        "Invalid seller ID.",
+        400,
+        "INVALID_SELLER"
       );
     }
 
@@ -650,14 +616,8 @@ export async function POST(
 
     if (
       sellerData?.status &&
-      [
-        "blocked",
-        "suspended",
-        "disabled",
-      ].includes(
-        String(
-          sellerData.status
-        ).toLowerCase()
+      ["blocked", "suspended", "disabled"].includes(
+        String(sellerData.status).toLowerCase()
       )
     ) {
       return errorResponse(
@@ -685,8 +645,7 @@ export async function POST(
         );
       }
 
-      const existingData =
-        existingDoc.data();
+      const existingData = existingDoc.data();
 
       const existingSellerId = String(
         existingData?.sellerId ?? ""
@@ -715,7 +674,6 @@ export async function POST(
 
     const result = await generateListing({
       images,
-
       sellerId,
 
       productName: cleanString(
@@ -746,36 +704,25 @@ export async function POST(
 
       variantHints: body.variantHints,
 
-      generateSEO:
-        body.generateSEO ?? true,
-
-      generateAttributes:
-        body.generateAttributes ?? true,
-
-      generateHighlights:
-        body.generateHighlights ?? true,
-
-      generateKeywords:
-        body.generateKeywords ?? true,
-
-      generateVariants:
-        body.generateVariants ?? true,
+      generateSEO: body.generateSEO ?? true,
+      generateAttributes: body.generateAttributes ?? true,
+      generateHighlights: body.generateHighlights ?? true,
+      generateKeywords: body.generateKeywords ?? true,
+      generateVariants: body.generateVariants ?? true,
 
       marketplace: cleanString(
         body.marketplace,
         50
       ),
 
-      existingListingId:
-        body.existingListingId,
+      existingListingId: body.existingListingId,
     });
 
     /* -----------------------------------------------------
        13. Validate AI output
     ----------------------------------------------------- */
 
-    const validation =
-      validateGeneratedListing(result);
+    const validation = validateGeneratedListing(result);
 
     if (!validation.isValid) {
       console.error(
@@ -809,40 +756,25 @@ export async function POST(
         listing: {
           ...result,
 
-          // Force safe initial review state.
           status: "draft",
-
           sellerConfirmed: false,
-
           adminApproved: false,
 
-          // Compliance and inventory are not
-          // confirmed by AI generation.
+          // These details must be confirmed by the user.
           hsnCode: "",
-
           gstRate: null,
-
           countryOfOrigin: "",
-
           sellingPrice: null,
-
           wholesalePrice: null,
-
           mrp: null,
-
           stock: 0,
 
-          warnings: [
-            ...new Set(warnings),
-          ],
+          warnings: [...new Set(warnings)],
         },
 
         validation: {
           isValid: true,
-
-          warnings: [
-            ...new Set(warnings),
-          ],
+          warnings: [...new Set(warnings)],
         },
       },
       {
@@ -852,7 +784,7 @@ export async function POST(
         },
       }
     );
-  } catch (error) {
+  } catch (error: unknown) {
     console.error(
       "ANJIVO AI listing generation error:",
       error
@@ -863,11 +795,7 @@ export async function POST(
         ? error.message
         : "";
 
-    if (
-      message.includes(
-        "OPENAI_API_KEY is missing"
-      )
-    ) {
+    if (message.includes("OPENAI_API_KEY is missing")) {
       return errorResponse(
         "AI service is not configured. Please contact the administrator.",
         503,
@@ -876,12 +804,8 @@ export async function POST(
     }
 
     if (
-      message.includes(
-        "AI returned invalid JSON"
-      ) ||
-      message.includes(
-        "AI returned an invalid listing format"
-      )
+      message.includes("AI returned invalid JSON") ||
+      message.includes("AI returned an invalid listing format")
     ) {
       return errorResponse(
         "AI returned an invalid response. Please try again.",
