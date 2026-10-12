@@ -1,3 +1,4 @@
+
 import {
   addDoc,
   collection,
@@ -12,6 +13,9 @@ import type { Category } from "@/types/category";
 
 const categoriesCollection = collection(db, "categories");
 
+/**
+ * Create a new category.
+ */
 export async function createCategory(
   data: Omit<Category, "id" | "createdAt" | "updatedAt">
 ): Promise<string> {
@@ -24,84 +28,107 @@ export async function createCategory(
   return categoryRef.id;
 }
 
+/**
+ * Convert a Firestore document into a Category object.
+ */
 function mapCategory(
   id: string,
   data: Record<string, unknown>
 ): Category {
+  const status =
+    typeof data.status === "string"
+      ? data.status.toLowerCase()
+      : "active";
+
   return {
     id,
     name: String(data.name ?? ""),
     slug: String(data.slug ?? ""),
+
     description:
-      data.description !== undefined
+      data.description != null
         ? String(data.description)
         : undefined,
+
     image:
-      data.image !== undefined
+      data.image != null
         ? String(data.image)
         : undefined,
+
     icon:
-      data.icon !== undefined
+      data.icon != null
         ? String(data.icon)
         : undefined,
+
     parentId:
-      data.parentId !== undefined
-        ? data.parentId === null
-          ? null
-          : String(data.parentId)
-        : null,
+      data.parentId === null || data.parentId === undefined
+        ? null
+        : String(data.parentId),
+
     productCount:
       data.productCount !== undefined
-        ? Number(data.productCount)
+        ? Number(data.productCount) || 0
         : 0,
+
     featured:
-      data.featured !== undefined
-        ? Boolean(data.featured)
-        : false,
+      data.featured === true,
+
     trending:
-      data.trending !== undefined
-        ? Boolean(data.trending)
-        : false,
-    status:
-      data.status === "inactive"
-        ? "inactive"
-        : "active",
+      data.trending === true,
+
+    status: status === "inactive" ? "inactive" : "active",
+
     sortOrder:
       data.sortOrder !== undefined
-        ? Number(data.sortOrder)
+        ? Number(data.sortOrder) || 0
         : 0,
+
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
 }
 
+/**
+ * Get all active categories.
+ *
+ * Categories with missing status are treated as active.
+ * Results are sorted by sortOrder in ascending order.
+ */
 export async function getCategories(): Promise<Category[]> {
-  const categoryQuery = query(
-    categoriesCollection,
-    where("status", "==", "active")
-  );
+  const snapshot = await getDocs(categoriesCollection);
 
-  const snapshot = await getDocs(categoryQuery);
-
-  const categories = snapshot.docs.map((doc) =>
-    mapCategory(doc.id, doc.data())
-  );
+  const categories = snapshot.docs
+    .map((categoryDoc) =>
+      mapCategory(
+        categoryDoc.id,
+        categoryDoc.data() as Record<string, unknown>
+      )
+    )
+    .filter((category) => category.status === "active");
 
   return categories.sort(
-    (a, b) =>
-      (a.sortOrder ?? 0) -
-      (b.sortOrder ?? 0)
+    (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
   );
 }
 
+/**
+ * Get a category by its slug.
+ */
 export async function getCategoryBySlug(
   slug: string
 ): Promise<Category | null> {
+  const normalizedSlug = slug.trim().toLowerCase();
+
+  if (!normalizedSlug) {
+    return null;
+  }
+
   const categories = await getCategories();
 
   return (
     categories.find(
-      (category) => category.slug === slug
+      (category) =>
+        category.slug.trim().toLowerCase() === normalizedSlug
     ) ?? null
   );
 }
