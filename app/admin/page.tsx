@@ -84,6 +84,25 @@ const moduleSections: ModuleSection[] = [
         badge: "Important",
         badgeType: "important",
       },
+      
+      {
+        title: "AI Single Listing",
+        description:
+          "Create one product listing from photos using AI, then edit pricing and stock.",
+        href: "/admin/ai-single-listing",
+        icon: "✨",
+        badge: "New",
+        badgeType: "new",
+      },
+      {
+        title: "AI Bulk Listing",
+        description:
+          "Generate product details from multiple photos and review listings in bulk.",
+        href: "/admin/ai-bulk-listing",
+        icon: "🤖",
+        badge: "New",
+        badgeType: "new",
+      },
       {
         title: "Categories",
         description:
@@ -1018,6 +1037,18 @@ export default function AdminDashboard() {
               description="Review AI-generated product submissions"
             />
 
+            <QuickAction
+              href="/admin/ai-single-listing"
+              icon="✨"
+              title="AI Single Listing"
+              description="Generate and edit one product listing"
+            />
+            <QuickAction
+              href="/admin/ai-bulk-listing"
+              icon="🤖"
+              title="AI Bulk Listing"
+              description="Generate listings from multiple product photos"
+            />
             <QuickAction
               href="/admin/orders"
               icon="🛒"
