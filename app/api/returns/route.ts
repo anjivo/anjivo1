@@ -1,4 +1,4 @@
-```ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue, type DocumentData } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
