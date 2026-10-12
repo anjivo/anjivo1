@@ -27,16 +27,16 @@ export function getAdminApp(): App {
     return firebaseAdminApp;
   }
 
-  const projectId = process.env.FIREBASE_PROJECT_ID;
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(
-    /\\n/g,
-    "\n"
-  );
+  const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
+
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY
+    ?.replace(/\\n/g, "\n")
+    .trim();
 
   if (!projectId || !clientEmail || !privateKey) {
     throw new Error(
-      "Firebase Admin credentials are missing. Check server environment variables."
+      "Firebase Admin credentials are missing. Check FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY."
     );
   }
 
@@ -47,6 +47,7 @@ export function getAdminApp(): App {
         clientEmail,
         privateKey,
       }),
+      projectId,
     },
     "admin"
   );
@@ -63,7 +64,6 @@ export function getAdminDb() {
 }
 
 // Backward-compatible exports.
-// These initialize only when accessed at runtime.
 export const adminAuth = new Proxy(
   {} as ReturnType<typeof getAuth>,
   {
@@ -88,6 +88,6 @@ export const adminDb = new Proxy(
       return typeof value === "function"
         ? value.bind(db)
         : value;
-    }
+    },
   }
 );
