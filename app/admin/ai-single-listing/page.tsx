@@ -36,6 +36,7 @@ type GeneratedListing = {
   attributes?: Record<string, unknown>;
   seo?: Record<string, unknown>;
   warnings?: string[];
+  images?: string[];
   [key: string]: unknown;
 };
 
@@ -67,42 +68,28 @@ export default function AdminAISingleListingPage() {
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (currentUser) => {
-        setUser(currentUser);
-        setAuthLoading(false);
-      }
-    );
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
 
     return unsubscribe;
   }, []);
 
   useEffect(() => {
     return () => {
-      previews.forEach((url) =>
-        URL.revokeObjectURL(url)
-      );
+      previews.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [previews]);
 
-  function updateListing(
-    field: string,
-    value: unknown
-  ) {
+  function updateListing(field: string, value: unknown) {
     setListing((current) =>
-      current
-        ? { ...current, [field]: value }
-        : current
+      current ? { ...current, [field]: value } : current
     );
   }
 
-  function handleImages(
-    event: ChangeEvent<HTMLInputElement>
-  ) {
-    const selected = Array.from(
-      event.target.files ?? []
-    );
+  function handleImages(event: ChangeEvent<HTMLInputElement>) {
+    const selected = Array.from(event.target.files ?? []);
 
     setError("");
     setMessage("");
@@ -138,27 +125,73 @@ export default function AdminAISingleListingPage() {
     }
 
     setPreviews(
-      selected.map((file) =>
-        URL.createObjectURL(file)
-      )
+      selected.map((file) => URL.createObjectURL(file))
     );
-
     setFiles(selected);
     setListing(null);
+
+    // Reset optional price and stock values for a new product.
+    setSellingPrice("");
+    setWholesalePrice("");
+    setMrp("");
+    setStock("");
+    setSizes("");
+    setSku("");
   }
 
-  async function getToken() {
-    if (!user) {
+  /**
+   * Always fetch a fresh Firebase ID token.
+   * The backend must verify this token using Firebase Admin.
+   */
+  async function getToken(): Promise<string> {
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
       throw new Error(
-        "Pehle admin account se login karein."
+        "Login session nahi mila. Dobara login karein."
       );
     }
 
-    return user.getIdToken();
+    try {
+      return await currentUser.getIdToken(true);
+    } catch (err) {
+      console.error("Firebase ID token refresh failed:", err);
+
+      throw new Error(
+        "Login session refresh nahi ho paya. Logout karke dobara login karein."
+      );
+    }
+  }
+
+  async function readApiResponse(response: Response) {
+    const text = await response.text();
+
+    let data: Record<string, unknown>;
+
+    try {
+      data = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new Error(
+        `Server ne valid JSON response nahi diya (HTTP ${response.status}).`
+      );
+    }
+
+    if (!response.ok || data.success !== true) {
+      const apiError =
+        typeof data.error === "string"
+          ? data.error
+          : `Request failed (HTTP ${response.status}).`;
+
+      throw new Error(apiError);
+    }
+
+    return data;
   }
 
   async function uploadImages(): Promise<string[]> {
-    if (!user) {
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
       throw new Error("Admin login required.");
     }
 
@@ -168,6 +201,11 @@ export default function AdminAISingleListingPage() {
       const urls: string[] = [];
 
       for (const file of files) {
+        // Confirm the session is still active for each upload.
+        if (!auth.currentUser) {
+          throw new Error("Login session expire ho gaya.");
+        }
+
         const safeName = file.name.replace(
           /[^a-zA-Z0-9._-]/g,
           "_"
@@ -175,7 +213,7 @@ export default function AdminAISingleListingPage() {
 
         const imageRef = ref(
           storage,
-          `ai-listings/admin/${user.uid}/${Date.now()}-${safeName}`
+          `ai-listings/admin/${currentUser.uid}/${Date.now()}-${safeName}`
         );
 
         await uploadBytes(imageRef, file, {
@@ -186,6 +224,21 @@ export default function AdminAISingleListingPage() {
       }
 
       return urls;
+    } catch (err) {
+      console.error("AI listing image upload failed:", err);
+
+      if (
+        err &&
+        typeof err === "object" &&
+        "code" in err &&
+        err.code === "storage/unauthorized"
+      ) {
+        throw new Error(
+          "Image upload permission denied. Firebase Storage Rules aur login UID check karein."
+        );
+      }
+
+      throw err;
     } finally {
       setUploading(false);
     }
@@ -195,7 +248,7 @@ export default function AdminAISingleListingPage() {
     setError("");
     setMessage("");
 
-    if (!user) {
+    if (!auth.currentUser) {
       setError("Admin account se login karein.");
       return;
     }
@@ -208,40 +261,36 @@ export default function AdminAISingleListingPage() {
     setGenerating(true);
 
     try {
+      // Refresh token before uploading or calling the API.
       const token = await getToken();
       const imageUrls = await uploadImages();
 
-      const response = await fetch(
-        "/api/ai/generate-listing",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            images: imageUrls,
-            language,
-            generateSEO: true,
-            generateAttributes: true,
-            generateHighlights: true,
-            generateKeywords: true,
-            generateVariants: false,
-          }),
-        }
-      );
+      const response = await fetch("/api/ai/generate-listing", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          images: imageUrls,
+          language,
+          generateSEO: true,
+          generateAttributes: true,
+          generateHighlights: true,
+          generateKeywords: true,
+          generateVariants: false,
+        }),
+      });
 
-      const data = await response.json();
+      const data = await readApiResponse(response);
+      const generated = data.listing as GeneratedListing | undefined;
 
-      if (!response.ok || !data.success) {
+      if (!generated || typeof generated !== "object") {
         throw new Error(
-          data.error ||
-            "AI product details generate nahi kar paya."
+          "API response mein generated listing nahi mili."
         );
       }
-
-      const generated =
-        data.listing as GeneratedListing;
 
       setListing({
         ...generated,
@@ -249,8 +298,7 @@ export default function AdminAISingleListingPage() {
         category: generated.category || "",
         brand: generated.brand || "",
         description: generated.description || "",
-        shortDescription:
-          generated.shortDescription || "",
+        shortDescription: generated.shortDescription || "",
         images: imageUrls,
       });
 
@@ -258,6 +306,8 @@ export default function AdminAISingleListingPage() {
         "AI details generate ho gayi hain. Save karne se pehle sabhi fields check karein."
       );
     } catch (err) {
+      console.error("AI listing generation failed:", err);
+
       setError(
         err instanceof Error
           ? err.message
@@ -275,21 +325,25 @@ export default function AdminAISingleListingPage() {
     setError("");
     setMessage("");
 
-    if (!user || !listing) {
+    if (!auth.currentUser || !listing) {
       setError("Pehle AI listing generate karein.");
       return;
     }
 
     const price = Number(sellingPrice);
     const quantity = Number(stock);
+
     const wholesale = wholesalePrice.trim()
       ? Number(wholesalePrice)
       : null;
+
     const maximumRetailPrice = mrp.trim()
       ? Number(mrp)
       : null;
 
     if (
+      sellingPrice.trim() === "" ||
+      stock.trim() === "" ||
       !Number.isFinite(price) ||
       price < 0 ||
       !Number.isInteger(quantity) ||
@@ -311,8 +365,10 @@ export default function AdminAISingleListingPage() {
 
     if (
       maximumRetailPrice !== null &&
-      (!Number.isFinite(maximumRetailPrice) ||
-        maximumRetailPrice < 0)
+      (
+        !Number.isFinite(maximumRetailPrice) ||
+        maximumRetailPrice < 0
+      )
     ) {
       setError("MRP valid nahi hai.");
       return;
@@ -335,7 +391,10 @@ export default function AdminAISingleListingPage() {
       const token = await getToken();
 
       const imageUrls = Array.isArray(listing.images)
-        ? listing.images
+        ? listing.images.filter(
+            (image): image is string =>
+              typeof image === "string"
+          )
         : [];
 
       if (!imageUrls.length) {
@@ -344,65 +403,69 @@ export default function AdminAISingleListingPage() {
         );
       }
 
-      const response = await fetch(
-        "/api/ai/confirm-listing",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
+      const response = await fetch("/api/ai/confirm-listing", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          listing: {
+            ...listing,
+            title: String(listing.title).trim(),
+            name: String(listing.title).trim(),
+            category: String(listing.category).trim(),
+            brand: String(listing.brand || "").trim(),
+            sellingPrice: price,
+            wholesalePrice: wholesale,
+            mrp: maximumRetailPrice,
+            stock: quantity,
+            images: imageUrls,
+            imageUrls,
+            sku: sku.trim() || undefined,
+            attributes: {
+              ...(listing.attributes || {}),
+              ...(sizes.trim()
+                ? { sizes: sizes.trim() }
+                : {}),
+            },
           },
-          body: JSON.stringify({
-            listing: {
-              ...listing,
-              title: String(listing.title).trim(),
-              name: String(listing.title).trim(),
-              category: String(listing.category).trim(),
-              brand: String(listing.brand || "").trim(),
-              sellingPrice: price,
-              wholesalePrice: wholesale,
-              mrp: maximumRetailPrice,
-              stock: quantity,
-              images: imageUrls,
-              imageUrls,
-              sku: sku.trim() || undefined,
-              attributes: {
-                ...(listing.attributes || {}),
-                ...(sizes.trim()
-                  ? { sizes: sizes.trim() }
-                  : {}),
-              },
-            },
-            confirmation: {
-              confirmedFields: [
-                "title",
-                "description",
-                "category",
-                "brand",
-                "sellingPrice",
-                "wholesalePrice",
-                "mrp",
-                "stock",
-                "images",
-              ],
-              submitForApproval: false,
-            },
-          }),
-        }
-      );
+          confirmation: {
+            confirmedFields: [
+              "title",
+              "description",
+              "category",
+              "brand",
+              "sellingPrice",
+              "wholesalePrice",
+              "mrp",
+              "stock",
+              "images",
+            ],
+            submitForApproval: false,
+          },
+        }),
+      });
 
-      const data = await response.json();
+      const data = await readApiResponse(response);
 
-      if (!response.ok || !data.success) {
-        throw new Error(
-          data.error || "Product save nahi hua."
-        );
-      }
+      const productId =
+        typeof data.productId === "string"
+          ? data.productId
+          : "unknown";
+
+      const status =
+        typeof data.status === "string"
+          ? data.status
+          : "pending";
 
       setMessage(
-        `Product save ho gaya. Product ID: ${data.productId}. Status: ${data.status}. Yeh abhi public website par publish nahi hua hai.`
+        `Product save ho gaya. Product ID: ${productId}. Status: ${status}. Yeh abhi public website par publish nahi hua hai.`
       );
     } catch (err) {
+      console.error("AI listing save failed:", err);
+
       setError(
         err instanceof Error
           ? err.message
@@ -430,8 +493,7 @@ export default function AdminAISingleListingPage() {
             Admin AI Single Listing
           </h1>
           <p className="mt-3 text-red-600">
-            Is page ko use karne ke liye admin account se
-            login karein.
+            Is page ko use karne ke liye admin account se login karein.
           </p>
           <Link
             href="/admin/login"
@@ -452,15 +514,13 @@ export default function AdminAISingleListingPage() {
       <main className="mx-auto max-w-6xl space-y-6 p-4 md:p-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-sm text-gray-500">
-              ANJIVO Admin
-            </p>
+            <p className="text-sm text-gray-500">ANJIVO Admin</p>
             <h1 className="text-3xl font-bold">
               AI Single Listing
             </h1>
             <p className="mt-2 text-gray-600">
-              Photo upload karein, AI se product details
-              banwayein aur price/stock khud confirm karein.
+              Photo upload karein, AI se product details banwayein
+              aur price/stock khud confirm karein.
             </p>
           </div>
 
@@ -473,13 +533,19 @@ export default function AdminAISingleListingPage() {
         </div>
 
         {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700">
+          <div
+            role="alert"
+            className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700"
+          >
             {error}
           </div>
         )}
 
         {message && (
-          <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-800">
+          <div
+            role="status"
+            className="rounded-lg border border-green-200 bg-green-50 p-3 text-green-800"
+          >
             {message}
           </div>
         )}
@@ -489,8 +555,8 @@ export default function AdminAISingleListingPage() {
             1. Product photos
           </h2>
           <p className="mt-1 text-sm text-gray-500">
-            Ek product ke liye maximum 10 JPG, PNG ya WebP
-            photos. Har image maximum 12 MB.
+            Ek product ke liye maximum 10 JPG, PNG ya WebP photos.
+            Har image maximum 12 MB.
           </p>
 
           <input
@@ -524,9 +590,7 @@ export default function AdminAISingleListingPage() {
             </label>
             <select
               value={language}
-              onChange={(event) =>
-                setLanguage(event.target.value)
-              }
+              onChange={(event) => setLanguage(event.target.value)}
               className="w-full rounded-lg border p-3"
             >
               <option value="English">English</option>
@@ -538,9 +602,7 @@ export default function AdminAISingleListingPage() {
           <button
             type="button"
             onClick={generateListing}
-            disabled={
-              generating || uploading || files.length === 0
-            }
+            disabled={generating || uploading || files.length === 0}
             className="mt-5 rounded-lg bg-indigo-600 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {uploading
@@ -562,8 +624,7 @@ export default function AdminAISingleListingPage() {
               </h2>
               <p className="mt-1 text-sm text-gray-500">
                 AI ke suggestions ko verify aur edit karein.
-                Price aur stock AI se automatically decide nahi
-                honge.
+                Price aur stock AI se automatically decide nahi honge.
               </p>
             </div>
 
@@ -571,35 +632,27 @@ export default function AdminAISingleListingPage() {
               <Field
                 label="Product title"
                 value={String(listing.title || "")}
-                onChange={(value) =>
-                  updateListing("title", value)
-                }
+                onChange={(value) => updateListing("title", value)}
                 required
               />
 
               <Field
                 label="Category"
                 value={String(listing.category || "")}
-                onChange={(value) =>
-                  updateListing("category", value)
-                }
+                onChange={(value) => updateListing("category", value)}
                 required
               />
 
               <Field
                 label="Subcategory"
                 value={String(listing.subcategory || "")}
-                onChange={(value) =>
-                  updateListing("subcategory", value)
-                }
+                onChange={(value) => updateListing("subcategory", value)}
               />
 
               <Field
                 label="Brand"
                 value={String(listing.brand || "")}
-                onChange={(value) =>
-                  updateListing("brand", value)
-                }
+                onChange={(value) => updateListing("brand", value)}
               />
 
               <Field
@@ -654,10 +707,7 @@ export default function AdminAISingleListingPage() {
               <textarea
                 value={String(listing.description || "")}
                 onChange={(event) =>
-                  updateListing(
-                    "description",
-                    event.target.value
-                  )
+                  updateListing("description", event.target.value)
                 }
                 rows={6}
                 required
@@ -670,9 +720,7 @@ export default function AdminAISingleListingPage() {
                 Short description
               </label>
               <textarea
-                value={String(
-                  listing.shortDescription || ""
-                )}
+                value={String(listing.shortDescription || "")}
                 onChange={(event) =>
                   updateListing(
                     "shortDescription",
@@ -690,9 +738,11 @@ export default function AdminAISingleListingPage() {
                   AI highlights
                 </label>
                 <textarea
-                  value={Array.isArray(listing.highlights)
-                    ? listing.highlights.join("\n")
-                    : ""}
+                  value={
+                    Array.isArray(listing.highlights)
+                      ? listing.highlights.join("\n")
+                      : ""
+                  }
                   onChange={(event) =>
                     updateListing(
                       "highlights",
@@ -713,9 +763,11 @@ export default function AdminAISingleListingPage() {
                   Search keywords
                 </label>
                 <textarea
-                  value={Array.isArray(listing.keywords)
-                    ? listing.keywords.join(", ")
-                    : ""}
+                  value={
+                    Array.isArray(listing.keywords)
+                      ? listing.keywords.join(", ")
+                      : ""
+                  }
                   onChange={(event) =>
                     updateListing(
                       "keywords",
@@ -737,13 +789,11 @@ export default function AdminAISingleListingPage() {
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                   <strong>AI verification warnings</strong>
                   <ul className="mt-2 list-disc pl-5">
-                    {listing.warnings.map(
-                      (warning, index) => (
-                        <li key={`${warning}-${index}`}>
-                          {warning}
-                        </li>
-                      )
-                    )}
+                    {listing.warnings.map((warning, index) => (
+                      <li key={`${warning}-${index}`}>
+                        {warning}
+                      </li>
+                    ))}
                   </ul>
                 </div>
               )}
@@ -753,9 +803,7 @@ export default function AdminAISingleListingPage() {
               disabled={saving || uploading}
               className="rounded-lg bg-green-700 px-5 py-3 font-semibold text-white disabled:opacity-50"
             >
-              {saving
-                ? "Product save ho raha hai..."
-                : "Save AI Listing"}
+              {saving ? "Product save ho raha hai..." : "Save AI Listing"}
             </button>
           </form>
         )}
