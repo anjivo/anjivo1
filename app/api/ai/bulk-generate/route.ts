@@ -24,7 +24,6 @@ export const dynamic = "force-dynamic";
 const MAX_PRODUCTS = 10;
 const MAX_IMAGES_PER_PRODUCT = 10;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
-
 const MAX_IMAGE_URL_LENGTH = 4096;
 
 const ALLOWED_IMAGE_HOSTS = new Set([
@@ -213,9 +212,7 @@ function validateProduct(
     );
   }
 
-  if (
-    !product.images.every(isValidImageUrl)
-  ) {
+  if (!product.images.every(isValidImageUrl)) {
     return (
       `Product ${index + 1}: invalid Firebase Storage image URL.`
     );
@@ -224,36 +221,12 @@ function validateProduct(
   const stringFields: Array<
     [unknown, number, string]
   > = [
-    [
-      product.productName,
-      200,
-      "product name",
-    ],
-    [
-      product.category,
-      100,
-      "category",
-    ],
-    [
-      product.brand,
-      100,
-      "brand",
-    ],
-    [
-      product.language,
-      30,
-      "language",
-    ],
-    [
-      product.descriptionHint,
-      2000,
-      "description hint",
-    ],
-    [
-      product.marketplace,
-      50,
-      "marketplace",
-    ],
+    [product.productName, 200, "product name"],
+    [product.category, 100, "category"],
+    [product.brand, 100, "brand"],
+    [product.language, 30, "language"],
+    [product.descriptionHint, 2000, "description hint"],
+    [product.marketplace, 50, "marketplace"],
   ];
 
   for (const [value, maxLength, label] of stringFields) {
@@ -264,9 +237,7 @@ function validateProduct(
         value.length > maxLength
       )
     ) {
-      return (
-        `Product ${index + 1}: invalid ${label}.`
-      );
+      return `Product ${index + 1}: invalid ${label}.`;
     }
   }
 
@@ -278,12 +249,8 @@ function validateProduct(
     product.generateVariants,
   ];
 
-  if (
-    !booleanFields.every(isBooleanOrUndefined)
-  ) {
-    return (
-      `Product ${index + 1}: invalid generation options.`
-    );
+  if (!booleanFields.every(isBooleanOrUndefined)) {
+    return `Product ${index + 1}: invalid generation options.`;
   }
 
   if (
@@ -293,9 +260,7 @@ function validateProduct(
       product.id.length > 128
     )
   ) {
-    return (
-      `Product ${index + 1}: invalid product ID.`
-    );
+    return `Product ${index + 1}: invalid product ID.`;
   }
 
   if (
@@ -306,18 +271,14 @@ function validateProduct(
       product.sourceRowNumber < 1
     )
   ) {
-    return (
-      `Product ${index + 1}: invalid source row number.`
-    );
+    return `Product ${index + 1}: invalid source row number.`;
   }
 
   if (
     product.variantHints !== undefined &&
     !isObject(product.variantHints)
   ) {
-    return (
-      `Product ${index + 1}: invalid variant hints.`
-    );
+    return `Product ${index + 1}: invalid variant hints.`;
   }
 
   if (isObject(product.variantHints)) {
@@ -338,9 +299,7 @@ function validateProduct(
           )
         )
       ) {
-        return (
-          `Product ${index + 1}: invalid variant ${key}.`
-        );
+        return `Product ${index + 1}: invalid variant ${key}.`;
       }
     }
 
@@ -348,14 +307,11 @@ function validateProduct(
       hints.attributes !== undefined &&
       !isObject(hints.attributes)
     ) {
-      return (
-        `Product ${index + 1}: invalid variant attributes.`
-      );
+      return `Product ${index + 1}: invalid variant attributes.`;
     }
 
     if (isObject(hints.attributes)) {
-      const entries =
-        Object.entries(hints.attributes);
+      const entries = Object.entries(hints.attributes);
 
       if (entries.length > 20) {
         return (
@@ -389,9 +345,7 @@ function validateProduct(
    4. MAIN POST HANDLER
 ========================================================= */
 
-export async function POST(
-  request: NextRequest
-) {
+export async function POST(request: NextRequest) {
   try {
     /* -----------------------------------------------------
        4.1 Request size
@@ -423,18 +377,17 @@ export async function POST(
       !authorization.startsWith("Bearer ")
     ) {
       return errorResponse(
-        "Authentication required.",
+        "Authentication required. Please sign in again.",
         401,
         "UNAUTHORIZED"
       );
     }
 
-    const idToken =
-      authorization.slice(7).trim();
+    const idToken = authorization.slice(7).trim();
 
     if (!idToken) {
       return errorResponse(
-        "Invalid authentication token.",
+        "Authentication token is missing.",
         401,
         "INVALID_TOKEN"
       );
@@ -443,14 +396,20 @@ export async function POST(
     let decodedToken;
 
     try {
-      decodedToken =
-        await adminAuth.verifyIdToken(
-          idToken,
-          true
-        );
-    } catch {
+      /*
+       * Verify token signature, Firebase project and expiry.
+       * The frontend should send a fresh Firebase ID token.
+       */
+      decodedToken = await adminAuth.verifyIdToken(idToken);
+    } catch (error) {
+      // Keep detailed error information in server logs only.
+      console.error(
+        "ANJIVO bulk API: Firebase ID token verification failed:",
+        error
+      );
+
       return errorResponse(
-        "Invalid or expired authentication token.",
+        "Your login session is invalid or expired. Please sign out and sign in again.",
         401,
         "INVALID_TOKEN"
       );
@@ -521,8 +480,7 @@ export async function POST(
     let body: BulkRequestBody;
 
     try {
-      body =
-        await request.json() as BulkRequestBody;
+      body = await request.json() as BulkRequestBody;
     } catch {
       return errorResponse(
         "Invalid JSON request.",
@@ -566,9 +524,7 @@ export async function POST(
     ];
 
     if (
-      !globalBooleanFields.every(
-        isBooleanOrUndefined
-      )
+      !globalBooleanFields.every(isBooleanOrUndefined)
     ) {
       return errorResponse(
         "Invalid generation options.",
@@ -681,8 +637,10 @@ export async function POST(
     ----------------------------------------------------- */
 
     for (let i = 0; i < products.length; i++) {
-      const validationError =
-        validateProduct(products[i], i);
+      const validationError = validateProduct(
+        products[i],
+        i
+      );
 
       if (validationError) {
         return errorResponse(
@@ -701,13 +659,11 @@ export async function POST(
 
     for (let i = 0; i < products.length; i++) {
       const product = products[i];
-
       const startedAt = Date.now();
 
       try {
         const listing = await generateListing({
           images: product.images,
-
           sellerId,
 
           productName: cleanString(
@@ -726,10 +682,8 @@ export async function POST(
           ),
 
           language:
-            cleanString(
-              product.language,
-              30
-            ) || "English",
+            cleanString(product.language, 30) ||
+            "English",
 
           descriptionHint: cleanString(
             product.descriptionHint,
@@ -764,17 +718,9 @@ export async function POST(
             true,
 
           marketplace:
-            cleanString(
-              product.marketplace,
-              50
-            ) ||
-            cleanString(
-              body.marketplace,
-              50
-            ),
+            cleanString(product.marketplace, 50) ||
+            cleanString(body.marketplace, 50),
         });
-
-        /* Validate the generated result */
 
         const validation =
           validateGeneratedListing(listing);
@@ -782,18 +728,12 @@ export async function POST(
         if (!validation.isValid) {
           results.push({
             index: i,
-
             productId: product.id,
-
             success: false,
-
             error:
               "AI generated invalid product data. Please retry this product.",
-
             warnings: validation.warnings,
-
-            processingTimeMs:
-              Date.now() - startedAt,
+            processingTimeMs: Date.now() - startedAt,
           });
 
           continue;
@@ -801,16 +741,12 @@ export async function POST(
 
         results.push({
           index: i,
-
           productId: product.id,
-
           success: true,
 
           listing: {
             ...listing,
-
-            // Generated results are drafts.
-            // They are not saved or published here.
+            // Results are drafts; this API does not save or publish them.
             warnings: [
               ...(listing.warnings ?? []),
               ...validation.warnings,
@@ -822,8 +758,7 @@ export async function POST(
             ...validation.warnings,
           ],
 
-          processingTimeMs:
-            Date.now() - startedAt,
+          processingTimeMs: Date.now() - startedAt,
         });
       } catch (error) {
         console.error(
@@ -833,16 +768,11 @@ export async function POST(
 
         results.push({
           index: i,
-
           productId: product.id,
-
           success: false,
-
           error:
             "AI generation failed for this product. Retry this product separately.",
-
-          processingTimeMs:
-            Date.now() - startedAt,
+          processingTimeMs: Date.now() - startedAt,
         });
       }
     }
@@ -855,8 +785,7 @@ export async function POST(
       (result) => result.success
     ).length;
 
-    const failed =
-      results.length - successful;
+    const failed = results.length - successful;
 
     const status =
       failed === 0
@@ -884,11 +813,8 @@ export async function POST(
 
         summary: {
           total: products.length,
-
           successful,
-
           failed,
-
           progressPercent: 100,
         },
 
