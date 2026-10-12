@@ -1,4 +1,3 @@
-```ts
 import { NextRequest, NextResponse } from "next/server";
 import type { DocumentData } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebase-admin";
@@ -21,34 +20,36 @@ function jsonError(message: string, status: number) {
 }
 
 function safeDate(value: unknown): number {
-  if (
-    value &&
-    typeof value === "object" &&
-    "toMillis" in value &&
-    typeof (value as { toMillis?: unknown }).toMillis === "function"
-  ) {
-    try {
-      const timestamp = (
+  try {
+    if (
+      value &&
+      typeof value === "object" &&
+      "toMillis" in value &&
+      typeof (value as { toMillis?: unknown }).toMillis === "function"
+    ) {
+      const result = (
         value as { toMillis: () => number }
       ).toMillis();
 
-      return Number.isFinite(timestamp) ? timestamp : 0;
-    } catch {
-      return 0;
+      return Number.isFinite(result) ? result : 0;
     }
-  }
 
-  if (value instanceof Date) {
-    return value.getTime();
-  }
+    if (value instanceof Date) {
+      return Number.isFinite(value.getTime())
+        ? value.getTime()
+        : 0;
+    }
 
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : 0;
-  }
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : 0;
+    }
 
-  if (typeof value === "string") {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : 0;
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+  } catch {
+    return 0;
   }
 
   return 0;
@@ -126,12 +127,13 @@ export async function GET(request: NextRequest) {
       .where("sellerId", "==", sellerId)
       .get();
 
-    const returnDocuments: SellerReturn[] = snapshot.docs.map(
-      (document): SellerReturn => ({
-        ...document.data(),
-        id: document.id,
-      }),
-    );
+    const returnDocuments: SellerReturn[] =
+      snapshot.docs.map(
+        (document): SellerReturn => ({
+          ...document.data(),
+          id: document.id,
+        }),
+      );
 
     const returns = returnDocuments
       .filter((item) => {
@@ -139,11 +141,11 @@ export async function GET(request: NextRequest) {
           return true;
         }
 
-        const itemStatus = normalizeStatus(
-          item.returnStatus ?? item.status ?? "requested",
+        return (
+          normalizeStatus(
+            item.returnStatus ?? item.status ?? "requested",
+          ) === statusFilter
         );
-
-        return itemStatus === statusFilter;
       })
       .sort(
         (a, b) =>
@@ -156,9 +158,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     const message =
-      error instanceof Error
-        ? error.message
-        : "Unable to load return requests.";
+      error instanceof Error ? error.message : "";
 
     const unauthorized =
       /token|authorization|unauthenticated|expired/i.test(
@@ -177,4 +177,3 @@ export async function GET(request: NextRequest) {
     );
   }
 }
-```
