@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import { getDownloadURL, getStorage, ref, uploadBytesResumable } from "firebase/storage";
@@ -90,6 +90,8 @@ export default function AdminNewProductPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(true);
+  const [categoryLoadError, setCategoryLoadError] = useState("");
 
   // Basic information
   const [name, setName] = useState<string>("");
@@ -139,11 +141,6 @@ export default function AdminNewProductPage() {
   const [trending, setTrending] = useState(false);
   const [status, setStatus] = useState<"active" | "draft">("active");
 
-  const imageUrls = useMemo(
-    () => productImages.filter((image) => Boolean(image.url)).map((image) => image.url),
-    [productImages]
-  );
-
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!user) {
@@ -163,13 +160,35 @@ export default function AdminNewProductPage() {
           return;
         }
 
-        const result = await getCategories();
-        setCategories(
-          result.filter((category) => category.status === "active")
-        );
+        setCategoryLoadError("");
+        try {
+          const result = await getCategories();
+          const activeCategories = result.filter(
+            (category) => String(category.status ?? "active").toLowerCase() === "active"
+              && Boolean(category.name?.trim())
+          );
+          setCategories(activeCategories);
+          if (activeCategories.length === 0) {
+            setCategoryLoadError(
+              "No active categories were returned. Check the categories collection and each category's status."
+            );
+          }
+        } catch (categoryError) {
+          console.error("Admin product categories load error:", categoryError);
+          setCategories([]);
+          setCategoryLoadError(
+            categoryError instanceof Error
+              ? `Could not load categories: ${categoryError.message}`
+              : "Could not load categories. Check Firestore read permissions."
+          );
+        } finally {
+          setCategoriesLoading(false);
+        }
       } catch (err) {
         console.error("Admin product auth error:", err);
-        setError("Unable to load admin product page.");
+        setError(
+          err instanceof Error ? err.message : "Unable to load admin product page."
+        );
       } finally {
         setLoading(false);
       }
@@ -459,8 +478,10 @@ export default function AdminNewProductPage() {
           throw new Error("Minimum sets must be at least 1.");
       }
 
+      // A tier is considered configured only when its price is provided.
+      // Untouched default rows with blank prices are safely ignored.
       const wholesaleTiers = tiers
-        .filter((tier) => tier.minQuantity.trim() || tier.price.trim())
+        .filter((tier) => tier.price.trim() !== "")
         .map((tier) => {
           const minQuantity = Number(tier.minQuantity);
           const maxQuantity = tier.maxQuantity.trim()
@@ -636,7 +657,7 @@ export default function AdminNewProductPage() {
     );
   }
 
-  if (error && !categories.length) {
+  if (error && !categories.length && !categoryLoadError) {
     return (
       <div className="min-h-screen bg-[#f5f6f8]">
         <Header />
@@ -717,16 +738,33 @@ export default function AdminNewProductPage() {
                 <select
                   required
                   value={categoryId}
+                  disabled={categoriesLoading || categories.length === 0}
                   onChange={(e) => handleCategoryChange(e.target.value)}
-                  className={inputClass}
+                  className={`${inputClass} disabled:cursor-not-allowed disabled:bg-gray-100`}
+                  aria-describedby="category-help"
                 >
-                  <option value="">Select category</option>
+                  <option value="">
+                    {categoriesLoading
+                      ? "Loading categories..."
+                      : categories.length === 0
+                      ? "No categories available"
+                      : "Select category"}
+                  </option>
                   {categories.map((category) => (
                     <option key={category.id} value={category.id}>
-                      {category.name}
+                      {category.icon ? `${category.icon} ` : ""}{category.name}
                     </option>
                   ))}
                 </select>
+                <div id="category-help" className="mt-2 text-xs">
+                  {categoriesLoading ? (
+                    <p className="text-gray-500">Fetching categories from Firestore...</p>
+                  ) : categoryLoadError ? (
+                    <p className="text-red-600">{categoryLoadError}</p>
+                  ) : categories.length > 0 ? (
+                    <p className="text-green-700">{categories.length} active categor{categories.length === 1 ? "y" : "ies"} available.</p>
+                  ) : null}
+                </div>
               </Field>
             </div>
             <Field label="Description">
