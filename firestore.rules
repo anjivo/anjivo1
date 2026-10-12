@@ -31,12 +31,20 @@ service cloud.firestore {
 
     function isAdmin() {
       return userExists()
-        && currentUser().data.role == "ADMIN";
+        && currentUser().data.role in [
+          "ADMIN",
+          "SUPERADMIN",
+          "admin",
+          "superadmin"
+        ]
+        && currentUser().data.accountStatus != "BLOCKED"
+        && currentUser().data.accountStatus != "blocked";
     }
 
     function isSeller() {
       return userExists()
-        && currentUser().data.role == "SELLER";
+        && currentUser().data.role == "SELLER"
+        && currentUser().data.accountStatus == "ACTIVE";
     }
 
     function isCustomer() {
@@ -44,26 +52,63 @@ service cloud.firestore {
         && (
           currentUser().data.role == "RETAIL_CUSTOMER"
           || currentUser().data.role == "WHOLESALE_CUSTOMER"
+        )
+        && currentUser().data.accountStatus == "ACTIVE";
+    }
+
+    function isWholesaleCustomer() {
+      return userExists()
+        && currentUser().data.role == "WHOLESALE_CUSTOMER"
+        && currentUser().data.accountStatus == "ACTIVE";
+    }
+
+    function sellerDocExists() {
+      return signedIn()
+        && exists(
+          /databases/$(database)/documents/sellers/$(request.auth.uid)
         );
     }
 
-    /*
-     * IMPORTANT:
-     *
-     * Seller approval is controlled by:
-     * sellers/{uid}.status
-     *
-     * User role must also be SELLER.
-     */
     function isApprovedSeller() {
       return userExists()
         && currentUser().data.role == "SELLER"
-        && exists(
-          /databases/$(database)/documents/sellers/$(request.auth.uid)
-        )
+        && currentUser().data.accountStatus == "ACTIVE"
+        && sellerDocExists()
         && get(
           /databases/$(database)/documents/sellers/$(request.auth.uid)
-        ).data.status == "approved";
+        ).data.status == "approved"
+        && get(
+          /databases/$(database)/documents/sellers/$(request.auth.uid)
+        ).data.adminApproved == true;
+    }
+
+    function sellerOwns(sellerId) {
+      return isApprovedSeller()
+        && sellerId == request.auth.uid;
+    }
+
+    function orderExists(orderId) {
+      return exists(
+        /databases/$(database)/documents/orders/$(orderId)
+      );
+    }
+
+    function getOrder(orderId) {
+      return get(
+        /databases/$(database)/documents/orders/$(orderId)
+      );
+    }
+
+    function ownsOrder(orderId) {
+      return signedIn()
+        && orderExists(orderId)
+        && getOrder(orderId).data.userId == request.auth.uid;
+    }
+
+    function sellerInOrder(orderId) {
+      return isApprovedSeller()
+        && orderExists(orderId)
+        && request.auth.uid in getOrder(orderId).data.sellerIds;
     }
 
 
@@ -73,69 +118,40 @@ service cloud.firestore {
 
     match /users/{userId} {
 
-      // -------------------------------------------------------
-      // READ
-      // -------------------------------------------------------
-
-      // Own profile or admin.
       allow read: if isOwner(userId)
         || isAdmin();
 
-
-      // -------------------------------------------------------
-      // CREATE
-      // -------------------------------------------------------
-
-      /*
-       * Customer registration.
-       *
-       * SELLER / ADMIN role cannot be created by client.
-       */
       allow create: if isOwner(userId)
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.role in [
           "RETAIL_CUSTOMER",
           "WHOLESALE_CUSTOMER"
-        ];
+        ]
+        && request.resource.data.accountStatus == "PENDING_VERIFICATION";
 
+      allow update: if isAdmin()
+        || (
+          isOwner(userId)
 
-      // -------------------------------------------------------
-      // UPDATE
-      // -------------------------------------------------------
+          && request.resource.data.uid
+             == resource.data.uid
 
-      /*
-       * User can update their own profile.
-       *
-       * IMPORTANT:
-       * Protected account fields cannot be changed by client:
-       *
-       * role
-       * sellerApplicationStatus
-       * accountStatus
-       * emailVerified
-       * phoneVerified
-       */
-      allow update: if isOwner(userId)
-        && request.resource.data.uid == resource.data.uid
-        && request.resource.data.role == resource.data.role
-        && !request.resource.data
-          .diff(resource.data)
-          .affectedKeys()
-          .hasAny([
-            "role",
-            "sellerApplicationStatus",
-            "accountStatus",
-            "emailVerified",
-            "phoneVerified"
-          ])
-        || isAdmin();
+          && request.resource.data.role
+             == resource.data.role
 
+          && request.resource.data.accountStatus
+             == resource.data.accountStatus
 
-      // -------------------------------------------------------
-      // DELETE
-      // -------------------------------------------------------
+          && request.resource.data.sellerApplicationStatus
+             == resource.data.sellerApplicationStatus
 
-      // Admin can manage/delete users.
+          && request.resource.data.emailVerified
+             == resource.data.emailVerified
+
+          && request.resource.data.phoneVerified
+             == resource.data.phoneVerified
+        );
+
       allow delete: if isAdmin();
     }
 
@@ -146,35 +162,11 @@ service cloud.firestore {
 
     match /sellers/{sellerId} {
 
-      // -------------------------------------------------------
-      // READ
-      // -------------------------------------------------------
+      // Full seller/KYC document is NOT public.
+      allow read: if isAdmin()
+        || isOwner(sellerId);
 
-      /*
-       * Approved seller profiles can be public.
-       * Owner can see own application.
-       * Admin can see everything.
-       */
-      allow read: if resource.data.status == "approved"
-        || isOwner(sellerId)
-        || isAdmin();
-
-
-      // -------------------------------------------------------
-      // CREATE
-      // -------------------------------------------------------
-
-      /*
-       * New seller application must:
-       *
-       * - belong to logged-in user
-       * - start as pending
-       * - start unverified
-       * - not be admin approved
-       * - not be active
-       */
       allow create: if isOwner(sellerId)
-
         && request.resource.data.userId
            == request.auth.uid
 
@@ -205,73 +197,63 @@ service cloud.firestore {
         && request.resource.data.accountStatus
            == "PENDING";
 
+      allow update: if isAdmin()
+        || (
+          isOwner(sellerId)
 
-      // -------------------------------------------------------
-      // UPDATE
-      // -------------------------------------------------------
+          && resource.data.status == "pending"
 
-      /*
-       * Seller can update their application while pending.
-       *
-       * Seller CANNOT modify:
-       *
-       * status
-       * sellerVerified
-       * adminApproved
-       * emailVerified
-       * phoneVerified
-       * gstVerified
-       * panVerified
-       * bankVerified
-       * accountStatus
-       * userId
-       */
-      allow update: if isOwner(sellerId)
+          && request.resource.data.userId
+             == resource.data.userId
 
-        && resource.data.status == "pending"
+          && request.resource.data.status
+             == resource.data.status
 
-        && request.resource.data.userId
-           == resource.data.userId
+          && request.resource.data.sellerVerified
+             == resource.data.sellerVerified
 
-        && request.resource.data.status
-           == resource.data.status
+          && request.resource.data.adminApproved
+             == resource.data.adminApproved
 
-        && request.resource.data.sellerVerified
-           == resource.data.sellerVerified
+          && request.resource.data.emailVerified
+             == resource.data.emailVerified
 
-        && request.resource.data.adminApproved
-           == resource.data.adminApproved
+          && request.resource.data.phoneVerified
+             == resource.data.phoneVerified
 
-        && request.resource.data.emailVerified
-           == resource.data.emailVerified
+          && request.resource.data.gstVerified
+             == resource.data.gstVerified
 
-        && request.resource.data.phoneVerified
-           == resource.data.phoneVerified
+          && request.resource.data.panVerified
+             == resource.data.panVerified
 
-        && request.resource.data.gstVerified
-           == resource.data.gstVerified
+          && request.resource.data.bankVerified
+             == resource.data.bankVerified
 
-        && request.resource.data.panVerified
-           == resource.data.panVerified
+          && request.resource.data.accountStatus
+             == resource.data.accountStatus
+        );
 
-        && request.resource.data.bankVerified
-           == resource.data.bankVerified
-
-        && request.resource.data.accountStatus
-           == resource.data.accountStatus;
+      allow delete: if isAdmin();
+    }
 
 
-      /*
-       * Admin has complete seller control.
-       *
-       * Admin can:
-       * - approve
-       * - reject
-       * - verify
-       * - block
-       * - update seller profile
-       */
-      allow update, delete: if isAdmin();
+    // =========================================================
+    // PUBLIC SELLER PROFILES
+    // =========================================================
+    // Keep public-safe information separate from seller KYC.
+
+    match /sellerPublicProfiles/{sellerId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin()
+        || isOwner(sellerId);
+
+      allow create: if isAdmin();
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
     }
 
 
@@ -281,73 +263,40 @@ service cloud.firestore {
 
     match /products/{productId} {
 
-      // -------------------------------------------------------
-      // READ
-      // -------------------------------------------------------
-
-      /*
-       * Active products are public.
-       * Seller can see own products.
-       * Admin can see everything.
-       */
       allow read: if resource.data.status == "active"
+        || isAdmin()
         || (
           signedIn()
           && resource.data.sellerId == request.auth.uid
-        )
-        || isAdmin();
+        );
 
-
-      // -------------------------------------------------------
-      // CREATE
-      // -------------------------------------------------------
-
-      /*
-       * Approved seller can create product.
-       *
-       * New products must start as draft.
-       */
       allow create: if isApprovedSeller()
         && request.resource.data.sellerId
            == request.auth.uid
         && request.resource.data.status
            == "draft";
 
+      allow update: if isAdmin()
+        || (
+          sellerOwns(
+            resource.data.sellerId
+          )
 
-      // -------------------------------------------------------
-      // UPDATE
-      // -------------------------------------------------------
+          && request.resource.data.sellerId
+             == resource.data.sellerId
 
-      /*
-       * Seller can update own product.
-       *
-       * Seller cannot:
-       * - change sellerId
-       * - directly change product status
-       */
-      allow update: if isApprovedSeller()
-        && resource.data.sellerId
-           == request.auth.uid
-        && request.resource.data.sellerId
-           == resource.data.sellerId
-        && request.resource.data.status
-           == resource.data.status;
+          && request.resource.data.status
+             == resource.data.status
+        );
 
-
-      // -------------------------------------------------------
-      // ADMIN
-      // -------------------------------------------------------
-
-      allow create, update, delete: if isAdmin();
-
-
-      // -------------------------------------------------------
-      // SELLER DELETE
-      // -------------------------------------------------------
-
-      allow delete: if isApprovedSeller()
-        && resource.data.sellerId
-           == request.auth.uid;
+      allow delete: if isAdmin()
+        || (
+          sellerOwns(
+            resource.data.sellerId
+          )
+          && resource.data.sellerId
+             == request.auth.uid
+        );
     }
 
 
@@ -357,19 +306,41 @@ service cloud.firestore {
 
     match /categories/{categoryId} {
 
-      // Active categories public.
-      // Admin can see all.
       allow read: if resource.data.status == "active"
         || isAdmin();
 
-      // Admin only.
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SUBCATEGORIES
+    // =========================================================
+
+    match /subcategories/{subcategoryId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // BRANDS
+    // =========================================================
+
+    match /brands/{brandId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
       allow create, update, delete: if isAdmin();
     }
 
 
     // =========================================================
     // CARTS
-    // carts/{userId}
     // =========================================================
 
     match /carts/{userId} {
@@ -381,7 +352,6 @@ service cloud.firestore {
 
     // =========================================================
     // WISHLISTS
-    // wishlists/{userId}
     // =========================================================
 
     match /wishlists/{userId} {
@@ -393,7 +363,6 @@ service cloud.firestore {
 
     // =========================================================
     // ADDRESSES
-    // addresses/{userId}/items/{addressId}
     // =========================================================
 
     match /addresses/{userId}/items/{addressId} {
@@ -409,118 +378,25 @@ service cloud.firestore {
 
     match /orders/{orderId} {
 
-      // -------------------------------------------------------
-      // READ
-      // -------------------------------------------------------
-
-      /*
-       * Admin can read everything.
-       * Customer can read own order.
-       * Seller can read orders containing their sellerId.
-       */
       allow read: if isAdmin()
-
-        || (
-          signedIn()
-          && resource.data.userId == request.auth.uid
-        )
-
-        || (
-          signedIn()
-          && request.auth.uid in resource.data.sellerIds
-        );
-
-
-      // -------------------------------------------------------
-      // CREATE
-      // -------------------------------------------------------
+        || ownsOrder(orderId)
+        || sellerInOrder(orderId);
 
       /*
-       * Customer can create order only for themselves.
-       *
-       * NOTE:
-       * Production payment/order creation should eventually
-       * move to trusted backend/server-side processing.
+       * Orders must be created through the trusted backend
+       * app/api/orders/create route. Admin SDK writes bypass
+       * Firestore client rules; browser clients cannot create orders.
        */
-      allow create: if signedIn()
-        && request.resource.data.userId
-           == request.auth.uid;
+      allow create: if false;
 
-
-      // -------------------------------------------------------
-      // ADMIN UPDATE
-      // -------------------------------------------------------
-
+      /*
+       * Order status, assignment, prices, totals, payment fields,
+       * addresses and fulfillment metadata are sensitive.
+       * Only admins may update orders directly from a client.
+       * Seller and delivery workflows should use authenticated
+       * backend routes that validate the caller and allowed transition.
+       */
       allow update: if isAdmin();
-
-
-      // -------------------------------------------------------
-      // SELLER UPDATE
-      // -------------------------------------------------------
-
-      /*
-       * Seller can update fulfillment status only.
-       *
-       * Seller cannot change:
-       * userId
-       * sellerIds
-       * items
-       * shippingAddress
-       * paymentMethod
-       * paymentStatus
-       * subtotal
-       * shippingCharge
-       * discount
-       * totalAmount
-       */
-      allow update: if signedIn()
-
-        && request.auth.uid in resource.data.sellerIds
-
-        && request.resource.data.userId
-           == resource.data.userId
-
-        && request.resource.data.sellerIds
-           == resource.data.sellerIds
-
-        && request.resource.data.items
-           == resource.data.items
-
-        && request.resource.data.shippingAddress
-           == resource.data.shippingAddress
-
-        && request.resource.data.paymentMethod
-           == resource.data.paymentMethod
-
-        && request.resource.data.paymentStatus
-           == resource.data.paymentStatus
-
-        && request.resource.data.subtotal
-           == resource.data.subtotal
-
-        && request.resource.data.shippingCharge
-           == resource.data.shippingCharge
-
-        && request.resource.data.discount
-           == resource.data.discount
-
-        && request.resource.data.totalAmount
-           == resource.data.totalAmount
-
-        && request.resource.data.status in [
-          "pending",
-          "confirmed",
-          "processing",
-          "shipped",
-          "delivered",
-          "cancelled",
-          "returned"
-        ];
-
-
-      // -------------------------------------------------------
-      // DELETE
-      // -------------------------------------------------------
 
       allow delete: if isAdmin();
     }
@@ -528,32 +404,14 @@ service cloud.firestore {
 
     // =========================================================
     // ORDER ITEMS
-    // orders/{orderId}/items/{itemId}
     // =========================================================
 
     match /orders/{orderId}/items/{itemId} {
 
-      // Customer who owns order.
-      // Seller participating in order.
-      // Admin.
       allow read: if isAdmin()
+        || ownsOrder(orderId)
+        || sellerInOrder(orderId);
 
-        || (
-          signedIn()
-          && get(
-            /databases/$(database)/documents/orders/$(orderId)
-          ).data.userId == request.auth.uid
-        )
-
-        || (
-          signedIn()
-          && request.auth.uid in get(
-            /databases/$(database)/documents/orders/$(orderId)
-          ).data.sellerIds
-        );
-
-
-      // Only admin for now.
       allow create, update, delete: if isAdmin();
     }
 
@@ -564,39 +422,35 @@ service cloud.firestore {
 
     match /reviews/{reviewId} {
 
-      // Approved reviews public.
-      // User sees own review.
-      // Admin sees all.
-      allow read: if resource.data.status == "approved"
-
+      allow read: if isAdmin()
+        || resource.data.status == "approved"
         || (
           signedIn()
-          && resource.data.userId == request.auth.uid
-        )
+          && resource.data.userId
+             == request.auth.uid
+        );
 
-        || isAdmin();
-
-
-      // User can create pending review.
-      allow create: if signedIn()
+      allow create: if isCustomer()
         && request.resource.data.userId
            == request.auth.uid
         && request.resource.data.status
            == "pending";
 
+      allow update: if isAdmin()
+        || (
+          isCustomer()
 
-      // User can edit own pending review.
-      allow update: if signedIn()
-        && resource.data.userId
-           == request.auth.uid
-        && resource.data.status
-           == "pending"
-        && request.resource.data.status
-           == "pending";
+          && resource.data.userId
+             == request.auth.uid
 
+          && resource.data.status
+             == "pending"
 
-      // Admin moderation.
-      allow update, delete: if isAdmin();
+          && request.resource.data.status
+             == "pending"
+        );
+
+      allow delete: if isAdmin();
     }
 
 
@@ -606,175 +460,112 @@ service cloud.firestore {
 
     match /wholesaleQuotes/{quoteId} {
 
-      // Buyer sees own quotes.
-      // Seller sees assigned quotes.
-      // Admin sees all.
       allow read: if isAdmin()
-
         || (
           signedIn()
           && resource.data.buyerId
              == request.auth.uid
         )
-
         || (
           signedIn()
           && resource.data.sellerId
              == request.auth.uid
         );
 
-
-      // Buyer creates quote.
-      allow create: if signedIn()
+      allow create: if isWholesaleCustomer()
         && request.resource.data.buyerId
            == request.auth.uid;
 
-
-      // Buyer/seller can update quote.
-      // Admin always allowed.
       allow update: if isAdmin()
-
         || (
           signedIn()
           && (
             resource.data.buyerId
               == request.auth.uid
-
-            || resource.data.sellerId
+            ||
+            resource.data.sellerId
               == request.auth.uid
           )
         );
 
-
-      // Admin only delete.
       allow delete: if isAdmin();
     }
 
 
     // =========================================================
-    // COUPONS
+    // WHOLESALE ENQUIRIES
     // =========================================================
 
-    match /coupons/{couponId} {
+    match /wholesaleEnquiries/{enquiryId} {
 
-      // Active coupons visible to signed-in users.
       allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.customerId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
 
+      allow create: if isWholesaleCustomer()
+        && request.resource.data.customerId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.customerId
+              == request.auth.uid
+            ||
+            resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER OFFERS
+    // =========================================================
+
+    match /sellerOffers/{offerId} {
+
+      allow read: if isAdmin()
         || (
           signedIn()
           && resource.data.status == "active"
-        );
-
-      // Admin manages coupons.
-      allow create, update, delete: if isAdmin();
-    }
-
-
-    // =========================================================
-    // SELLER COMMISSIONS
-    // =========================================================
-
-    match /sellerCommissions/{commissionId} {
-
-      // Seller can see own commission.
-      // Admin can see all.
-      allow read: if isAdmin()
-
-        || (
-          signedIn()
-          && resource.data.sellerId
-             == request.auth.uid
-        );
-
-      // Admin/system-side process.
-      allow create, update, delete: if isAdmin();
-    }
-
-
-    // =========================================================
-    // SELLER PAYOUTS
-    // =========================================================
-
-    match /sellerPayouts/{payoutId} {
-
-      // Seller sees own payouts.
-      // Admin sees all.
-      allow read: if isAdmin()
-
-        || (
-          signedIn()
-          && resource.data.sellerId
-             == request.auth.uid
-        );
-
-      // Admin only.
-      allow create, update, delete: if isAdmin();
-    }
-
-
-    // =========================================================
-    // NOTIFICATIONS
-    // notifications/{userId}/items/{notificationId}
-    // =========================================================
-
-    match /notifications/{userId}/items/{notificationId} {
-
-      // User sees own notifications.
-      // Admin sees all.
-      allow read: if isOwner(userId)
-        || isAdmin();
-
-      // Admin/system controlled.
-      allow create, update, delete: if isAdmin();
-    }
-
-
-    // =========================================================
-    // PLATFORM SETTINGS
-    // =========================================================
-
-    match /settings/{settingId} {
-
-      // Signed-in users can read platform settings.
-      allow read: if signedIn();
-
-      // Admin controls settings.
-      allow create, update, delete: if isAdmin();
-    }
-
-
-    // =========================================================
-    // RETURNS
-    // =========================================================
-
-    match /returns/{returnId} {
-
-      // Admin can see everything.
-      // Customer can see own return.
-      // Seller can see return related to their order.
-      allow read: if isAdmin()
-
-        || (
-          signedIn()
-          && resource.data.userId
-             == request.auth.uid
         )
-
         || (
           signedIn()
           && resource.data.sellerId
              == request.auth.uid
         );
 
-
-      // Customer can create own return request.
-      allow create: if signedIn()
-        && request.resource.data.userId
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
            == request.auth.uid;
 
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+          && request.resource.data.sellerId
+             == resource.data.sellerId
+        );
 
-      // Admin controls return workflow.
-      allow update, delete: if isAdmin();
+      allow delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
     }
 
 
@@ -784,29 +575,20 @@ service cloud.firestore {
 
     match /productQuestions/{questionId} {
 
-      // Public/customer questions can be read.
       allow read: if true;
 
-
-      // Signed-in customer can ask question.
-      allow create: if signedIn()
+      allow create: if isCustomer()
         && request.resource.data.userId
            == request.auth.uid;
 
-
-      // User can update own question.
-      // Admin can manage all.
       allow update: if isAdmin()
-
         || (
           signedIn()
           && resource.data.userId
              == request.auth.uid
         );
 
-
       allow delete: if isAdmin()
-
         || (
           signedIn()
           && resource.data.userId
@@ -823,83 +605,411 @@ service cloud.firestore {
 
       allow read: if true;
 
-
-      // Approved seller can answer questions.
       allow create: if isApprovedSeller()
         && request.resource.data.sellerId
            == request.auth.uid;
 
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+          && request.resource.data.sellerId
+             == resource.data.sellerId
+        );
 
-      // Seller can edit own answer.
-      allow update: if isApprovedSeller()
-        && resource.data.sellerId
-           == request.auth.uid
-        && request.resource.data.sellerId
-           == resource.data.sellerId;
-
-
-      allow delete: if isAdmin();
+      allow delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
     }
 
 
     // =========================================================
-    // SELLER OFFERS
+    // COUPONS
     // =========================================================
 
-    match /sellerOffers/{offerId} {
+    match /coupons/{couponId} {
 
-      // Active offers can be read.
       allow read: if isAdmin()
-
         || (
           signedIn()
           && resource.data.status == "active"
-        )
+        );
 
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PROMOTIONS
+    // =========================================================
+
+    match /promotions/{promotionId} {
+
+      allow read: if isAdmin()
+        || (
+          resource.data.status == "active"
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // BANNERS
+    // =========================================================
+
+    match /banners/{bannerId} {
+
+      allow read: if isAdmin()
+        || resource.data.status == "active";
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // TRANSACTIONS
+    // =========================================================
+    // Financial records.
+    // Client/customer/seller cannot modify them.
+
+    match /transactions/{transactionId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PAYMENT TRANSACTIONS
+    // =========================================================
+
+    match /paymentTransactions/{transactionId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // REFUND TRANSACTIONS
+    // =========================================================
+
+    match /refundTransactions/{refundId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SETTLEMENTS
+    // =========================================================
+
+    match /settlements/{settlementId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER COMMISSIONS
+    // =========================================================
+
+    match /sellerCommissions/{commissionId} {
+
+      allow read: if isAdmin()
         || (
           signedIn()
           && resource.data.sellerId
              == request.auth.uid
         );
 
-
-      // Approved seller creates own offer.
-      allow create: if isApprovedSeller()
-        && request.resource.data.sellerId
-           == request.auth.uid;
-
-
-      // Seller can update own offer.
-      allow update: if isApprovedSeller()
-        && resource.data.sellerId
-           == request.auth.uid
-        && request.resource.data.sellerId
-           == resource.data.sellerId;
-
-
-      // Admin can manage.
-      allow update, delete: if isAdmin();
-    }
-
-
-    // =========================================================
-    // BANNERS / HOMEPAGE CONTENT
-    // =========================================================
-
-    match /banners/{bannerId} {
-
-      // Active banners public.
-      allow read: if resource.data.status == "active"
-        || isAdmin();
-
-      // Admin only.
       allow create, update, delete: if isAdmin();
     }
 
 
     // =========================================================
+    // SELLER PAYOUTS
+    // =========================================================
+
+    match /sellerPayouts/{payoutId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // INVENTORY
+    // =========================================================
+
+    match /inventory/{inventoryId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      /*
+       * Inventory changes should ultimately be backend controlled.
+       * For now only admin can directly write.
+       */
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // INVENTORY MOVEMENTS
+    // =========================================================
+
+    match /inventoryMovements/{movementId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SHIPMENTS
+    // =========================================================
+
+    match /shipments/{shipmentId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.customerId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SHIPPING TRACKING
+    // =========================================================
+
+    match /shippingTracking/{trackingId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.customerId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // RETURNS
+    // =========================================================
+
+    match /returns/{returnId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.customerId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isCustomer()
+        && (
+          request.resource.data.userId
+            == request.auth.uid
+          ||
+          request.resource.data.customerId
+            == request.auth.uid
+        );
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // DISPUTES
+    // =========================================================
+
+    match /disputes/{disputeId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.customerId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && (
+          request.resource.data.customerId
+            == request.auth.uid
+          ||
+          request.resource.data.sellerId
+            == request.auth.uid
+        );
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.customerId
+              == request.auth.uid
+            ||
+            resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SUPPORT TICKETS
+    // =========================================================
+
+    match /supportTickets/{ticketId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.customerId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && (
+          request.resource.data.userId
+            == request.auth.uid
+          ||
+          request.resource.data.customerId
+            == request.auth.uid
+          ||
+          request.resource.data.sellerId
+            == request.auth.uid
+        );
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.userId
+              == request.auth.uid
+            ||
+            resource.data.customerId
+              == request.auth.uid
+            ||
+            resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SUPPORT MESSAGES
+    // =========================================================
+
+    match /supportTickets/{ticketId}/messages/{messageId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && exists(
+            /databases/$(database)/documents/supportTickets/$(ticketId)
+          )
+          && (
+            get(
+              /databases/$(database)/documents/supportTickets/$(ticketId)
+            ).data.userId == request.auth.uid
+            ||
+            get(
+              /databases/$(database)/documents/supportTickets/$(ticketId)
+            ).data.customerId == request.auth.uid
+            ||
+            get(
+              /databases/$(database)/documents/supportTickets/$(ticketId)
+            ).data.sellerId == request.auth.uid
+          )
+        );
+
+      allow create: if isAdmin()
+        || (
+          signedIn()
+          && request.resource.data.senderId
+             == request.auth.uid
+        );
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
     // SELLER NOTIFICATIONS
-    // sellerNotifications/{sellerId}/items/{notificationId}
     // =========================================================
 
     match /sellerNotifications/{sellerId}/items/{notificationId} {
@@ -913,7 +1023,6 @@ service cloud.firestore {
 
     // =========================================================
     // CUSTOMER NOTIFICATIONS
-    // customerNotifications/{userId}/items/{notificationId}
     // =========================================================
 
     match /customerNotifications/{userId}/items/{notificationId} {
@@ -926,13 +1035,1201 @@ service cloud.firestore {
 
 
     // =========================================================
-    // EVERYTHING ELSE
+    // GENERAL NOTIFICATIONS
     // =========================================================
 
-    /*
-     * Any collection not explicitly defined above
-     * remains completely blocked.
-     */
+    match /notifications/{userId}/items/{notificationId} {
+
+      allow read: if isOwner(userId)
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER MESSAGES / COMMUNICATION
+    // =========================================================
+
+    match /sellerConversations/{conversationId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.customerId
+              == request.auth.uid
+            ||
+            resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow create: if signedIn()
+        && (
+          request.resource.data.customerId
+            == request.auth.uid
+          ||
+          request.resource.data.sellerId
+            == request.auth.uid
+        );
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.customerId
+              == request.auth.uid
+            ||
+            resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER CONVERSATION MESSAGES
+    // =========================================================
+
+    match /sellerConversations/{conversationId}/messages/{messageId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && exists(
+            /databases/$(database)/documents/sellerConversations/$(conversationId)
+          )
+          && (
+            get(
+              /databases/$(database)/documents/sellerConversations/$(conversationId)
+            ).data.customerId
+              == request.auth.uid
+            ||
+            get(
+              /databases/$(database)/documents/sellerConversations/$(conversationId)
+            ).data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.senderId
+           == request.auth.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // WISHLIST ITEMS
+    // =========================================================
+
+    match /wishlists/{userId}/items/{itemId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    // =========================================================
+    // SAVED SEARCHES
+    // =========================================================
+
+    match /savedSearches/{userId}/items/{searchId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    // =========================================================
+    // RECENTLY VIEWED
+    // =========================================================
+
+    match /recentlyViewed/{userId}/items/{itemId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    // =========================================================
+    // PRODUCT REPORTS
+    // =========================================================
+
+    match /productReports/{reportId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER REPORTS
+    // =========================================================
+
+    match /sellerReports/{reportId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // FRAUD / RISK FLAGS
+    // =========================================================
+
+    match /riskFlags/{riskFlagId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // ADMIN NOTES
+    // =========================================================
+
+    match /adminNotes/{noteId} {
+
+      allow read, create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PLATFORM SETTINGS
+    // =========================================================
+
+    match /settings/{settingId} {
+
+      allow read: if signedIn();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // FEATURE FLAGS
+    // =========================================================
+
+    match /featureFlags/{flagId} {
+
+      allow read: if signedIn();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // HOMEPAGE SECTIONS
+    // =========================================================
+
+    match /homepageSections/{sectionId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // COLLECTIONS / CURATED LISTS
+    // =========================================================
+
+    match /collections/{collectionId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // FLASH SALES
+    // =========================================================
+
+    match /flashSales/{flashSaleId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER VERIFICATION REQUESTS
+    // =========================================================
+
+    match /sellerVerificationRequests/{requestId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER KYC DOCUMENTS
+    // =========================================================
+    // Never public.
+
+    match /sellerKycDocuments/{documentId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER BANK ACCOUNTS
+    // =========================================================
+    // Highly sensitive.
+
+    match /sellerBankAccounts/{accountId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isOwner(
+        request.resource.data.sellerId
+      );
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+
+          && request.resource.data.sellerId
+             == resource.data.sellerId
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CUSTOMER KYC
+    // =========================================================
+
+    match /customerKyc/{kycId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CUSTOMER BUSINESS PROFILES
+    // =========================================================
+
+    match /customerBusinessProfiles/{userId} {
+
+      allow read: if isOwner(userId)
+        || isAdmin();
+
+      allow create: if isOwner(userId);
+
+      allow update: if isOwner(userId)
+        || isAdmin();
+
+      allow delete: if isAdmin()
+        || isOwner(userId);
+    }
+
+
+    // =========================================================
+    // WHOLESALE CUSTOMER VERIFICATION
+    // =========================================================
+
+    match /wholesaleCustomerVerification/{userId} {
+
+      allow read: if isOwner(userId)
+        || isAdmin();
+
+      allow create: if isOwner(userId)
+        && isWholesaleCustomer();
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // VIDEO MEETINGS
+    // =========================================================
+
+    match /videoMeetings/{meetingId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.customerId
+              == request.auth.uid
+            ||
+            resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow create: if signedIn()
+        && (
+          request.resource.data.customerId
+            == request.auth.uid
+          ||
+          request.resource.data.sellerId
+            == request.auth.uid
+        );
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.customerId
+              == request.auth.uid
+            ||
+            resource.data.sellerId
+              == request.auth.uid
+          )
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PRODUCT MEDIA
+    // =========================================================
+
+    match /productMedia/{mediaId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // PRODUCT VIDEOS
+    // =========================================================
+
+    match /productVideos/{videoId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // AI LISTING JOBS
+    // =========================================================
+
+    match /aiListingJobs/{jobId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // AI SEARCH / VISUAL SEARCH HISTORY
+    // =========================================================
+
+    match /searchHistory/{userId}/items/{searchId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    match /visualSearches/{userId}/items/{searchId} {
+
+      allow read, create, update, delete: if isOwner(userId)
+        || isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER ANALYTICS
+    // =========================================================
+
+    match /sellerAnalytics/{sellerId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CUSTOMER ANALYTICS
+    // =========================================================
+
+    match /customerAnalytics/{userId} {
+
+      allow read: if isAdmin()
+        || isOwner(userId);
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // PLATFORM ANALYTICS
+    // =========================================================
+
+    match /platformAnalytics/{reportId} {
+
+      allow read, create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // ADMIN REPORTS
+    // =========================================================
+
+    match /adminReports/{reportId} {
+
+      allow read, create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // AUDIT LOGS
+    // =========================================================
+    // IMPORTANT:
+    // No seller/customer write access.
+    // Ideally these should be generated by trusted backend.
+
+    match /auditLogs/{logId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // ADMIN ACTIVITY
+    // =========================================================
+
+    match /adminActivity/{activityId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SECURITY EVENTS
+    // =========================================================
+
+    match /securityEvents/{eventId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // LOGIN / SESSION SECURITY
+    // =========================================================
+
+    match /securitySessions/{sessionId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // SELLER APPLICATIONS
+    // =========================================================
+
+    match /sellerApplications/{applicationId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER STAFF
+    // =========================================================
+
+    match /sellerStaff/{staffId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // SELLER STAFF ACTIVITY
+    // =========================================================
+
+    match /sellerStaffActivity/{activityId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER ORDERS / FULFILLMENT
+    // =========================================================
+
+    match /sellerFulfillment/{fulfillmentId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && request.resource.data.sellerId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // COD VERIFICATION
+    // =========================================================
+
+    match /codVerifications/{verificationId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create: if isCustomer()
+        && request.resource.data.userId
+           == request.auth.uid;
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER SHIPPING PROFILES
+    // =========================================================
+
+    match /sellerShippingProfiles/{sellerId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // SELLER SERVICEABLE PINCODES
+    // =========================================================
+
+    match /sellerServiceablePincodes/{sellerId} {
+
+      allow read: if true;
+
+      allow create, update, delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && sellerId == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // SHIPPING PARTNERS
+    // =========================================================
+
+    match /shippingPartners/{partnerId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // DELIVERY AREAS
+    // =========================================================
+
+    match /deliveryAreas/{areaId} {
+
+      allow read: if true;
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // TAX / GST CONFIGURATION
+    // =========================================================
+
+    match /taxRules/{taxRuleId} {
+
+      allow read: if signedIn();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // COMMISSION RULES
+    // =========================================================
+
+    match /commissionRules/{ruleId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER PRICING RULES
+    // =========================================================
+
+    match /sellerPricingRules/{ruleId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && request.resource.data.sellerId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // REFERRALS
+    // =========================================================
+
+    match /referrals/{referralId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.referrerId
+              == request.auth.uid
+            ||
+            resource.data.referredUserId
+              == request.auth.uid
+          )
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.referrerId
+           == request.auth.uid;
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // LOYALTY / REWARDS
+    // =========================================================
+
+    match /loyaltyAccounts/{userId} {
+
+      allow read: if isAdmin()
+        || isOwner(userId);
+
+      allow create: if isAdmin();
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // WALLET
+    // =========================================================
+    // Financial balance must not be client-controlled.
+
+    match /wallets/{userId} {
+
+      allow read: if isAdmin()
+        || isOwner(userId);
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // WALLET TRANSACTIONS
+    // =========================================================
+
+    match /walletTransactions/{transactionId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // GIFT CARDS
+    // =========================================================
+
+    match /giftCards/{giftCardId} {
+
+      allow read: if isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // GIFT CARD TRANSACTIONS
+    // =========================================================
+
+    match /giftCardTransactions/{transactionId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CAMPAIGN PARTICIPATION
+    // =========================================================
+
+    match /campaignParticipants/{participantId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.userId
+             == request.auth.uid
+        )
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn()
+        && (
+          request.resource.data.userId
+            == request.auth.uid
+          ||
+          request.resource.data.sellerId
+            == request.auth.uid
+        );
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER PROMOTION PARTICIPATION
+    // =========================================================
+
+    match /sellerPromotionParticipation/{participationId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin();
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CONTENT / STORIES
+    // =========================================================
+
+    match /stories/{storyId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if isApprovedSeller()
+        && request.resource.data.sellerId
+           == request.auth.uid;
+
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+    }
+
+
+    // =========================================================
+    // BLOG / GUIDES
+    // =========================================================
+
+    match /articles/{articleId} {
+
+      allow read: if resource.data.status == "published"
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // FAQ
+    // =========================================================
+
+    match /faqs/{faqId} {
+
+      allow read: if resource.data.status == "active"
+        || isAdmin();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // CONTACT / LEADS
+    // =========================================================
+
+    match /leads/{leadId} {
+
+      allow read: if isAdmin();
+
+      allow create: if true;
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // SELLER LEADS
+    // =========================================================
+
+    match /sellerLeads/{leadId} {
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow create: if signedIn();
+
+      allow update: if isAdmin()
+        || (
+          isApprovedSeller()
+          && resource.data.sellerId
+             == request.auth.uid
+        );
+
+      allow delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // ADMIN DASHBOARD WIDGETS
+    // =========================================================
+
+    match /adminDashboardWidgets/{widgetId} {
+
+      allow read, create, update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // ADMIN REPORT EXPORTS
+    // =========================================================
+
+    match /reportExports/{exportId} {
+
+      allow read: if isAdmin();
+
+      allow create: if isAdmin();
+
+      allow update, delete: if isAdmin();
+    }
+
+
+    // =========================================================
+    // EVERYTHING ELSE = DENY
+    // =========================================================
+
     match /{document=**} {
       allow read, write: if false;
     }
