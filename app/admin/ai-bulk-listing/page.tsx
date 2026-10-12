@@ -2,14 +2,15 @@
 "use client";
 
 import {
-  ChangeEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
 } from "react";
 import Link from "next/link";
-import { onAuthStateChanged, User } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import {
   getDownloadURL,
   ref,
@@ -28,11 +29,20 @@ type Listing = {
   category?: string;
   subcategory?: string;
   brand?: string;
-  keywords?: string[];
-  highlights?: string[];
+  keywords?: unknown[];
+  highlights?: unknown[];
   attributes?: Record<string, unknown>;
   seo?: Record<string, unknown>;
 };
+
+type ProductStatus =
+  | "waiting"
+  | "uploading"
+  | "ready"
+  | "generating"
+  | "generated"
+  | "failed"
+  | "saved";
 
 type ProductRow = {
   id: string;
@@ -53,20 +63,23 @@ type ProductRow = {
   highlights: string[];
   attributes: Record<string, unknown>;
   seo: Record<string, unknown>;
-  status:
-    | "waiting"
-    | "uploading"
-    | "ready"
-    | "generating"
-    | "generated"
-    | "failed"
-    | "saved";
+  status: ProductStatus;
   error?: string;
   selected: boolean;
 };
 
+type BulkResult = {
+  index: number;
+  productId?: string;
+  success: boolean;
+  listing?: Listing;
+  error?: string;
+};
+
 const MAX_FILES = 100;
 const MAX_FILE_SIZE = 12 * 1024 * 1024;
+const BATCH_SIZE = 10;
+
 const ACCEPTED_TYPES = [
   "image/jpeg",
   "image/png",
@@ -79,10 +92,31 @@ function createId() {
     .slice(2, 10)}`;
 }
 
-function optionalNumber(value: string) {
+function optionalNumber(value: string): number | undefined {
   if (!value.trim()) return undefined;
+
   const number = Number(value);
+
   return Number.isFinite(number) ? number : undefined;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter(
+      (item): item is string | number =>
+        typeof item === "string" ||
+        typeof item === "number"
+    )
+    .map(String)
+    .filter(Boolean);
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error
+    ? error.message
+    : "An unexpected error occurred.";
 }
 
 export default function AdminAIBulkListingPage() {
@@ -93,7 +127,6 @@ export default function AdminAIBulkListingPage() {
   const [categoryMode, setCategoryMode] = useState("auto");
   const [brandHint, setBrandHint] = useState("");
   const [language, setLanguage] = useState("English");
-  const [publishAfterSave, setPublishAfterSave] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -101,22 +134,24 @@ export default function AdminAIBulkListingPage() {
   const [error, setError] = useState("");
 
   const fileInput = useRef<HTMLInputElement>(null);
+  const rowsRef = useRef<ProductRow[]>([]);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (currentUser) => {
-        setUser(currentUser);
-        setAuthLoading(false);
-      }
-    );
+    rowsRef.current = rows;
+  }, [rows]);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setAuthLoading(false);
+    });
 
     return unsubscribe;
   }, []);
 
   useEffect(() => {
     return () => {
-      rows.forEach((row) => {
+      rowsRef.current.forEach((row) => {
         URL.revokeObjectURL(row.preview);
       });
     };
@@ -145,16 +180,25 @@ export default function AdminAIBulkListingPage() {
     [rows]
   );
 
-  function patchRow(
-    id: string,
-    patch: Partial<ProductRow>
-  ) {
-    setRows((current) =>
-      current.map((row) =>
-        row.id === id ? { ...row, ...patch } : row
-      )
-    );
-  }
+  const generatedSelectedCount = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          row.selected && row.status === "generated"
+      ).length,
+    [rows]
+  );
+
+  const patchRow = useCallback(
+    (id: string, patch: Partial<ProductRow>) => {
+      setRows((current) =>
+        current.map((row) =>
+          row.id === id ? { ...row, ...patch } : row
+        )
+      );
+    },
+    []
+  );
 
   function addFiles(event: ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files ?? []);
@@ -173,6 +217,7 @@ export default function AdminAIBulkListingPage() {
     }
 
     const selected = files.slice(0, available);
+
     const invalid = selected.find(
       (file) =>
         !ACCEPTED_TYPES.includes(file.type) ||
@@ -215,17 +260,19 @@ export default function AdminAIBulkListingPage() {
 
     if (files.length > available) {
       setError(
-        `Is session mein maximum ${MAX_FILES} photos add kar sakte hain.`
+        `Ek baar mein maximum ${MAX_FILES} photos add kar sakte hain.`
       );
     }
 
     event.target.value = "";
   }
 
-  async function uploadPending() {
-    if (!user) throw new Error("Admin login required.");
+  async function uploadPending(): Promise<Record<string, string>> {
+    if (!user) {
+      throw new Error("Admin login required.");
+    }
 
-    const pending = rows.filter(
+    const pending = rowsRef.current.filter(
       (row) =>
         row.selected &&
         !row.imageUrl &&
@@ -267,14 +314,12 @@ export default function AdminAIBulkListingPage() {
         patchRow(row.id, {
           imageUrl,
           status: "ready",
+          error: undefined,
         });
-      } catch (err) {
+      } catch (uploadError) {
         patchRow(row.id, {
           status: "failed",
-          error:
-            err instanceof Error
-              ? err.message
-              : "Image upload failed.",
+          error: getErrorMessage(uploadError),
         });
       }
 
@@ -299,7 +344,7 @@ export default function AdminAIBulkListingPage() {
       return;
     }
 
-    const targets = rows.filter(
+    const targets = rowsRef.current.filter(
       (row) => row.selected && row.status !== "saved"
     );
 
@@ -314,12 +359,14 @@ export default function AdminAIBulkListingPage() {
     try {
       const uploaded = await uploadPending();
 
-      const readyRows = rows
+      const currentRows = rowsRef.current;
+
+      const readyRows = currentRows
         .filter(
           (row) =>
             row.selected &&
             row.status !== "saved" &&
-            (row.imageUrl || uploaded[row.id])
+            Boolean(row.imageUrl || uploaded[row.id])
         )
         .map((row) => ({
           ...row,
@@ -328,86 +375,93 @@ export default function AdminAIBulkListingPage() {
 
       if (!readyRows.length) {
         throw new Error(
-          "Koi photo upload nahi hui. Storage permissions check karein."
+          "Koi photo upload nahi hui. Firebase Storage permissions check karein."
         );
       }
 
       const token = await user.getIdToken();
-      let completed = 0;
+
+      let processed = 0;
+      let successful = 0;
+      let failed = 0;
 
       for (
         let start = 0;
         start < readyRows.length;
-        start += 10
+        start += BATCH_SIZE
       ) {
-        const chunk = readyRows.slice(start, start + 10);
-
-        chunk.forEach((row) =>
-          patchRow(row.id, {
-            status: "generating",
-            error: undefined,
-          })
+        const chunk = readyRows.slice(
+          start,
+          start + BATCH_SIZE
         );
 
-        const response = await fetch(
-          "/api/ai/bulk-generate",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify({
-              products: chunk.map((row) => ({
-                id: row.id,
-                images: [row.imageUrl],
-                productName: row.title || undefined,
-                category:
-                  categoryMode === "auto"
-                    ? undefined
-                    : row.category || categoryMode,
-                brand: row.brand || brandHint || undefined,
-                language,
-                generateSEO: true,
-                generateAttributes: true,
-                generateHighlights: true,
-                generateKeywords: true,
-                generateVariants: false,
-              })),
+        chunk.forEach((row) => {
+          patchRow(row.id, {
+            status: "generating",
+            imageUrl: row.imageUrl,
+            error: undefined,
+          });
+        });
+
+        const response = await fetch("/api/ai/bulk-generate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            products: chunk.map((row) => ({
+              id: row.id,
+              images: [row.imageUrl!],
+              productName: row.title || undefined,
+              category:
+                categoryMode === "auto"
+                  ? undefined
+                  : row.category || categoryMode,
+              brand: row.brand || brandHint || undefined,
+              language,
               generateSEO: true,
               generateAttributes: true,
               generateHighlights: true,
               generateKeywords: true,
               generateVariants: false,
-            }),
-          }
-        );
+            })),
+            generateSEO: true,
+            generateAttributes: true,
+            generateHighlights: true,
+            generateKeywords: true,
+            generateVariants: false,
+          }),
+        });
 
         const payload = await response.json();
 
         if (!response.ok || !Array.isArray(payload.results)) {
-          throw new Error(
-            payload.error || "AI generation request failed."
-          );
+          const apiError =
+            typeof payload.error === "string"
+              ? payload.error
+              : "AI generation request failed.";
+
+          throw new Error(apiError);
         }
 
-        for (const result of payload.results as Array<{
-          index: number;
-          productId?: string;
-          success: boolean;
-          listing?: Listing;
-          error?: string;
-        }>) {
+        const results = payload.results as BulkResult[];
+        const processedIds = new Set<string>();
+
+        for (const result of results) {
           const row =
             chunk.find((item) => item.id === result.productId) ??
             chunk[result.index];
 
           if (!row) continue;
 
+          processedIds.add(row.id);
+
           if (result.success && result.listing) {
             const listing = result.listing;
 
             patchRow(row.id, {
+              imageUrl: row.imageUrl,
               title: String(
                 listing.title || listing.name || row.title
               ),
@@ -416,51 +470,70 @@ export default function AdminAIBulkListingPage() {
                 listing.category || row.category || ""
               ),
               brand: String(listing.brand || row.brand || ""),
-              keywords: Array.isArray(listing.keywords)
-                ? listing.keywords.map(String)
-                : [],
-              highlights: Array.isArray(listing.highlights)
-                ? listing.highlights.map(String)
-                : [],
+              keywords: toStringArray(listing.keywords),
+              highlights: toStringArray(listing.highlights),
               attributes:
                 listing.attributes &&
                 typeof listing.attributes === "object"
                   ? listing.attributes
                   : {},
               seo:
-                listing.seo && typeof listing.seo === "object"
+                listing.seo &&
+                typeof listing.seo === "object"
                   ? listing.seo
                   : {},
               status: "generated",
               error: undefined,
             });
+
+            successful++;
           } else {
             patchRow(row.id, {
               status: "failed",
               error: result.error || "AI generation failed.",
             });
+
+            failed++;
           }
 
-          completed++;
+          processed++;
 
           setProgress(
             30 +
               Math.round(
-                (completed / readyRows.length) * 60
+                (processed / readyRows.length) * 60
               )
           );
         }
+
+        // Handle any product omitted from the API results.
+        for (const row of chunk) {
+          if (!processedIds.has(row.id)) {
+            patchRow(row.id, {
+              status: "failed",
+              error: "API response mein is product ka result nahi mila.",
+            });
+
+            failed++;
+            processed++;
+          }
+        }
+
+        setProgress(
+          30 +
+            Math.round(
+              (processed / readyRows.length) * 60
+            )
+        );
       }
 
+      setProgress(100);
+
       setMessage(
-        "AI generation complete. Details review karein aur price, size, stock fill karein."
+        `AI generation complete: ${successful} successful, ${failed} failed. Save karne se pehle details, price aur stock check karein.`
       );
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "AI generation failed."
-      );
+    } catch (generationError) {
+      setError(getErrorMessage(generationError));
     } finally {
       setBusy(false);
     }
@@ -475,12 +548,14 @@ export default function AdminAIBulkListingPage() {
       return;
     }
 
-    const targets = rows.filter(
+    const targets = rowsRef.current.filter(
       (row) => row.selected && row.status === "generated"
     );
 
     if (!targets.length) {
-      setError("Save karne ke liye generated products select karein.");
+      setError(
+        "Save karne ke liye generated products select karein."
+      );
       return;
     }
 
@@ -498,6 +573,8 @@ export default function AdminAIBulkListingPage() {
 
       const price = optionalNumber(row.sellingPrice);
       const stock = optionalNumber(row.stock);
+      const wholesalePrice = optionalNumber(row.wholesalePrice);
+      const mrp = optionalNumber(row.mrp);
 
       if (price === undefined || price <= 0) {
         setError(`${row.title}: valid selling price bharein.`);
@@ -509,7 +586,22 @@ export default function AdminAIBulkListingPage() {
         !Number.isInteger(stock) ||
         stock < 0
       ) {
-        setError(`${row.title}: valid stock quantity bharein.`);
+        setError(
+          `${row.title}: stock 0 ya usse zyada whole number hona chahiye.`
+        );
+        return;
+      }
+
+      if (
+        wholesalePrice !== undefined &&
+        wholesalePrice < 0
+      ) {
+        setError(`${row.title}: wholesale price invalid hai.`);
+        return;
+      }
+
+      if (mrp !== undefined && mrp < 0) {
+        setError(`${row.title}: MRP invalid hai.`);
         return;
       }
 
@@ -520,14 +612,28 @@ export default function AdminAIBulkListingPage() {
     }
 
     setBusy(true);
+    setProgress(0);
 
     try {
       const token = await user.getIdToken();
       let saved = 0;
       const failed: string[] = [];
 
-      for (const row of targets) {
+      for (let index = 0; index < targets.length; index++) {
+        const row = targets[index];
+
         try {
+          const attributes: Record<string, unknown> = {
+            ...row.attributes,
+          };
+
+          if (row.sizes.trim()) {
+            attributes.sizes = row.sizes
+              .split(",")
+              .map((size) => size.trim())
+              .filter(Boolean);
+          }
+
           const response = await fetch(
             "/api/ai/confirm-listing",
             {
@@ -541,7 +647,8 @@ export default function AdminAIBulkListingPage() {
                   title: row.title.trim(),
                   name: row.title.trim(),
                   description: row.description.trim(),
-                  shortDescription: row.description.slice(0, 240),
+                  shortDescription:
+                    row.description.trim().slice(0, 240),
                   category: row.category.trim(),
                   brand: row.brand.trim(),
                   sellingPrice: Number(row.sellingPrice),
@@ -556,17 +663,7 @@ export default function AdminAIBulkListingPage() {
                   sku: row.sku.trim() || undefined,
                   keywords: row.keywords,
                   highlights: row.highlights,
-                  attributes: {
-                    ...row.attributes,
-                    ...(row.sizes.trim()
-                      ? {
-                          sizes: row.sizes
-                            .split(",")
-                            .map((size) => size.trim())
-                            .filter(Boolean),
-                        }
-                      : {}),
-                  },
+                  attributes,
                   seo: row.seo,
                   variants: [],
                 },
@@ -597,13 +694,11 @@ export default function AdminAIBulkListingPage() {
 
           patchRow(row.id, {
             status: "saved",
+            selected: false,
             error: undefined,
           });
-        } catch (err) {
-          const reason =
-            err instanceof Error
-              ? err.message
-              : "Save failed.";
+        } catch (saveError) {
+          const reason = getErrorMessage(saveError);
 
           failed.push(`${row.title}: ${reason}`);
 
@@ -611,38 +706,44 @@ export default function AdminAIBulkListingPage() {
             error: reason,
           });
         }
+
+        setProgress(
+          Math.round(((index + 1) / targets.length) * 100)
+        );
       }
 
-      setProgress(100);
-
       setMessage(
-        `${saved} products save ho gaye. ${
-          failed.length
-        } products mein error aaya.`
+        `${saved} products save ho gaye. ${failed.length} products mein error aaya.`
       );
 
       if (failed.length) {
         setError(failed.join(" | "));
       }
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Bulk save failed."
-      );
+    } catch (saveError) {
+      setError(getErrorMessage(saveError));
     } finally {
       setBusy(false);
     }
   }
 
   function removeRow(id: string) {
-    setRows((current) => {
-      const row = current.find((item) => item.id === id);
+    const row = rowsRef.current.find((item) => item.id === id);
 
-      if (row) URL.revokeObjectURL(row.preview);
+    if (row) {
+      URL.revokeObjectURL(row.preview);
+    }
 
-      return current.filter((item) => item.id !== id);
-    });
+    setRows((current) =>
+      current.filter((item) => item.id !== id)
+    );
+  }
+
+  function updateField(
+    id: string,
+    field: keyof ProductRow,
+    value: string
+  ) {
+    patchRow(id, { [field]: value } as Partial<ProductRow>);
   }
 
   if (authLoading) {
@@ -665,9 +766,11 @@ export default function AdminAIBulkListingPage() {
           <h1 className="text-2xl font-bold">
             Admin login required
           </h1>
+
           <p className="mt-2 text-gray-600">
             AI Bulk Listing use karne ke liye login karein.
           </p>
+
           <Link
             href="/login?redirect=/admin/ai-bulk-listing"
             className="mt-4 inline-block text-blue-700 underline"
@@ -699,9 +802,9 @@ export default function AdminAIBulkListingPage() {
             </h1>
 
             <p className="mt-2 max-w-3xl text-sm text-gray-600">
-              Multiple product photos upload karein. AI details
-              generate karega aur aap price, sizes aur quantity
-              confirm karenge.
+              Multiple product photos upload karein. AI product
+              details generate karega. Price aur stock verify
+              karke products save karein.
             </p>
           </div>
 
@@ -715,15 +818,21 @@ export default function AdminAIBulkListingPage() {
 
         <section className="grid gap-4 rounded-2xl border bg-white p-5 shadow-sm md:grid-cols-3">
           <div>
-            <label className="mb-1 block text-sm font-semibold">
+            <label
+              htmlFor="bulk-category"
+              className="mb-1 block text-sm font-semibold"
+            >
               Category
             </label>
+
             <select
+              id="bulk-category"
               value={categoryMode}
               onChange={(event) =>
                 setCategoryMode(event.target.value)
               }
               className="w-full rounded-lg border px-3 py-2.5"
+              disabled={busy}
             >
               <option value="auto">AI detect kare</option>
               <option value="Clothing">Clothing</option>
@@ -735,29 +844,41 @@ export default function AdminAIBulkListingPage() {
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-semibold">
+            <label
+              htmlFor="bulk-brand"
+              className="mb-1 block text-sm font-semibold"
+            >
               Brand hint (optional)
             </label>
+
             <input
+              id="bulk-brand"
               value={brandHint}
               onChange={(event) =>
                 setBrandHint(event.target.value)
               }
               placeholder="Brand name"
               className="w-full rounded-lg border px-3 py-2.5"
+              disabled={busy}
             />
           </div>
 
           <div>
-            <label className="mb-1 block text-sm font-semibold">
+            <label
+              htmlFor="bulk-language"
+              className="mb-1 block text-sm font-semibold"
+            >
               Description language
             </label>
+
             <select
+              id="bulk-language"
               value={language}
               onChange={(event) =>
                 setLanguage(event.target.value)
               }
               className="w-full rounded-lg border px-3 py-2.5"
+              disabled={busy}
             >
               <option>English</option>
               <option>Hindi</option>
@@ -770,9 +891,10 @@ export default function AdminAIBulkListingPage() {
               <p className="font-semibold">
                 {rows.length}/{MAX_FILES} photos
               </p>
+
               <p className="text-xs text-gray-500">
-                1 photo = 1 product · JPG, PNG, WebP · 12 MB max
-                per photo.
+                1 photo = 1 product · JPG, PNG, WebP · Maximum
+                12 MB per photo.
               </p>
             </div>
 
@@ -821,7 +943,14 @@ export default function AdminAIBulkListingPage() {
               </span>
               <span>{progress}%</span>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-blue-100">
+
+            <div
+              className="h-2 overflow-hidden rounded-full bg-blue-100"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress}
+            >
               <div
                 className="h-full bg-blue-700 transition-all"
                 style={{ width: `${progress}%` }}
@@ -851,12 +980,15 @@ export default function AdminAIBulkListingPage() {
         {rows.length === 0 ? (
           <section className="rounded-2xl border-2 border-dashed bg-gray-50 px-6 py-16 text-center">
             <div className="text-4xl">🖼️</div>
+
             <h2 className="mt-3 text-lg font-bold">
               Abhi koi product photo nahi hai
             </h2>
+
             <p className="mt-1 text-sm text-gray-600">
               Multiple product photos select karke shuru karein.
             </p>
+
             <button
               type="button"
               onClick={() => fileInput.current?.click()}
@@ -869,7 +1001,8 @@ export default function AdminAIBulkListingPage() {
           <>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-gray-600">
-                {selectedCount} selected · {generatedCount} generated/saved · {failedCount} failed
+                {selectedCount} selected · {generatedCount}{" "}
+                generated/saved · {failedCount} failed
               </p>
 
               <div className="flex flex-wrap gap-2">
@@ -883,7 +1016,8 @@ export default function AdminAIBulkListingPage() {
                       }))
                     )
                   }
-                  className="rounded-lg border px-3 py-2 text-sm"
+                  disabled={busy}
+                  className="rounded-lg border px-3 py-2 text-sm disabled:opacity-50"
                 >
                   Select all unsaved
                 </button>
@@ -898,7 +1032,8 @@ export default function AdminAIBulkListingPage() {
                       }))
                     )
                   }
-                  className="rounded-lg border px-3 py-2 text-sm"
+                  disabled={busy}
+                  className="rounded-lg border px-3 py-2 text-sm disabled:opacity-50"
                 >
                   Deselect all
                 </button>
@@ -923,7 +1058,7 @@ export default function AdminAIBulkListingPage() {
                         <input
                           type="checkbox"
                           checked={row.selected}
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(event) =>
                             patchRow(row.id, {
                               selected: event.target.checked,
@@ -937,7 +1072,7 @@ export default function AdminAIBulkListingPage() {
                         type="button"
                         disabled={busy}
                         onClick={() => removeRow(row.id)}
-                        className="mt-2 text-xs text-red-600 hover:underline"
+                        className="mt-2 text-xs text-red-600 hover:underline disabled:opacity-50"
                       >
                         Remove
                       </button>
@@ -952,6 +1087,7 @@ export default function AdminAIBulkListingPage() {
                         <h2 className="font-bold">
                           Product {index + 1}
                         </h2>
+
                         <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold">
                           {row.status}
                         </span>
@@ -967,27 +1103,27 @@ export default function AdminAIBulkListingPage() {
                         <Field
                           label="Product title *"
                           value={row.title}
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, { title: value })
+                            updateField(row.id, "title", value)
                           }
                         />
 
                         <Field
                           label="Category *"
                           value={row.category}
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, { category: value })
+                            updateField(row.id, "category", value)
                           }
                         />
 
                         <Field
                           label="Brand"
                           value={row.brand}
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, { brand: value })
+                            updateField(row.id, "brand", value)
                           }
                         />
 
@@ -995,11 +1131,13 @@ export default function AdminAIBulkListingPage() {
                           label="Selling price (₹) *"
                           value={row.sellingPrice}
                           type="number"
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, {
-                              sellingPrice: value,
-                            })
+                            updateField(
+                              row.id,
+                              "sellingPrice",
+                              value
+                            )
                           }
                         />
 
@@ -1007,9 +1145,9 @@ export default function AdminAIBulkListingPage() {
                           label="Stock quantity *"
                           value={row.stock}
                           type="number"
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, { stock: value })
+                            updateField(row.id, "stock", value)
                           }
                         />
 
@@ -1017,11 +1155,13 @@ export default function AdminAIBulkListingPage() {
                           label="Wholesale price (₹)"
                           value={row.wholesalePrice}
                           type="number"
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, {
-                              wholesalePrice: value,
-                            })
+                            updateField(
+                              row.id,
+                              "wholesalePrice",
+                              value
+                            )
                           }
                         />
 
@@ -1029,28 +1169,28 @@ export default function AdminAIBulkListingPage() {
                           label="MRP (₹)"
                           value={row.mrp}
                           type="number"
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, { mrp: value })
+                            updateField(row.id, "mrp", value)
                           }
                         />
 
                         <Field
                           label="Sizes (comma separated)"
                           value={row.sizes}
-                          disabled={row.status === "saved"}
-                          onChange={(value) =>
-                            patchRow(row.id, { sizes: value })
-                          }
+                          disabled={busy || row.status === "saved"}
                           placeholder="28, 30, 32"
+                          onChange={(value) =>
+                            updateField(row.id, "sizes", value)
+                          }
                         />
 
                         <Field
                           label="SKU (optional)"
                           value={row.sku}
-                          disabled={row.status === "saved"}
+                          disabled={busy || row.status === "saved"}
                           onChange={(value) =>
-                            patchRow(row.id, { sku: value })
+                            updateField(row.id, "sku", value)
                           }
                         />
                       </div>
@@ -1058,27 +1198,28 @@ export default function AdminAIBulkListingPage() {
                       <label className="mb-1 mt-3 block text-xs font-semibold text-gray-600">
                         Description *
                       </label>
+
                       <textarea
                         rows={4}
                         value={row.description}
-                        disabled={row.status === "saved"}
+                        disabled={busy || row.status === "saved"}
                         onChange={(event) =>
                           patchRow(row.id, {
                             description: event.target.value,
                           })
                         }
-                        className="w-full rounded-lg border px-3 py-2 text-sm"
+                        className="w-full rounded-lg border px-3 py-2 text-sm disabled:bg-gray-100"
                       />
 
                       {row.keywords.length > 0 && (
-                        <p className="mt-2 text-xs text-gray-500">
+                        <p className="mt-2 break-words text-xs text-gray-500">
                           <strong>AI keywords:</strong>{" "}
                           {row.keywords.join(", ")}
                         </p>
                       )}
 
                       {row.highlights.length > 0 && (
-                        <p className="mt-1 text-xs text-gray-500">
+                        <p className="mt-1 break-words text-xs text-gray-500">
                           <strong>Highlights:</strong>{" "}
                           {row.highlights.join(" · ")}
                         </p>
@@ -1097,7 +1238,7 @@ export default function AdminAIBulkListingPage() {
                               selected: true,
                             })
                           }
-                          className="mt-3 rounded-lg border px-3 py-2 text-sm font-semibold"
+                          className="mt-3 rounded-lg border px-3 py-2 text-sm font-semibold disabled:opacity-50"
                         >
                           Retry this product
                         </button>
@@ -1111,39 +1252,19 @@ export default function AdminAIBulkListingPage() {
             <section className="sticky bottom-3 flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-white/95 p-4 shadow-lg backdrop-blur">
               <div>
                 <p className="font-bold">
-                  {rows.filter(
-                    (row) =>
-                      row.selected && row.status === "generated"
-                  ).length}{" "}
-                  generated products selected
+                  {generatedSelectedCount} generated products selected
                 </p>
 
-                <label className="mt-2 flex items-center gap-2 text-sm text-gray-600">
-                  <input
-                    type="checkbox"
-                    checked={publishAfterSave}
-                    onChange={(event) =>
-                      setPublishAfterSave(event.target.checked)
-                    }
-                  />
-                  Request publish instead of Draft
-                </label>
-
                 <p className="mt-1 text-xs text-gray-500">
-                  Publish request ka final result save API ki policy par depend karega.
+                  Save karne se pehle selling price, stock aur
+                  product details check karein.
                 </p>
               </div>
 
               <button
                 type="button"
                 onClick={saveSelected}
-                disabled={
-                  busy ||
-                  !rows.some(
-                    (row) =>
-                      row.selected && row.status === "generated"
-                  )
-                }
+                disabled={busy || generatedSelectedCount === 0}
                 className="rounded-lg bg-green-700 px-5 py-3 text-sm font-bold text-white disabled:opacity-50"
               >
                 {busy ? "Please wait..." : "Save selected products"}
@@ -1180,6 +1301,7 @@ function Field({
       <label className="mb-1 block text-xs font-semibold text-gray-600">
         {label}
       </label>
+
       <input
         type={type}
         min={type === "number" ? "0" : undefined}
