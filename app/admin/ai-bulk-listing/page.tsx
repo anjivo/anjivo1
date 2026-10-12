@@ -379,7 +379,7 @@ export default function AdminAIBulkListingPage() {
         );
       }
 
-      const token = await user.getIdToken();
+      const token = await user.getIdToken(true);
 
       let processed = 0;
       let successful = 0;
