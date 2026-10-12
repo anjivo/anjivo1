@@ -1,20 +1,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
+import type { DecodedIdToken } from "firebase-admin/auth";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-/* =========================================================
-   ANJIVO AI LISTING CONFIRMATION API
-   - Firebase authentication
-   - Seller/admin authorization
-   - Product validation
-   - Seller-confirmed price and inventory
-   - Secure Firestore document creation
-   - Admin approval workflow
-========================================================= */
 
 type ConfirmListingBody = {
   listing?: Record<string, unknown>;
@@ -55,9 +46,7 @@ function cleanString(
   value: unknown,
   maxLength = 500
 ): string {
-  if (typeof value !== "string") {
-    return "";
-  }
+  if (typeof value !== "string") return "";
 
   return value
     .replace(/\u0000/g, "")
@@ -94,35 +83,25 @@ function isObject(
 }
 
 function isValidImageUrl(value: unknown): value is string {
-  if (
-    typeof value !== "string" ||
-    value.length > 4096
-  ) {
+  if (typeof value !== "string" || value.length > 4096) {
     return false;
   }
 
   try {
     const url = new URL(value);
 
-    if (url.protocol !== "https:") {
-      return false;
-    }
+    if (url.protocol !== "https:") return false;
 
     if (
-      !ALLOWED_IMAGE_HOSTS.has(
-        url.hostname.toLowerCase()
-      )
+      !ALLOWED_IMAGE_HOSTS.has(url.hostname.toLowerCase())
     ) {
       return false;
     }
 
-    if (url.username || url.password) {
-      return false;
-    }
+    if (url.username || url.password) return false;
 
     const isFirebase =
-      url.hostname ===
-        "firebasestorage.googleapis.com" &&
+      url.hostname === "firebasestorage.googleapis.com" &&
       /^\/v0\/b\/[^/]+\/o\/.+/.test(url.pathname);
 
     const isGoogleStorage =
@@ -140,20 +119,15 @@ function cleanStringArray(
   maxItems = 30,
   maxLength = 100
 ): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+  if (!Array.isArray(value)) return [];
 
   return [
     ...new Set(
       value
         .filter(
-          (item): item is string =>
-            typeof item === "string"
+          (item): item is string => typeof item === "string"
         )
-        .map((item) =>
-          cleanString(item, maxLength)
-        )
+        .map((item) => cleanString(item, maxLength))
         .filter(Boolean)
     ),
   ].slice(0, maxItems);
@@ -162,21 +136,14 @@ function cleanStringArray(
 function cleanAttributes(
   value: unknown
 ): Record<string, string> {
-  if (!isObject(value)) {
-    return {};
-  }
+  if (!isObject(value)) return {};
 
   const result: Record<string, string> = {};
 
-  for (
-    const [key, rawValue] of
-    Object.entries(value).slice(0, 50)
-  ) {
+  for (const [key, rawValue] of Object.entries(value).slice(0, 50)) {
     const safeKey = cleanString(key, 100);
 
-    if (!safeKey) {
-      continue;
-    }
+    if (!safeKey) continue;
 
     if (
       typeof rawValue === "string" ||
@@ -190,19 +157,15 @@ function cleanAttributes(
   return result;
 }
 
-/* =========================================================
-   POST
-========================================================= */
-
 export async function POST(request: NextRequest) {
   try {
     /* 1. Request size */
 
-    const contentLength =
-      request.headers.get("content-length");
+    const contentLength = request.headers.get("content-length");
 
     if (
       contentLength &&
+      Number.isFinite(Number(contentLength)) &&
       Number(contentLength) > MAX_BODY_BYTES
     ) {
       return errorResponse(
@@ -214,27 +177,48 @@ export async function POST(request: NextRequest) {
 
     /* 2. Firebase authentication */
 
-    const authorization =
-      request.headers.get("authorization");
+    const authorization = request.headers.get("authorization");
 
     if (!authorization?.startsWith("Bearer ")) {
       return errorResponse(
-        "Authentication required.",
+        "Authentication required. Please log in again.",
         401,
         "UNAUTHORIZED"
       );
     }
 
-    let decodedToken;
+    const idToken = authorization.slice(7).trim();
+
+    if (!idToken) {
+      return errorResponse(
+        "Authentication token is missing. Please log in again.",
+        401,
+        "TOKEN_MISSING"
+      );
+    }
+
+    let decodedToken: DecodedIdToken;
 
     try {
-      decodedToken = await adminAuth.verifyIdToken(
-        authorization.slice(7).trim(),
-        true
+      // Keep revocation checking enabled for security.
+      decodedToken = await adminAuth.verifyIdToken(idToken, true);
+    } catch (authError: unknown) {
+      const error = authError as {
+        code?: string;
+        message?: string;
+      };
+
+      // Never log the token itself.
+      console.error(
+        "ANJIVO confirm-listing token verification failed:",
+        {
+          code: error?.code ?? "UNKNOWN_AUTH_ERROR",
+          message: error?.message ?? "No error message",
+        }
       );
-    } catch {
+
       return errorResponse(
-        "Invalid or expired authentication token.",
+        "Invalid, expired or revoked authentication token. Please log out and log in again.",
         401,
         "INVALID_TOKEN"
       );
@@ -259,17 +243,12 @@ export async function POST(request: NextRequest) {
 
     const userData = userDoc.data();
 
-    const role = String(
-      userData?.role ?? ""
-    ).toLowerCase();
+    const role = String(userData?.role ?? "").toLowerCase();
 
     const isAdmin =
-      role === "admin" ||
-      decodedToken.admin === true;
+      role === "admin" || decodedToken.admin === true;
 
-    const isSeller =
-      role === "seller" ||
-      role === "vendor";
+    const isSeller = role === "seller" || role === "vendor";
 
     if (!isAdmin && !isSeller) {
       return errorResponse(
@@ -413,25 +392,10 @@ export async function POST(request: NextRequest) {
       500
     );
 
-    const category = cleanString(
-      listing.category,
-      150
-    );
-
-    const subcategory = cleanString(
-      listing.subcategory,
-      150
-    );
-
-    const productType = cleanString(
-      listing.productType,
-      150
-    );
-
-    const brand = cleanString(
-      listing.brand,
-      150
-    );
+    const category = cleanString(listing.category, 150);
+    const subcategory = cleanString(listing.subcategory, 150);
+    const productType = cleanString(listing.productType, 150);
+    const brand = cleanString(listing.brand, 150);
 
     if (!title || !description || !category) {
       return errorResponse(
@@ -461,24 +425,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const imageUrls = [
-      ...new Set(rawImages as string[]),
-    ];
+    const imageUrls = [...new Set(rawImages as string[])];
 
     /* 8. Seller-confirmed price and stock */
 
-    // Support both old API fields and the upgraded
-    // listing types' sellingPrice field.
-
-    const price =
-      listing.sellingPrice ?? listing.price;
-
+    const price = listing.sellingPrice ?? listing.price;
     const stock = listing.stock;
 
-    if (
-      !validPrice(price) ||
-      !validStock(stock)
-    ) {
+    if (!validPrice(price) || !validStock(stock)) {
       return errorResponse(
         "Enter a valid seller-confirmed selling price and stock quantity.",
         400,
@@ -486,9 +440,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const wholesalePrice =
-      listing.wholesalePrice ?? null;
-
+    const wholesalePrice = listing.wholesalePrice ?? null;
     const mrp = listing.mrp ?? null;
 
     if (
@@ -502,10 +454,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (
-      mrp !== null &&
-      !validPrice(mrp)
-    ) {
+    if (mrp !== null && !validPrice(mrp)) {
       return errorResponse(
         "Invalid MRP.",
         400,
@@ -541,12 +490,10 @@ export async function POST(request: NextRequest) {
       }
 
       const variantPrice =
-        rawVariant.sellingPrice ??
-        rawVariant.price;
+        rawVariant.sellingPrice ?? rawVariant.price;
 
       const variantStock =
-        rawVariant.stockQuantity ??
-        rawVariant.stock;
+        rawVariant.stockQuantity ?? rawVariant.stock;
 
       if (
         !validPrice(variantPrice) ||
@@ -559,9 +506,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const variantImages = Array.isArray(
-        rawVariant.imageUrls
-      )
+      const variantImages = Array.isArray(rawVariant.imageUrls)
         ? rawVariant.imageUrls
         : [];
 
@@ -579,8 +524,7 @@ export async function POST(request: NextRequest) {
       const variantWholesale =
         rawVariant.wholesalePrice ?? null;
 
-      const variantMrp =
-        rawVariant.mrp ?? null;
+      const variantMrp = rawVariant.mrp ?? null;
 
       if (
         variantWholesale !== null &&
@@ -605,107 +549,51 @@ export async function POST(request: NextRequest) {
       }
 
       variants.push({
-        id: cleanString(
-          rawVariant.id,
-          128
-        ),
-
-        sku: cleanString(
-          rawVariant.sku,
-          100
-        ),
-
-        barcode: cleanString(
-          rawVariant.barcode,
-          100
-        ),
-
-        size: cleanString(
-          rawVariant.size,
-          50
-        ),
-
-        color: cleanString(
-          rawVariant.color,
-          50
-        ),
-
-        attributes: cleanAttributes(
-          rawVariant.attributes
-        ),
-
+        id: cleanString(rawVariant.id, 128),
+        sku: cleanString(rawVariant.sku, 100),
+        barcode: cleanString(rawVariant.barcode, 100),
+        size: cleanString(rawVariant.size, 50),
+        color: cleanString(rawVariant.color, 50),
+        attributes: cleanAttributes(rawVariant.attributes),
         imageUrls: variantImages,
-
         sellingPrice: variantPrice,
-
         wholesalePrice: variantWholesale,
-
         mrp: variantMrp,
-
         stockQuantity: variantStock,
-
         isConfirmed: true,
-
         confirmedBy: uid,
-
         confirmedAt: new Date().toISOString(),
       });
     }
 
     /* 10. SEO and attributes */
 
-    const rawSEO = isObject(listing.seo)
-      ? listing.seo
-      : {};
+    const rawSEO = isObject(listing.seo) ? listing.seo : {};
 
     const seo = {
-      metaTitle: cleanString(
-        rawSEO.metaTitle,
-        70
-      ),
-
-      metaDescription: cleanString(
-        rawSEO.metaDescription,
-        200
-      ),
-
-      slug: cleanString(
-        rawSEO.slug,
-        200
-      )
+      metaTitle: cleanString(rawSEO.metaTitle, 70),
+      metaDescription: cleanString(rawSEO.metaDescription, 200),
+      slug: cleanString(rawSEO.slug, 200)
         .toLowerCase()
         .replace(/[^a-z0-9-]/g, "")
         .slice(0, 200),
-
-      primaryKeyword: cleanString(
-        rawSEO.primaryKeyword,
-        100
-      ),
-
+      primaryKeyword: cleanString(rawSEO.primaryKeyword, 100),
       secondaryKeywords: cleanStringArray(
         rawSEO.secondaryKeywords,
         30,
         100
       ),
-
       searchTerms: cleanStringArray(
         rawSEO.searchTerms,
         30,
         100
       ),
-
-      tags: cleanStringArray(
-        rawSEO.tags,
-        30,
-        50
-      ),
-
+      tags: cleanStringArray(rawSEO.tags, 30, 50),
       isSellerConfirmed: true,
     };
 
     const keywords = cleanStringArray(
-      listing.keywords ??
-        listing.searchKeywords,
+      listing.keywords ?? listing.searchKeywords,
       30,
       100
     );
@@ -716,17 +604,11 @@ export async function POST(request: NextRequest) {
       300
     );
 
-    const attributes = cleanAttributes(
-      listing.attributes
-    );
+    const attributes = cleanAttributes(listing.attributes);
 
     /* 11. Compliance data */
 
-    const hsnCode = cleanString(
-      listing.hsnCode,
-      20
-    );
-
+    const hsnCode = cleanString(listing.hsnCode, 20);
     const gstRate = listing.gstRate ?? null;
 
     if (
@@ -752,9 +634,7 @@ export async function POST(request: NextRequest) {
 
     /* 12. Confirmation fields */
 
-    const confirmation = isObject(
-      body.confirmation
-    )
+    const confirmation = isObject(body.confirmation)
       ? body.confirmation
       : {};
 
@@ -769,24 +649,15 @@ export async function POST(request: NextRequest) {
     const submitForApproval =
       confirmation.submitForApproval !== false;
 
-    /*
-     * Seller-confirmed listing:
-     * pending_approval means awaiting admin review.
-     *
-     * Admin confirmation does not automatically publish
-     * the product. Publication is handled separately.
-     */
-
     const initialStatus = isAdmin
       ? "approved"
       : submitForApproval
         ? "pending_approval"
         : "draft";
 
-    /* 13. Create clean Firestore document */
+    /* 13. Create Firestore document */
 
     const productData = {
-      // Existing catalog compatibility
       name: title,
       title,
       description,
@@ -804,7 +675,6 @@ export async function POST(request: NextRequest) {
 
       images: imageUrls,
       imageUrls,
-
       variants,
 
       keywords,
@@ -813,44 +683,33 @@ export async function POST(request: NextRequest) {
       attributes,
       seo,
 
-      // Compliance details
       hsnCode,
       gstRate,
       countryOfOrigin,
 
-      // Identity
       sellerId,
-
       createdBy: uid,
-      createdByRole: isAdmin
-        ? "admin"
-        : "seller",
+      createdByRole: isAdmin ? "admin" : "seller",
 
-      // Review status
       status: initialStatus,
-
       isPublished: false,
       isApproved: isAdmin,
       adminApproved: isAdmin,
 
       sellerConfirmed,
       sellerConfirmedBy: uid,
-
       confirmedFields,
 
       source: "ai_listing_studio",
-
       aiGenerated: true,
 
-      // Keep these fields server-controlled.
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
 
       ...(isAdmin
         ? {
             adminApprovedBy: uid,
-            adminApprovedAt:
-              FieldValue.serverTimestamp(),
+            adminApprovedAt: FieldValue.serverTimestamp(),
           }
         : {}),
     };
@@ -868,21 +727,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-
         message: isAdmin
           ? "Listing saved and approved. It is not yet published."
           : submitForApproval
             ? "Listing submitted for admin approval."
             : "Listing saved as a draft.",
-
         productId: productRef.id,
-
         status: initialStatus,
-
         isPublished: false,
-
         sellerConfirmed: true,
-
         adminApproved: isAdmin,
       },
       {
@@ -893,10 +746,7 @@ export async function POST(request: NextRequest) {
       }
     );
   } catch (error) {
-    console.error(
-      "ANJIVO confirm listing error:",
-      error
-    );
+    console.error("ANJIVO confirm listing error:", error);
 
     return errorResponse(
       "Unable to save listing. Please try again.",
