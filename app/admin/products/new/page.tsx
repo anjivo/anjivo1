@@ -39,6 +39,12 @@ type Tier = {
   price: string;
 };
 
+type SizeChartRow = {
+  id: string;
+  size: string;
+  measurements: string;
+};
+
 type VariantRow = {
   id: string;
   label: string;
@@ -93,14 +99,6 @@ export default function AdminNewProductPage() {
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [categoryLoadError, setCategoryLoadError] = useState("");
 
-  // Sub-categories are loaded from the same categories collection using parentId.
-  // The Category type may not declare parentId yet, so read it safely.
-  const subcategories = categories.filter((category) => {
-    const parentId = (category as Category & { parentId?: string }).parentId;
-    return String(parentId ?? "") === categoryId &&
-      String(category.status ?? "active").toLowerCase() === "active";
-  });
-
   // Basic information
   const [name, setName] = useState<string>("");
   const [slug, setSlug] = useState("");
@@ -111,6 +109,16 @@ export default function AdminNewProductPage() {
   const [subcategoryId, setSubcategoryId] = useState("");
   const [subcategoryName, setSubcategoryName] = useState("");
   const [tagsText, setTagsText] = useState("");
+
+  // Reusable size chart for apparel, footwear, accessories, and dimension-based products.
+  const [sizeChartEnabled, setSizeChartEnabled] = useState(false);
+  const [sizeChartTitle, setSizeChartTitle] = useState("Size Chart");
+  const [sizeChartUnit, setSizeChartUnit] = useState("inches");
+  const [sizeChartRows, setSizeChartRows] = useState<SizeChartRow[]>([
+    { id: makeId(), size: "S", measurements: "" },
+    { id: makeId(), size: "M", measurements: "" },
+    { id: makeId(), size: "L", measurements: "" },
+  ]);
 
   // Product images are selected locally, previewed, and uploaded to Firebase Storage on submit.
   const [productImages, setProductImages] = useState<ProductImage[]>([]);
@@ -150,6 +158,58 @@ export default function AdminNewProductPage() {
   const [bestSeller, setBestSeller] = useState(false);
   const [trending, setTrending] = useState(false);
   const [status, setStatus] = useState<"active" | "draft">("active");
+
+  // Sub-categories are loaded from the same categories collection using parentId.
+  const subcategories = categories.filter((category) => {
+    const parentId = (category as Category & { parentId?: string }).parentId;
+    return (
+      String(parentId ?? "") === categoryId &&
+      String(category.status ?? "active").toLowerCase() === "active"
+    );
+  });
+
+  const selectedCategoryText = `${categoryName} ${subcategoryName}`.toLowerCase();
+  const suggestedSizeChart = selectedCategoryText.match(/shoe|footwear|sandal|slipper/)
+    ? { title: "Footwear Size Chart", unit: "cm", rows: ["UK 6", "UK 7", "UK 8"].map((size) => ({ size, measurements: "Foot length: " })) }
+    : selectedCategoryText.match(/ring|jewellery|jewelry|bracelet|belt|cap|accessor/)
+    ? { title: "Accessory Size Chart", unit: "cm", rows: ["Small", "Medium", "Large"].map((size) => ({ size, measurements: "" })) }
+    : selectedCategoryText.match(/bedsheet|mattress|curtain|rug|home|living/)
+    ? { title: "Dimensions / Size Chart", unit: "inches", rows: ["Single", "Double", "Queen", "King"].map((size) => ({ size, measurements: "Length × width: " })) }
+    : { title: "Clothing Size Chart", unit: "inches", rows: ["XS", "S", "M", "L", "XL", "XXL"].map((size) => ({ size, measurements: "Chest/Bust: ; Waist: ; Hip: ; Length: " })) };
+
+  function applySuggestedSizeChart() {
+    setSizeChartTitle(suggestedSizeChart.title);
+    setSizeChartUnit(suggestedSizeChart.unit);
+    setSizeChartRows(
+      suggestedSizeChart.rows.map((row) => ({
+        id: makeId(),
+        size: row.size,
+        measurements: row.measurements,
+      }))
+    );
+    setSizeChartEnabled(true);
+  }
+
+  function addSizeChartRow() {
+    setSizeChartRows((current) => [
+      ...current,
+      { id: makeId(), size: "", measurements: "" },
+    ]);
+  }
+
+  function updateSizeChartRow(
+    id: string,
+    field: "size" | "measurements",
+    value: string
+  ) {
+    setSizeChartRows((current) =>
+      current.map((row) => (row.id === id ? { ...row, [field]: value } : row))
+    );
+  }
+
+  function removeSizeChartRow(id: string) {
+    setSizeChartRows((current) => current.filter((row) => row.id !== id));
+  }
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
@@ -581,6 +641,28 @@ export default function AdminNewProductPage() {
         throw new Error("Generate and enable at least one product variant.");
       }
 
+      const normalizedSizeChart = sizeChartEnabled
+        ? {
+            enabled: true,
+            title: sizeChartTitle.trim() || "Size Chart",
+            unit: sizeChartUnit,
+            rows: sizeChartRows
+              .filter((row) => row.size.trim() || row.measurements.trim())
+              .map((row) => ({
+                size: row.size.trim(),
+                measurements: row.measurements.trim(),
+              })),
+          }
+        : { enabled: false, title: "", unit: sizeChartUnit, rows: [] };
+
+      if (
+        sizeChartEnabled &&
+        (!normalizedSizeChart.rows.length ||
+          normalizedSizeChart.rows.some((row) => !row.size || !row.measurements))
+      ) {
+        throw new Error("For each size chart row, enter both the size and its measurements.");
+      }
+
       const uploadedImageUrls = await uploadProductImages();
       if (!uploadedImageUrls.length) {
         throw new Error("No product images were uploaded. Please select images and try again.");
@@ -624,6 +706,7 @@ export default function AdminNewProductPage() {
           priceUnit: wholesalePriceUnit,
           tiers: wholesaleEnabled ? wholesaleTiers : [],
         },
+        sizeChart: normalizedSizeChart,
         variantConfiguration: {
           enabled: variantEnabled,
           type: variantType,
@@ -1262,7 +1345,124 @@ export default function AdminNewProductPage() {
           </section>
 
           <section className={sectionClass}>
-            <h2 className="text-lg font-black">7. Inventory & MOQ</h2>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-black">7. Size Chart & Measurements</h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  Optional size guide for clothing, footwear, accessories, and dimension-based products.
+                  Use the actual measurements of this product.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={applySuggestedSizeChart}
+                className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+              >
+                Load category template
+              </button>
+            </div>
+
+            <label className="mt-5 flex items-center gap-3 text-sm font-bold">
+              <input
+                type="checkbox"
+                checked={sizeChartEnabled}
+                onChange={(event) => setSizeChartEnabled(event.target.checked)}
+                className="h-4 w-4"
+              />
+              Show size chart on the product page
+            </label>
+
+            {sizeChartEnabled && (
+              <div className="mt-5 space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Chart Title">
+                    <input
+                      value={sizeChartTitle}
+                      onChange={(event) => setSizeChartTitle(event.target.value)}
+                      placeholder="Clothing Size Chart"
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="Measurement Unit">
+                    <select
+                      value={sizeChartUnit}
+                      onChange={(event) => setSizeChartUnit(event.target.value)}
+                      className={inputClass}
+                    >
+                      <option value="inches">Inches</option>
+                      <option value="cm">Centimetres (cm)</option>
+                      <option value="mm">Millimetres (mm)</option>
+                      <option value="feet">Feet</option>
+                      <option value="UK/EU">UK / EU size system</option>
+                      <option value="age">Age / age group</option>
+                      <option value="custom">Other / custom</option>
+                    </select>
+                  </Field>
+                </div>
+
+                <div className="rounded-2xl border border-gray-200 p-4">
+                  <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm font-black">Size rows</p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Example: “Chest: 38; Waist: 32; Length: 27”. Include the unit in the chart settings.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addSizeChartRow}
+                      className="rounded-xl border border-gray-200 px-4 py-2 text-xs font-bold hover:border-black"
+                    >
+                      + Add size
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {sizeChartRows.map((row, index) => (
+                      <div
+                        key={row.id}
+                        className="grid gap-3 rounded-xl border border-gray-100 p-3 sm:grid-cols-[minmax(100px,0.7fr)_minmax(0,2fr)_auto]"
+                      >
+                        <Field label={`Size / option ${index + 1}`}>
+                          <input
+                            value={row.size}
+                            onChange={(event) => updateSizeChartRow(row.id, "size", event.target.value)}
+                            placeholder="M / UK 8 / Queen"
+                            className={inputClass}
+                          />
+                        </Field>
+                        <Field label="Measurements / dimensions">
+                          <input
+                            value={row.measurements}
+                            onChange={(event) => updateSizeChartRow(row.id, "measurements", event.target.value)}
+                            placeholder="Chest: 38; Waist: 32; Length: 27"
+                            className={inputClass}
+                          />
+                        </Field>
+                        <div className="flex items-end">
+                          <button
+                            type="button"
+                            onClick={() => removeSizeChartRow(row.id)}
+                            disabled={sizeChartRows.length <= 1}
+                            className="mb-1 rounded-lg px-3 py-2 text-xs font-bold text-red-600 disabled:opacity-40"
+                            aria-label={`Remove size chart row ${index + 1}`}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <p className="text-xs text-amber-700">
+                  Important: category templates are examples only. Confirm every measurement against the actual product before publishing.
+                </p>
+              </div>
+            )}
+          </section>
+
+          <section className={sectionClass}>
+            <h2 className="text-lg font-black">8. Inventory & MOQ</h2>
             <div className="mt-5 grid gap-5 sm:grid-cols-2">
               <Field label="Minimum Order Quantity (pieces)">
                 <input
@@ -1286,7 +1486,7 @@ export default function AdminNewProductPage() {
           </section>
 
           <section className={sectionClass}>
-            <h2 className="text-lg font-black">8. Publishing & Marketplace Labels</h2>
+            <h2 className="text-lg font-black">9. Publishing & Marketplace Labels</h2>
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <PublishOption
                 active={status === "active"}
