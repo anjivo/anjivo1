@@ -1,4 +1,3 @@
-
 "use client";
 
 import Link from "next/link";
@@ -42,17 +41,42 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   automotive: "Car & Bike Accessories",
 };
 
-function getCategoryIcon(category: Category): string {
-  const slug = category.slug.trim().toLowerCase();
+/** Create a consistent URL-safe slug when a category has no usable slug. */
+function getCategorySlug(category: Category): string {
+  const existingSlug = typeof category.slug === "string" ? category.slug.trim() : "";
+  const source = existingSlug || category.name.trim();
 
-  if (category.icon && CATEGORY_ICONS[slug] === undefined) {
-    // Preserve existing emoji icons if the category uses one.
-    if (/\p{Extended_Pictographic}/u.test(category.icon)) {
-      return category.icon;
+  return source
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Older/admin-created category records may use "Active", "ACTIVE", or may
+ * not have a status field at all. Only an explicitly non-active status hides
+ * a category; a missing status is treated as active for backward compatibility.
+ */
+function isCategoryVisible(category: Category): boolean {
+  const status = (category.status ?? "active").toString().trim().toLowerCase();
+  return status === "active" && category.name.trim() !== "";
+}
+
+function getCategoryIcon(category: Category, slug: string): string {
+  const existingIcon = typeof category.icon === "string" ? category.icon.trim() : "";
+
+  // Use a saved emoji when one exists, unless a standard icon is defined for
+  // this known category slug.
+  if (existingIcon && CATEGORY_ICONS[slug] === undefined) {
+    if (/\p{Extended_Pictographic}/u.test(existingIcon)) {
+      return existingIcon;
     }
   }
 
-  return CATEGORY_ICONS[slug] ?? "🛍️";
+  return CATEGORY_ICONS[slug] ?? (existingIcon || "🛍️");
 }
 
 export default function Categories() {
@@ -67,16 +91,20 @@ export default function Categories() {
       try {
         const result = await getCategories();
 
-        if (!cancelled) {
-          setCategories(
-            result.filter(
-              (category) =>
-                category.status === "active" &&
-                category.name.trim() !== ""
-            )
-          );
-          setLoadError(false);
-        }
+        if (cancelled) return;
+
+        // Keep valid categories visible even when legacy records have no
+        // status field or use a different capitalization for "active".
+        const visibleCategories = (Array.isArray(result) ? result : []).filter(
+          (category) =>
+            category &&
+            typeof category.name === "string" &&
+            isCategoryVisible(category) &&
+            getCategorySlug(category) !== ""
+        );
+
+        setCategories(visibleCategories);
+        setLoadError(false);
       } catch (error) {
         console.error("Homepage categories load error:", error);
 
@@ -149,16 +177,22 @@ export default function Categories() {
       ) : (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 lg:grid-cols-8">
           {categories.map((category) => {
-            const slug = category.slug.trim().toLowerCase();
-            const icon = getCategoryIcon(category);
+            const slug = getCategorySlug(category);
+            const icon = getCategoryIcon(category, slug);
             const description =
               CATEGORY_DESCRIPTIONS[slug] ??
-              category.description ??
-              "Explore Products";
+              (typeof category.description === "string" && category.description.trim()
+                ? category.description
+                : "Explore Products");
+            const productCount =
+              typeof category.productCount === "number" &&
+              Number.isFinite(category.productCount)
+                ? Math.max(0, category.productCount)
+                : 0;
 
             return (
               <Link
-                key={category.id}
+                key={category.id || slug}
                 href={`/categories/${encodeURIComponent(slug)}`}
                 className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 text-center transition duration-300 hover:-translate-y-1 hover:border-black hover:shadow-xl sm:p-5"
               >
@@ -179,7 +213,7 @@ export default function Categories() {
                 </p>
 
                 <p className="mt-1 text-[10px] font-semibold text-gray-500">
-                  {(category.productCount ?? 0).toLocaleString("en-IN")} Products
+                  {productCount.toLocaleString("en-IN")} Products
                 </p>
 
                 <div className="mt-2 text-[10px] font-bold text-gray-400 transition group-hover:text-black">
