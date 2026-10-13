@@ -1,75 +1,108 @@
-import Link from "next/link";
 
-const categories = [
-  {
-    icon: "👗",
-    name: "Fashion",
-    count: "10K+ Products",
-    description: "Clothing & Style",
-    href: "/categories/fashion",
-  },
-  {
-    icon: "💄",
-    name: "Beauty",
-    count: "5K+ Products",
-    description: "Beauty & Care",
-    href: "/categories/beauty",
-  },
-  {
-    icon: "🧸",
-    name: "Toys",
-    count: "3K+ Products",
-    description: "Kids & Toys",
-    href: "/categories/toys",
-  },
-  {
-    icon: "💍",
-    name: "Jewellery",
-    count: "4K+ Products",
-    description: "Fashion Jewellery",
-    href: "/categories/jewellery",
-  },
-  {
-    icon: "👟",
-    name: "Footwear",
-    count: "6K+ Products",
-    description: "Shoes & Sandals",
-    href: "/categories/footwear",
-  },
-  {
-    icon: "📱",
-    name: "Electronics",
-    count: "8K+ Products",
-    description: "Gadgets & More",
-    href: "/categories/electronics",
-  },
-  {
-    icon: "🏠",
-    name: "Home",
-    count: "7K+ Products",
-    description: "Home & Living",
-    href: "/categories/home",
-  },
-  {
-    icon: "🛒",
-    name: "Grocery",
-    count: "12K+ Products",
-    description: "Daily Essentials",
-    href: "/categories/grocery",
-  },
-];
+"use client";
+
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { getCategories } from "@/lib/categories";
+import type { Category } from "@/types/category";
+
+const CATEGORY_ICONS: Record<string, string> = {
+  fashion: "👗",
+  "mens-clothing": "👔",
+  "womens-clothing": "👚",
+  footwear: "👟",
+  "beauty-personal-care": "💄",
+  electronics: "📱",
+  "mobile-accessories": "🎧",
+  "home-kitchen": "🏠",
+  grocery: "🛒",
+  "toys-games": "🧸",
+  "bags-accessories": "👜",
+  jewellery: "💍",
+  "sports-fitness": "🏋️",
+  "books-stationery": "📚",
+  automotive: "🚗",
+};
+
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  fashion: "Clothing & Style",
+  "mens-clothing": "Men's Wear",
+  "womens-clothing": "Women's Wear",
+  footwear: "Shoes & Sandals",
+  "beauty-personal-care": "Beauty & Care",
+  electronics: "Gadgets & More",
+  "mobile-accessories": "Mobile Essentials",
+  "home-kitchen": "Home & Living",
+  grocery: "Everyday Essentials",
+  "toys-games": "Kids & Toys",
+  "bags-accessories": "Bags & Accessories",
+  jewellery: "Jewellery & Accessories",
+  "sports-fitness": "Sports & Fitness",
+  "books-stationery": "Books & Stationery",
+  automotive: "Car & Bike Accessories",
+};
+
+function getCategoryIcon(category: Category): string {
+  const slug = category.slug.trim().toLowerCase();
+
+  if (category.icon && CATEGORY_ICONS[slug] === undefined) {
+    // Preserve existing emoji icons if the category uses one.
+    if (/\p{Extended_Pictographic}/u.test(category.icon)) {
+      return category.icon;
+    }
+  }
+
+  return CATEGORY_ICONS[slug] ?? "🛍️";
+}
 
 export default function Categories() {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCategories() {
+      try {
+        const result = await getCategories();
+
+        if (!cancelled) {
+          setCategories(
+            result.filter(
+              (category) =>
+                category.status === "active" &&
+                category.name.trim() !== ""
+            )
+          );
+          setLoadError(false);
+        }
+      } catch (error) {
+        console.error("Homepage categories load error:", error);
+
+        if (!cancelled) {
+          setLoadError(true);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadCategories();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <section className="mx-auto max-w-7xl px-4 py-10 sm:py-12 md:py-14">
-
-      {/* ================= SECTION HEADER ================= */}
       <div className="mb-6 flex items-end justify-between gap-4">
-
         <div>
           <div className="flex items-center gap-2">
             <span className="h-1.5 w-1.5 rounded-full bg-black" />
-
             <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400">
               Explore
             </p>
@@ -90,55 +123,74 @@ export default function Categories() {
         >
           View All →
         </Link>
-
       </div>
 
-      {/* ================= CATEGORY GRID ================= */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 lg:grid-cols-8">
-
-        {categories.map((category) => (
-          <Link
-            key={category.name}
-            href={category.href}
-            className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 text-center transition duration-300 hover:-translate-y-1 hover:border-black hover:shadow-xl sm:p-5"
-          >
-
-            {/* Subtle background decoration */}
-            <div className="pointer-events-none absolute -right-5 -top-5 h-16 w-16 rounded-full bg-gray-50 transition duration-300 group-hover:scale-150" />
-
-            {/* ================= ICON ================= */}
-            <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 text-3xl transition duration-300 group-hover:scale-110 group-hover:bg-black group-hover:shadow-lg sm:h-[68px] sm:w-[68px] sm:text-[2rem]">
-              <span className="transition duration-300 group-hover:grayscale group-hover:brightness-0 group-hover:invert">
-                {category.icon}
-              </span>
+      {loading ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 lg:grid-cols-8">
+          {Array.from({ length: 8 }).map((_, index) => (
+            <div
+              key={index}
+              className="animate-pulse rounded-2xl border border-gray-200 bg-white p-4 sm:p-5"
+            >
+              <div className="mx-auto h-16 w-16 rounded-full bg-gray-100" />
+              <div className="mx-auto mt-4 h-3 w-20 rounded bg-gray-100" />
+              <div className="mx-auto mt-2 h-2 w-14 rounded bg-gray-100" />
             </div>
+          ))}
+        </div>
+      ) : loadError ? (
+        <p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          Categories could not be loaded. Please try refreshing the page.
+        </p>
+      ) : categories.length === 0 ? (
+        <p className="rounded-xl border border-gray-200 p-4 text-sm text-gray-600">
+          Categories will appear here soon.
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4 lg:grid-cols-8">
+          {categories.map((category) => {
+            const slug = category.slug.trim().toLowerCase();
+            const icon = getCategoryIcon(category);
+            const description =
+              CATEGORY_DESCRIPTIONS[slug] ??
+              category.description ??
+              "Explore Products";
 
-            {/* ================= NAME ================= */}
-            <h3 className="mt-3 text-sm font-black text-gray-900">
-              {category.name}
-            </h3>
+            return (
+              <Link
+                key={category.id}
+                href={`/categories/${encodeURIComponent(slug)}`}
+                className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 text-center transition duration-300 hover:-translate-y-1 hover:border-black hover:shadow-xl sm:p-5"
+              >
+                <div className="pointer-events-none absolute -right-5 -top-5 h-16 w-16 rounded-full bg-gray-50 transition duration-300 group-hover:scale-150" />
 
-            {/* ================= DESCRIPTION ================= */}
-            <p className="mt-1 hidden text-[10px] text-gray-400 sm:block">
-              {category.description}
-            </p>
+                <div className="relative mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-gray-100 text-3xl transition duration-300 group-hover:scale-110 group-hover:bg-black group-hover:shadow-lg sm:h-[68px] sm:w-[68px] sm:text-[2rem]">
+                  <span className="transition duration-300 group-hover:grayscale group-hover:brightness-0 group-hover:invert">
+                    {icon}
+                  </span>
+                </div>
 
-            {/* ================= PRODUCT COUNT ================= */}
-            <p className="mt-1 text-[10px] font-semibold text-gray-500">
-              {category.count}
-            </p>
+                <h3 className="mt-3 text-sm font-black text-gray-900">
+                  {category.name}
+                </h3>
 
-            {/* ================= MOBILE / HOVER ARROW ================= */}
-            <div className="mt-2 text-[10px] font-bold text-gray-400 transition group-hover:text-black">
-              Explore →
-            </div>
+                <p className="mt-1 hidden text-[10px] text-gray-400 sm:block">
+                  {description}
+                </p>
 
-          </Link>
-        ))}
+                <p className="mt-1 text-[10px] font-semibold text-gray-500">
+                  {category.productCount.toLocaleString("en-IN")} Products
+                </p>
 
-      </div>
+                <div className="mt-2 text-[10px] font-bold text-gray-400 transition group-hover:text-black">
+                  Explore →
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      )}
 
-      {/* ================= MOBILE VIEW ALL ================= */}
       <div className="mt-5 text-center sm:hidden">
         <Link
           href="/categories"
@@ -147,7 +199,6 @@ export default function Categories() {
           View All Categories →
         </Link>
       </div>
-
     </section>
   );
 }
