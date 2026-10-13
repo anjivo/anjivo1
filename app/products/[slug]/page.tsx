@@ -36,6 +36,16 @@ type PricingType =
   | "retail"
   | "wholesale";
 
+type SizeChartData = {
+  enabled?: boolean;
+  title?: string;
+  unit?: string;
+  rows?: Array<{
+    size?: string;
+    measurements?: string;
+  }>;
+};
+
 export default function ProductDetailsPage({
   params,
 }: ProductPageProps) {
@@ -754,6 +764,22 @@ export default function ProductDetailsPage({
   const mainImage =
     product.images[0];
 
+  const sizeChart = (
+    product as Product & { sizeChart?: SizeChartData }
+  ).sizeChart;
+
+  const visibleSizeChartRows = Array.isArray(sizeChart?.rows)
+    ? sizeChart.rows.filter(
+        (row) =>
+          Boolean(row?.size?.trim()) &&
+          Boolean(row?.measurements?.trim())
+      )
+    : [];
+
+  const showSizeChart =
+    sizeChart?.enabled === true &&
+    visibleSizeChartRows.length > 0;
+
   /* =======================================================
      MAIN
   ======================================================= */
@@ -908,6 +934,79 @@ export default function ProductDetailsPage({
                 <p className="mt-5 text-sm leading-6 text-gray-600">
                   {product.description}
                 </p>
+              )}
+
+              {/* =================================================
+                  SIZE CHART
+              ================================================= */}
+
+              {showSizeChart && (
+                <section
+                  aria-labelledby="product-size-chart-heading"
+                  className="mt-5 overflow-hidden rounded-2xl border border-gray-200 bg-white"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 bg-gray-50 px-4 py-3">
+                    <h2
+                      id="product-size-chart-heading"
+                      className="text-sm font-black"
+                    >
+                      {sizeChart.title?.trim() || "Size Chart"}
+                    </h2>
+                    {sizeChart.unit?.trim() && (
+                      <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-bold text-gray-500">
+                        Measurements in {sizeChart.unit}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[280px] border-collapse text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-gray-100 bg-white">
+                          <th
+                            scope="col"
+                            className="px-4 py-3 font-black text-gray-500"
+                          >
+                            Size
+                          </th>
+                          <th
+                            scope="col"
+                            className="px-4 py-3 font-black text-gray-500"
+                          >
+                            Measurements
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleSizeChartRows.map((row, index) => (
+                          <tr
+                            key={`${row.size}-${index}`}
+                            className={
+                              index < visibleSizeChartRows.length - 1
+                                ? "border-b border-gray-100"
+                                : ""
+                            }
+                          >
+                            <th
+                              scope="row"
+                              className="whitespace-nowrap px-4 py-3 font-black text-gray-900"
+                            >
+                              {row.size}
+                            </th>
+                            <td className="px-4 py-3 leading-5 text-gray-600">
+                              {row.measurements}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="px-4 py-3 text-[10px] leading-4 text-gray-500">
+                    Please check these measurements before selecting your size.
+                    Measurements are provided by the seller.
+                  </p>
+                </section>
               )}
 
               {/* =================================================
