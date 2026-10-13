@@ -93,6 +93,14 @@ export default function AdminNewProductPage() {
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [categoryLoadError, setCategoryLoadError] = useState("");
 
+  // Sub-categories are loaded from the same categories collection using parentId.
+  // The Category type may not declare parentId yet, so read it safely.
+  const subcategories = categories.filter((category) => {
+    const parentId = (category as Category & { parentId?: string }).parentId;
+    return String(parentId ?? "") === categoryId &&
+      String(category.status ?? "active").toLowerCase() === "active";
+  });
+
   // Basic information
   const [name, setName] = useState<string>("");
   const [slug, setSlug] = useState("");
@@ -100,6 +108,8 @@ export default function AdminNewProductPage() {
   const [brand, setBrand] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [categoryName, setCategoryName] = useState("");
+  const [subcategoryId, setSubcategoryId] = useState("");
+  const [subcategoryName, setSubcategoryName] = useState("");
   const [tagsText, setTagsText] = useState("");
 
   // Product images are selected locally, previewed, and uploaded to Firebase Storage on submit.
@@ -331,6 +341,14 @@ export default function AdminNewProductPage() {
     setCategoryId(value);
     const selected = categories.find((item) => item.id === value);
     setCategoryName(selected?.name ?? "");
+    setSubcategoryId("");
+    setSubcategoryName("");
+  }
+
+  function handleSubcategoryChange(value: string) {
+    setSubcategoryId(value);
+    const selected = subcategories.find((item) => item.id === value);
+    setSubcategoryName(selected?.name ?? "");
   }
 
   function updateTier(index: number, field: keyof Tier, value: string) {
@@ -581,6 +599,8 @@ export default function AdminNewProductPage() {
         brand: brand.trim(),
         categoryId,
         categoryName,
+        subcategoryId: subcategoryId || null,
+        subcategoryName: subcategoryName || "",
         sellerId: user.uid,
         sellerName: "ANJIVO Official",
         sellerVerified: true,
@@ -765,6 +785,30 @@ export default function AdminNewProductPage() {
                     <p className="text-green-700">{categories.length} active categor{categories.length === 1 ? "y" : "ies"} available.</p>
                   ) : null}
                 </div>
+              </Field>
+              <Field label="Sub-category">
+                <select
+                  value={subcategoryId}
+                  disabled={!categoryId || subcategories.length === 0}
+                  onChange={(e) => handleSubcategoryChange(e.target.value)}
+                  className={`${inputClass} disabled:cursor-not-allowed disabled:bg-gray-100`}
+                >
+                  <option value="">
+                    {!categoryId
+                      ? "First select a category"
+                      : subcategories.length === 0
+                      ? "No sub-categories available"
+                      : "Select sub-category"}
+                  </option>
+                  {subcategories.map((subcategory) => (
+                    <option key={subcategory.id} value={subcategory.id}>
+                      {subcategory.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-xs text-gray-500">
+                  {subcategories.length} sub-categor{subcategories.length === 1 ? "y" : "ies"} available.
+                </p>
               </Field>
             </div>
             <Field label="Description">
