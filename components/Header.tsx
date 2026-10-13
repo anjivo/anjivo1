@@ -6,28 +6,12 @@ import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
-
-const categories = [
-  "Fashion",
-  "Beauty",
-  "Toys",
-  "Jewellery",
-  "Footwear",
-  "Electronics",
-  "Home & Living",
-  "Grocery",
-  "New Arrivals",
-];
-
-function getCategorySlug(category: string) {
-  return category
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/\s+/g, "-");
-}
+import { getCategories } from "@/lib/categories";
+import type { Category } from "@/types/category";
 
 export default function Header() {
   const [search, setSearch] = useState("");
+  const [categories, setCategories] = useState<Category[]>([]);
   const [user, setUser] = useState(auth.currentUser);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -38,6 +22,34 @@ export default function Header() {
     });
 
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadCategories() {
+      try {
+        const result = await getCategories();
+        if (!cancelled) {
+          setCategories(
+            result.filter(
+              (category) =>
+                category.status === "active" &&
+                category.name.trim() !== "" &&
+                category.slug.trim() !== ""
+            )
+          );
+        }
+      } catch (error) {
+        console.error("Header categories load error:", error);
+      }
+    }
+
+    void loadCategories();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function handleSearch() {
@@ -383,33 +395,24 @@ export default function Header() {
 
           <span className="h-4 w-px shrink-0 bg-gray-200" />
 
-          {categories.map((category) => {
-            const slug = getCategorySlug(category);
+          {categories.map((category) => (
+            <Link
+              key={category.id}
+              href={`/products?category=${encodeURIComponent(
+                category.slug.trim().toLowerCase()
+              )}`}
+              className="shrink-0 text-gray-700 transition hover:text-black"
+            >
+              {category.name}
+            </Link>
+          ))}
 
-            if (category === "New Arrivals") {
-              return (
-                <Link
-                  key={category}
-                  href="/products?sort=new"
-                  className="shrink-0 text-gray-700 transition hover:text-black"
-                >
-                  {category}
-                </Link>
-              );
-            }
-
-            return (
-              <Link
-                key={category}
-                href={`/products?category=${encodeURIComponent(
-                  slug
-                )}`}
-                className="shrink-0 text-gray-700 transition hover:text-black"
-              >
-                {category}
-              </Link>
-            );
-          })}
+          <Link
+            href="/products?sort=new"
+            className="shrink-0 text-gray-700 transition hover:text-black"
+          >
+            New Arrivals
+          </Link>
 
           <Link
             href="/products?deal=true"
