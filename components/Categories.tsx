@@ -179,7 +179,7 @@ export default function Categories() {
                 </p>
 
                 <p className="mt-1 text-[10px] font-semibold text-gray-500">
-                  {category.productCount.toLocaleString("en-IN")} Products
+                  {(category.productCount ?? 0).toLocaleString("en-IN")} Products
                 </p>
 
                 <div className="mt-2 text-[10px] font-bold text-gray-400 transition group-hover:text-black">
