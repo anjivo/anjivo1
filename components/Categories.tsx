@@ -1,3 +1,4 @@
+
 "use client";
 
 import Link from "next/link";
@@ -41,10 +42,15 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   automotive: "Car & Bike Accessories",
 };
 
-/** Create a consistent URL-safe slug when a category has no usable slug. */
+/** Create a URL-safe slug for matching category icons and descriptions. */
 function getCategorySlug(category: Category): string {
-  const existingSlug = typeof category.slug === "string" ? category.slug.trim() : "";
-  const source = existingSlug || category.name.trim();
+  const existingSlug =
+    typeof category.slug === "string" ? category.slug.trim() : "";
+
+  const name =
+    typeof category.name === "string" ? category.name.trim() : "";
+
+  const source = existingSlug || name;
 
   return source
     .toLowerCase()
@@ -55,28 +61,29 @@ function getCategorySlug(category: Category): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/**
- * Older/admin-created category records may use "Active", "ACTIVE", or may
- * not have a status field at all. Only an explicitly non-active status hides
- * a category; a missing status is treated as active for backward compatibility.
- */
+/** Keep active categories visible, including legacy records without status. */
 function isCategoryVisible(category: Category): boolean {
-  const status = (category.status ?? "active").toString().trim().toLowerCase();
+  const status = (category.status ?? "active")
+    .toString()
+    .trim()
+    .toLowerCase();
+
   return status === "active" && category.name.trim() !== "";
 }
 
 function getCategoryIcon(category: Category, slug: string): string {
-  const existingIcon = typeof category.icon === "string" ? category.icon.trim() : "";
+  const existingIcon =
+    typeof category.icon === "string" ? category.icon.trim() : "";
 
-  // Use a saved emoji when one exists, unless a standard icon is defined for
-  // this known category slug.
-  if (existingIcon && CATEGORY_ICONS[slug] === undefined) {
-    if (/\p{Extended_Pictographic}/u.test(existingIcon)) {
-      return existingIcon;
-    }
+  if (CATEGORY_ICONS[slug]) {
+    return CATEGORY_ICONS[slug];
   }
 
-  return CATEGORY_ICONS[slug] ?? (existingIcon || "🛍️");
+  if (existingIcon && /\p{Extended_Pictographic}/u.test(existingIcon)) {
+    return existingIcon;
+  }
+
+  return "🛍️";
 }
 
 export default function Categories() {
@@ -93,11 +100,13 @@ export default function Categories() {
 
         if (cancelled) return;
 
-        // Keep valid categories visible even when legacy records have no
-        // status field or use a different capitalization for "active".
-        const visibleCategories = (Array.isArray(result) ? result : []).filter(
+        const visibleCategories = (
+          Array.isArray(result) ? result : []
+        ).filter(
           (category) =>
             category &&
+            typeof category.id === "string" &&
+            category.id.trim() !== "" &&
             typeof category.name === "string" &&
             isCategoryVisible(category) &&
             getCategorySlug(category) !== ""
@@ -131,6 +140,7 @@ export default function Categories() {
         <div>
           <div className="flex items-center gap-2">
             <span className="h-1.5 w-1.5 rounded-full bg-black" />
+
             <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-gray-400">
               Explore
             </p>
@@ -179,21 +189,29 @@ export default function Categories() {
           {categories.map((category) => {
             const slug = getCategorySlug(category);
             const icon = getCategoryIcon(category, slug);
+
             const description =
               CATEGORY_DESCRIPTIONS[slug] ??
-              (typeof category.description === "string" && category.description.trim()
+              (typeof category.description === "string" &&
+              category.description.trim()
                 ? category.description
                 : "Explore Products");
+
             const productCount =
               typeof category.productCount === "number" &&
               Number.isFinite(category.productCount)
                 ? Math.max(0, category.productCount)
                 : 0;
 
+            // Products page filters by category ID, not category slug.
+            const categoryHref = `/products?category=${encodeURIComponent(
+              category.id
+            )}`;
+
             return (
               <Link
-                key={category.id || slug}
-               href={`/products?category=${encodeURIComponent(category.id)}`}
+                key={category.id}
+                href={categoryHref}
                 className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 text-center transition duration-300 hover:-translate-y-1 hover:border-black hover:shadow-xl sm:p-5"
               >
                 <div className="pointer-events-none absolute -right-5 -top-5 h-16 w-16 rounded-full bg-gray-50 transition duration-300 group-hover:scale-150" />
