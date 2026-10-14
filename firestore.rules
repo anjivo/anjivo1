@@ -270,7 +270,7 @@ service cloud.firestore {
           && resource.data.sellerId == request.auth.uid
         );
 
-     allow create: if (
+      allow create: if (
     isAdmin()
     && request.resource.data.sellerId == request.auth.uid
     && request.resource.data.sellerName == "ANJIVO Official"
@@ -313,8 +313,11 @@ service cloud.firestore {
 
     match /categories/{categoryId} {
 
-      allow read: if resource.data.status == "active"
-        || isAdmin();
+      // Category names, slugs, icons and descriptions are public catalog data.
+      // Public reads are needed because the client currently fetches the
+      // categories collection and filters active categories in application code.
+      // Only authorized admins can create, update or delete categories.
+      allow read: if true;
 
       allow create, update, delete: if isAdmin();
     }
