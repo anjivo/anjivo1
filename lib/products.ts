@@ -14,7 +14,8 @@ import type {
   SetCompositionItem,
   SetVariantType,
   ProductSellingMode,
-  WholesaleUnit,
+  ProductSizeChart,
+  ProductSizeChartRow,
 } from "@/types/product";
 
 const productsCollection = collection(
@@ -68,6 +69,50 @@ function booleanValue(
   }
 
   return fallback;
+}
+
+/* =========================================
+   SIZE CHART MAPPER
+========================================= */
+
+function mapSizeChart(
+  value: unknown
+): ProductSizeChart | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const source = value as Record<string, unknown>;
+  const rawRows = Array.isArray(source.rows) ? source.rows : [];
+
+  const rows: ProductSizeChartRow[] = rawRows
+    .map((row) => {
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        return null;
+      }
+
+      const item = row as Record<string, unknown>;
+      const size = stringValue(item.size).trim();
+      const measurements = stringValue(item.measurements).trim();
+
+      if (!size || !measurements) {
+        return null;
+      }
+
+      return { size, measurements };
+    })
+    .filter((row): row is ProductSizeChartRow => row !== null);
+
+  return {
+    enabled: booleanValue(source.enabled, false),
+    ...(stringValue(source.title).trim()
+      ? { title: stringValue(source.title).trim() }
+      : {}),
+    ...(stringValue(source.unit).trim()
+      ? { unit: stringValue(source.unit).trim() }
+      : {}),
+    rows,
+  };
 }
 
 /* =========================================
@@ -453,6 +498,8 @@ function mapProduct(
       wholesaleConfiguration
     );
 
+  const sizeChart = mapSizeChart(data.sizeChart);
+
   return {
     id,
 
@@ -535,6 +582,8 @@ function mapProduct(
             .filter(Boolean)
         : [],
 
+    ...(sizeChart ? { sizeChart } : {}),
+
     mrp:
       numberValue(
         data.mrp,
@@ -601,14 +650,15 @@ function mapProduct(
         : undefined,
 
     status:
-      data.status ===
-        "draft" ||
-      data.status ===
-        "out_of_stock" ||
-      data.status ===
-        "blocked"
+      data.status === "draft" ||
+      data.status === "out_of_stock" ||
+      data.status === "blocked"
         ? data.status
-        : "active",
+        : typeof data.status === "string" &&
+            data.status.trim() !== "" &&
+            data.status.trim().toLowerCase() !== "active"
+          ? "blocked"
+          : "active",
 
     featured:
       data.featured !==
