@@ -193,7 +193,7 @@ export default function Categories() {
             return (
               <Link
                 key={category.id || slug}
-                href={`/categories/${encodeURIComponent(slug)}`}
+               href={`/products?category=${encodeURIComponent(category.id)}`}
                 className="group relative overflow-hidden rounded-2xl border border-gray-200 bg-white p-4 text-center transition duration-300 hover:-translate-y-1 hover:border-black hover:shadow-xl sm:p-5"
               >
                 <div className="pointer-events-none absolute -right-5 -top-5 h-16 w-16 rounded-full bg-gray-50 transition duration-300 group-hover:scale-150" />
