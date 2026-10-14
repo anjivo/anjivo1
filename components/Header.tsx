@@ -15,6 +15,18 @@ export default function Header() {
   const [user, setUser] = useState(auth.currentUser);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [hoveredCategoryId, setHoveredCategoryId] = useState<string | null>(null);
+  const [mobileExpandedCategoryId, setMobileExpandedCategoryId] = useState<string | null>(null);
+
+  const parentCategories = categories.filter((category) => !category.parentId);
+
+  function getSubcategoriesFor(parentId: string) {
+    return categories.filter((category) => category.parentId === parentId);
+  }
+
+  function getProductsHref(categoryId: string) {
+    return `/products?category=${encodeURIComponent(categoryId)}`;
+  }
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -379,12 +391,10 @@ export default function Header() {
       </div>
 
       {/* =====================================================
-          CATEGORY NAVIGATION
+          DESKTOP CATEGORY MEGA MENU
       ===================================================== */}
-      <div className="border-b border-gray-100 bg-white">
-        <nav className="mx-auto flex max-w-7xl items-center gap-4 overflow-x-auto px-3 py-2.5 text-xs font-semibold whitespace-nowrap scrollbar-hide sm:gap-5 sm:px-4">
-
-          {/* All Categories */}
+      <div className="relative hidden border-b border-gray-100 bg-white md:block">
+        <nav className="mx-auto flex max-w-7xl items-center gap-5 px-4 py-2.5 text-xs font-semibold whitespace-nowrap">
           <Link
             href="/categories"
             className="flex shrink-0 items-center gap-1.5 font-black text-gray-900 transition hover:text-gray-500"
@@ -395,17 +405,81 @@ export default function Header() {
 
           <span className="h-4 w-px shrink-0 bg-gray-200" />
 
-          {categories.map((category) => (
-            <Link
-              key={category.id}
-              href={`/products?category=${encodeURIComponent(
-                category.slug.trim().toLowerCase()
-              )}`}
-              className="shrink-0 text-gray-700 transition hover:text-black"
-            >
-              {category.name}
-            </Link>
-          ))}
+          {parentCategories.map((category) => {
+            const subcategories = getSubcategoriesFor(category.id);
+            const isOpen = hoveredCategoryId === category.id;
+
+            return (
+              <div
+                key={category.id}
+                className="static"
+                onMouseEnter={() => setHoveredCategoryId(category.id)}
+                onMouseLeave={() => setHoveredCategoryId(null)}
+              >
+                {subcategories.length > 0 ? (
+                  <button
+                    type="button"
+                    aria-expanded={isOpen}
+                    onFocus={() => setHoveredCategoryId(category.id)}
+                    className={`flex items-center gap-1 py-1 transition ${isOpen ? "text-black" : "text-gray-700 hover:text-black"}`}
+                  >
+                    {category.name}
+                    <span className="text-[9px]">⌄</span>
+                  </button>
+                ) : (
+                  <Link
+                    href={getProductsHref(category.id)}
+                    className="shrink-0 text-gray-700 transition hover:text-black"
+                  >
+                    {category.name}
+                  </Link>
+                )}
+
+                {subcategories.length > 0 && isOpen && (
+                  <div className="absolute left-0 right-0 top-full z-[70] border-t border-gray-100 bg-white shadow-2xl">
+                    <div className="mx-auto grid max-w-7xl grid-cols-4 gap-6 px-6 py-6">
+                      <div className="col-span-1 rounded-2xl bg-gray-50 p-5">
+                        <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-gray-400">
+                          Explore Category
+                        </p>
+                        <h3 className="mt-2 text-xl font-black text-gray-950">
+                          {category.name}
+                        </h3>
+                        <p className="mt-2 text-sm text-gray-500">
+                          Explore products across {category.name.toLowerCase()}.
+                        </p>
+                        <Link
+                          href={getProductsHref(category.id)}
+                          onClick={() => setHoveredCategoryId(null)}
+                          className="mt-5 inline-flex rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white transition hover:bg-gray-800"
+                        >
+                          View All {category.name} →
+                        </Link>
+                      </div>
+
+                      <div className="col-span-3 grid grid-cols-3 gap-x-6 gap-y-2">
+                        {subcategories.map((subcategory) => (
+                          <Link
+                            key={subcategory.id}
+                            href={getProductsHref(subcategory.id)}
+                            onClick={() => setHoveredCategoryId(null)}
+                            className="group rounded-xl p-3 transition hover:bg-gray-50"
+                          >
+                            <span className="block text-sm font-bold text-gray-800 group-hover:text-black">
+                              {subcategory.name}
+                            </span>
+                            <span className="mt-1 block text-xs text-gray-400">
+                              Explore products →
+                            </span>
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
 
           <Link
             href="/products?sort=new"
@@ -428,6 +502,86 @@ export default function Header() {
             🏪 Wholesale
           </Link>
         </nav>
+      </div>
+
+      {/* =====================================================
+          MOBILE CATEGORY ACCORDION
+      ===================================================== */}
+      <div className="border-b border-gray-100 bg-white md:hidden">
+        <div className="flex items-center gap-2 overflow-x-auto px-3 py-2.5 scrollbar-hide">
+          <Link
+            href="/categories"
+            className="shrink-0 rounded-full bg-black px-3 py-2 text-[11px] font-bold text-white"
+          >
+            All
+          </Link>
+          {parentCategories.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              aria-expanded={mobileExpandedCategoryId === category.id}
+              onClick={() =>
+                setMobileExpandedCategoryId((current) =>
+                  current === category.id ? null : category.id
+                )
+              }
+              className={`flex shrink-0 items-center gap-1 rounded-full border px-3 py-2 text-[11px] font-bold transition ${mobileExpandedCategoryId === category.id ? "border-black bg-gray-100 text-black" : "border-gray-200 bg-white text-gray-700"}`}
+            >
+              {category.name}
+              <span>{mobileExpandedCategoryId === category.id ? "⌃" : "⌄"}</span>
+            </button>
+          ))}
+        </div>
+
+        {mobileExpandedCategoryId && (
+          <div className="border-t border-gray-100 bg-gray-50 px-3 py-3">
+            {(() => {
+              const selectedCategory = parentCategories.find(
+                (category) => category.id === mobileExpandedCategoryId
+              );
+              const subcategories = getSubcategoriesFor(mobileExpandedCategoryId);
+
+              if (!selectedCategory) return null;
+
+              return (
+                <>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <p className="text-xs font-black text-gray-900">
+                      {selectedCategory.name} Subcategories
+                    </p>
+                    <Link
+                      href={getProductsHref(selectedCategory.id)}
+                      onClick={() => setMobileExpandedCategoryId(null)}
+                      className="text-[10px] font-bold text-gray-600 underline"
+                    >
+                      View all
+                    </Link>
+                  </div>
+
+                  {subcategories.length > 0 ? (
+                    <div className="grid grid-cols-2 gap-2">
+                      {subcategories.map((subcategory) => (
+                        <Link
+                          key={subcategory.id}
+                          href={getProductsHref(subcategory.id)}
+                          onClick={() => setMobileExpandedCategoryId(null)}
+                          className="flex min-h-11 items-center justify-between gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-xs font-semibold text-gray-800 transition active:bg-gray-100"
+                        >
+                          <span>{subcategory.name}</span>
+                          <span className="text-gray-400">→</span>
+                        </Link>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="rounded-xl bg-white p-3 text-xs text-gray-500">
+                      No subcategories yet. View all products in {selectedCategory.name}.
+                    </p>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+        )}
       </div>
 
       {/* =====================================================
