@@ -157,7 +157,7 @@ export async function initializeDefaultCategories(): Promise<void> {
   });
 }
 
-async function ensureDefaultSubcategories(
+export async function ensureDefaultSubcategories(
   allCategories: Category[]
 ): Promise<void> {
   const parentBySlug = new Map(
@@ -272,18 +272,10 @@ export async function createCategory(
 }
 
 export async function getCategories(): Promise<Category[]> {
-  await initializeDefaultCategories();
-
-  const firstSnapshot = await getDocs(categoriesCollection);
-  const allBeforeSubcategories = firstSnapshot.docs.map((categoryDoc) =>
-    mapCategory(
-      categoryDoc.id,
-      categoryDoc.data() as Record<string, unknown>
-    )
-  );
-
-  await ensureDefaultSubcategories(allBeforeSubcategories);
-
+  // This function is intentionally read-only. It is called by the public
+  // homepage and must not try to create/update documents during page loading.
+  // Run initializeDefaultCategories() and ensureDefaultSubcategories() from
+  // an admin-only setup action when seeding is actually required.
   const snapshot = await getDocs(categoriesCollection);
 
   return snapshot.docs
@@ -293,7 +285,7 @@ export async function getCategories(): Promise<Category[]> {
         categoryDoc.data() as Record<string, unknown>
       )
     )
-    .filter((category) => category.status === "active")
+    .filter((category) => category.status === "active" && category.name.trim() !== "")
     .sort(
       (a, b) =>
         (a.sortOrder ?? 0) - (b.sortOrder ?? 0) ||
