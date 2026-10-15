@@ -1,4 +1,4 @@
-```ts
+
 import { NextRequest, NextResponse } from "next/server";
 import sgMail from "@sendgrid/mail";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
@@ -184,4 +184,3 @@ export async function POST(request: NextRequest) {
     return jsonError("Something went wrong while sending the OTP.", 500);
   }
 }
-```
