@@ -309,6 +309,43 @@ export function getCartItemKey(
 }
 
 /* =========================================================
+   REMOVE UNDEFINED VALUES BEFORE FIRESTORE WRITES
+========================================================= */
+
+/**
+ * Firestore rejects `undefined`, including inside nested objects
+ * and arrays. Cart data is plain JSON-like data, so remove undefined
+ * object properties recursively and omit undefined array entries.
+ */
+function removeUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry) => entry !== undefined)
+      .map((entry) => removeUndefinedDeep(entry)) as T;
+  }
+
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    const result: Record<string, unknown> = {};
+
+    for (const [key, entry] of Object.entries(
+      value as Record<string, unknown>
+    )) {
+      if (entry !== undefined) {
+        result[key] = removeUndefinedDeep(entry);
+      }
+    }
+
+    return result as T;
+  }
+
+  return value;
+}
+
+/* =========================================================
    NORMALIZE CART ITEM
 ========================================================= */
 
@@ -581,8 +618,13 @@ export async function saveCart(
       return normalized;
     });
 
+  // Final safeguard: remove undefined fields at every nesting level
+  // (for example wholesaleTiers[].maxQuantity and SET metadata).
+  const firestoreSafeItems =
+    removeUndefinedDeep(normalizedItems);
+
   const subtotal =
-    normalizedItems.reduce(
+    firestoreSafeItems.reduce(
       (total, item) =>
         total +
         item.selectedPrice *
@@ -600,7 +642,7 @@ export async function saveCart(
       userId,
 
       items:
-        normalizedItems,
+        firestoreSafeItems,
 
       subtotal,
 
