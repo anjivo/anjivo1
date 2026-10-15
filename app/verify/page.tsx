@@ -1,25 +1,90 @@
-"use client";
+ "use client";
 
 import Image from "next/image";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged, type User } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
+import {
+  onAuthStateChanged,
+  type User,
+  RecaptchaVerifier,
+  linkWithPhoneNumber,
+  type ConfirmationResult,
+} from "firebase/auth";
+import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 
-type VerificationStatus = { emailVerified: boolean; phoneVerified: boolean };
+type VerificationStatus = {
+  emailVerified: boolean;
+  phoneVerified: boolean;
+};
+
+function normalizePhoneNumber(value: string): string {
+  const trimmed = value.trim();
+  const digits = trimmed.replace(/\D/g, "");
+
+  if (trimmed.startsWith("+")) {
+    return `+${digits}`;
+  }
+
+  // Default to India for a 10-digit number or 91 + 10-digit number.
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+
+  throw new Error("Enter a valid phone number with country code, e.g. +919876543210.");
+}
+
+function firebaseErrorMessage(error: unknown): string {
+  const code =
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : "";
+
+  switch (code) {
+    case "auth/invalid-phone-number":
+      return "Phone number is invalid. Use a number with country code, e.g. +919876543210.";
+    case "auth/too-many-requests":
+      return "Too many attempts. Please wait and try again later.";
+    case "auth/quota-exceeded":
+      return "SMS quota has been exceeded. Please try again later.";
+    case "auth/captcha-check-failed":
+    case "auth/invalid-app-credential":
+      return "reCAPTCHA verification failed. Refresh the page and try again.";
+    case "auth/credential-already-in-use":
+      return "This phone number is already linked to another ANJIVO account.";
+    case "auth/provider-already-linked":
+      return "A phone number is already linked to this account. Contact support if it is incorrect.";
+    case "auth/code-expired":
+      return "OTP expired. Please request a new code.";
+    case "auth/invalid-verification-code":
+      return "Incorrect OTP. Please check the code and try again.";
+    default:
+      return error instanceof Error ? error.message : "Something went wrong. Please try again.";
+  }
+}
 
 export default function VerifyPage() {
   const router = useRouter();
+  const recaptchaRef = useRef<RecaptchaVerifier | null>(null);
+  const confirmationRef = useRef<ConfirmationResult | null>(null);
+
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [verifying, setVerifying] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [verifyingEmail, setVerifyingEmail] = useState(false);
+  const [sendingPhone, setSendingPhone] = useState(false);
+  const [verifyingPhone, setVerifyingPhone] = useState(false);
+
   const [userEmail, setUserEmail] = useState("");
   const [userPhone, setUserPhone] = useState("");
-  const [otp, setOtp] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
+  const [phoneInput, setPhoneInput] = useState("");
+  const [emailOtp, setEmailOtp] = useState("");
+  const [phoneOtp, setPhoneOtp] = useState("");
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [phoneOtpSent, setPhoneOtpSent] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState<VerificationStatus>({
@@ -33,9 +98,19 @@ export default function VerifyPage() {
     const data = userSnap.exists() ? userSnap.data() : {};
     const next = {
       emailVerified: user.emailVerified || data.emailVerified === true,
-      phoneVerified: data.phoneVerified === true,
+      // Firebase Auth is the authoritative source that the phone credential was verified.
+      phoneVerified:
+        user.phoneNumber !== null ||
+        data.phoneVerified === true,
     };
-    setUserPhone(typeof data.phone === "string" ? data.phone : "");
+
+    const savedPhone =
+      typeof data.phone === "string" && data.phone.trim()
+        ? data.phone.trim()
+        : user.phoneNumber || "";
+
+    setUserPhone(savedPhone);
+    setPhoneInput(savedPhone);
     setStatus(next);
     return next;
   }, []);
@@ -46,6 +121,7 @@ export default function VerifyPage() {
         router.replace("/login");
         return;
       }
+
       try {
         await loadStatus(user);
       } catch (e) {
@@ -55,7 +131,12 @@ export default function VerifyPage() {
         setLoading(false);
       }
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribe();
+      recaptchaRef.current?.clear();
+      recaptchaRef.current = null;
+    };
   }, [loadStatus, router]);
 
   async function getToken() {
@@ -65,7 +146,7 @@ export default function VerifyPage() {
   }
 
   async function sendEmailOtp() {
-    setSending(true);
+    setSendingEmail(true);
     setError("");
     setMessage("");
     try {
@@ -75,18 +156,20 @@ export default function VerifyPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not send OTP.");
-      setOtpSent(true);
+      if (!response.ok) {
+        throw new Error(result.message || result.error || "Could not send OTP.");
+      }
+      setEmailOtpSent(true);
       setMessage(result.message || "OTP sent. Check your inbox and spam folder.");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not send OTP.");
     } finally {
-      setSending(false);
+      setSendingEmail(false);
     }
   }
 
   async function verifyEmailOtp() {
-    setVerifying(true);
+    setVerifyingEmail(true);
     setError("");
     setMessage("");
     try {
@@ -97,12 +180,15 @@ export default function VerifyPage() {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ otp }),
+        body: JSON.stringify({ otp: emailOtp }),
       });
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not verify OTP.");
-      setOtp("");
-      setOtpSent(false);
+      if (!response.ok) {
+        throw new Error(result.message || result.error || "Could not verify OTP.");
+      }
+
+      setEmailOtp("");
+      setEmailOtpSent(false);
       const user = auth.currentUser;
       if (user) {
         await user.reload();
@@ -115,7 +201,122 @@ export default function VerifyPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not verify OTP.");
     } finally {
-      setVerifying(false);
+      setVerifyingEmail(false);
+    }
+  }
+
+  function getRecaptchaVerifier() {
+    if (typeof window === "undefined") {
+      throw new Error("Phone verification can only run in the browser.");
+    }
+
+    if (!recaptchaRef.current) {
+      recaptchaRef.current = new RecaptchaVerifier(auth, "recaptcha-container", {
+        size: "invisible",
+        callback: () => {
+          // Firebase proceeds with the SMS request after reCAPTCHA succeeds.
+        },
+        "expired-callback": () => {
+          setError("reCAPTCHA expired. Please send the OTP again.");
+        },
+      });
+    }
+
+    return recaptchaRef.current;
+  }
+
+  async function sendPhoneOtp() {
+    setSendingPhone(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error("Please sign in again.");
+      if (user.phoneNumber) {
+        const next = await loadStatus(user);
+        if (next.phoneVerified) {
+          setMessage("This mobile number is already verified.");
+          return;
+        }
+      }
+
+      const normalizedPhone = normalizePhoneNumber(phoneInput);
+      const verifier = getRecaptchaVerifier();
+      await verifier.render();
+
+      // Link phone to the existing email/password account rather than creating a second account.
+      confirmationRef.current = await linkWithPhoneNumber(
+        user,
+        normalizedPhone,
+        verifier
+      );
+
+      setPhoneInput(normalizedPhone);
+      setPhoneOtpSent(true);
+      setPhoneOtp("");
+      setMessage(`OTP sent to ${normalizedPhone}.`);
+    } catch (e) {
+      console.error("Send mobile OTP failed:", e);
+      recaptchaRef.current?.clear();
+      recaptchaRef.current = null;
+      setError(firebaseErrorMessage(e));
+    } finally {
+      setSendingPhone(false);
+    }
+  }
+
+  async function verifyPhoneOtp() {
+    setVerifyingPhone(true);
+    setError("");
+    setMessage("");
+
+    try {
+      const confirmation = confirmationRef.current;
+      if (!confirmation) {
+        throw new Error("Request a mobile OTP first.");
+      }
+      if (!/^\d{6}$/.test(phoneOtp)) {
+        throw new Error("Enter the 6-digit OTP.");
+      }
+
+      const credentialResult = await confirmation.confirm(phoneOtp);
+      const verifiedUser = credentialResult.user;
+      const verifiedPhone = verifiedUser.phoneNumber;
+
+      if (!verifiedPhone) {
+        throw new Error("Firebase did not return a verified phone number. Please try again.");
+      }
+
+      const userRef = doc(db, "users", verifiedUser.uid);
+      const userSnap = await getDoc(userRef);
+      const data = userSnap.exists() ? userSnap.data() : {};
+      const emailVerified =
+        verifiedUser.emailVerified || data.emailVerified === true;
+
+      await updateDoc(userRef, {
+        phone: verifiedPhone,
+        phoneVerified: true,
+        updatedAt: serverTimestamp(),
+        ...(emailVerified ? { accountStatus: "ACTIVE" } : {}),
+      });
+
+      confirmationRef.current = null;
+      setPhoneOtp("");
+      setPhoneOtpSent(false);
+      setUserPhone(verifiedPhone);
+      setPhoneInput(verifiedPhone);
+      setStatus({ emailVerified, phoneVerified: true });
+      setMessage("Mobile number verified successfully.");
+
+      if (emailVerified) {
+        router.replace("/account");
+      }
+    } catch (e) {
+      console.error("Verify mobile OTP failed:", e);
+      setError(firebaseErrorMessage(e));
+    } finally {
+      setVerifyingPhone(false);
     }
   }
 
@@ -125,12 +326,20 @@ export default function VerifyPage() {
       router.replace("/login");
       return;
     }
+
     setBusy(true);
     setError("");
+    setMessage("");
+
     try {
       await user.reload();
       const next = await loadStatus(auth.currentUser || user);
       if (next.emailVerified && next.phoneVerified) {
+        const current = auth.currentUser || user;
+        await updateDoc(doc(db, "users", current.uid), {
+          accountStatus: "ACTIVE",
+          updatedAt: serverTimestamp(),
+        });
         router.replace("/account");
       } else {
         setMessage("Verification status refreshed.");
@@ -158,9 +367,22 @@ export default function VerifyPage() {
       <header className="border-b border-gray-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
           <Link href="/" className="relative block h-14 w-32" aria-label="ANJIVO Home">
-            <Image src="/logo/anjivo-logo.png" alt="ANJIVO" fill priority sizes="128px" className="object-contain object-left" />
+            <Image
+              src="/logo/anjivo-logo.png"
+              alt="ANJIVO"
+              fill
+              priority
+              sizes="128px"
+              className="object-contain object-left"
+            />
           </Link>
-          <button type="button" onClick={() => router.push("/login")} className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black">Login</button>
+          <button
+            type="button"
+            onClick={() => router.push("/login")}
+            className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-bold hover:border-black"
+          >
+            Login
+          </button>
         </div>
       </header>
 
@@ -169,55 +391,175 @@ export default function VerifyPage() {
           <div className="text-center">
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-black text-2xl text-white">🔐</div>
             <h1 className="mt-5 text-2xl font-black sm:text-3xl">Verify your account</h1>
-            <p className="mt-2 text-sm leading-6 text-gray-500">Verify your email and mobile number to activate your ANJIVO account.</p>
+            <p className="mt-2 text-sm leading-6 text-gray-500">
+              Verify your email and mobile number to activate your ANJIVO account.
+            </p>
           </div>
 
-          {error && <div role="alert" className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold leading-5 text-red-700">⚠️ {error}</div>}
-          {message && <div role="status" className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-xs font-semibold leading-5 text-green-700">{message}</div>}
+          {error && (
+            <div role="alert" className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-semibold leading-5 text-red-700">
+              ⚠️ {error}
+            </div>
+          )}
+          {message && (
+            <div role="status" className="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-xs font-semibold leading-5 text-green-700">
+              {message}
+            </div>
+          )}
 
           <section className="mt-7 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="flex items-start gap-4">
-              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg ${status.emailVerified ? "bg-green-100" : "bg-gray-100"}`}>{status.emailVerified ? "✓" : "📧"}</div>
+              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg ${status.emailVerified ? "bg-green-100" : "bg-gray-100"}`}>
+                {status.emailVerified ? "✓" : "📧"}
+              </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-sm font-black">Email Verification</h2>
-                  <span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${status.emailVerified ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>{status.emailVerified ? "VERIFIED" : "PENDING"}</span>
+                  <span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${status.emailVerified ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
+                    {status.emailVerified ? "VERIFIED" : "PENDING"}
+                  </span>
                 </div>
                 <p className="mt-1 truncate text-xs text-gray-500">{userEmail}</p>
                 {!status.emailVerified ? (
                   <div className="mt-4 space-y-3">
-                    {!otpSent ? (
-                      <button type="button" onClick={sendEmailOtp} disabled={sending} className="w-full rounded-xl bg-black py-3 text-xs font-bold text-white hover:bg-gray-800 disabled:opacity-50">{sending ? "Sending OTP..." : "Send Email OTP"}</button>
+                    {!emailOtpSent ? (
+                      <button
+                        type="button"
+                        onClick={sendEmailOtp}
+                        disabled={sendingEmail}
+                        className="w-full rounded-xl bg-black py-3 text-xs font-bold text-white hover:bg-gray-800 disabled:opacity-50"
+                      >
+                        {sendingEmail ? "Sending OTP..." : "Send Email OTP"}
+                      </button>
                     ) : (
                       <>
-                        <label htmlFor="email-otp" className="block text-xs font-semibold text-gray-700">Enter 6-digit OTP</label>
-                        <input id="email-otp" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000" className="w-full rounded-xl border border-gray-300 px-4 py-3 text-center text-xl tracking-[0.5em] outline-none focus:border-black" />
-                        <button type="button" onClick={verifyEmailOtp} disabled={verifying || otp.length !== 6} className="w-full rounded-xl bg-black py-3 text-xs font-bold text-white hover:bg-gray-800 disabled:opacity-50">{verifying ? "Verifying..." : "Verify Email OTP"}</button>
-                        <button type="button" onClick={sendEmailOtp} disabled={sending} className="w-full rounded-xl border border-gray-200 py-3 text-xs font-bold hover:border-black disabled:opacity-50">{sending ? "Sending..." : "Resend OTP"}</button>
+                        <label htmlFor="email-otp" className="block text-xs font-semibold text-gray-700">Enter 6-digit email OTP</label>
+                        <input
+                          id="email-otp"
+                          value={emailOtp}
+                          onChange={(e) => setEmailOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          maxLength={6}
+                          placeholder="000000"
+                          className="w-full rounded-xl border border-gray-300 px-4 py-3 text-center text-xl tracking-[0.5em] outline-none focus:border-black"
+                        />
+                        <button
+                          type="button"
+                          onClick={verifyEmailOtp}
+                          disabled={verifyingEmail || emailOtp.length !== 6}
+                          className="w-full rounded-xl bg-black py-3 text-xs font-bold text-white hover:bg-gray-800 disabled:opacity-50"
+                        >
+                          {verifyingEmail ? "Verifying..." : "Verify Email OTP"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={sendEmailOtp}
+                          disabled={sendingEmail}
+                          className="w-full rounded-xl border border-gray-200 py-3 text-xs font-bold hover:border-black disabled:opacity-50"
+                        >
+                          {sendingEmail ? "Sending..." : "Resend Email OTP"}
+                        </button>
                       </>
                     )}
                   </div>
-                ) : <p className="mt-3 text-[10px] font-semibold text-green-600">✓ Email verification completed</p>}
+                ) : (
+                  <p className="mt-3 text-[10px] font-semibold text-green-600">✓ Email verification completed</p>
+                )}
               </div>
             </div>
           </section>
 
           <section className="mt-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="flex items-start gap-4">
-              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg ${status.phoneVerified ? "bg-green-100" : "bg-gray-100"}`}>{status.phoneVerified ? "✓" : "📱"}</div>
+              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-lg ${status.phoneVerified ? "bg-green-100" : "bg-gray-100"}`}>
+                {status.phoneVerified ? "✓" : "📱"}
+              </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-sm font-black">Mobile Verification</h2>
-                  <span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${status.phoneVerified ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>{status.phoneVerified ? "VERIFIED" : "PENDING"}</span>
+                  <span className={`rounded-full px-2.5 py-1 text-[9px] font-black ${status.phoneVerified ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"}`}>
+                    {status.phoneVerified ? "VERIFIED" : "PENDING"}
+                  </span>
                 </div>
-                <p className="mt-1 text-xs text-gray-500">{userPhone || "Mobile number"}</p>
-                {!status.phoneVerified && <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-xs leading-5 text-amber-800">Mobile OTP integration is not included in this update yet. Email OTP can be completed here; the account remains pending until mobile verification is implemented.</p>}
-                {status.phoneVerified && <p className="mt-3 text-[10px] font-semibold text-green-600">✓ Mobile verification completed</p>}
+
+                {!status.phoneVerified ? (
+                  <div className="mt-4 space-y-3">
+                    <label htmlFor="phone-number" className="block text-xs font-semibold text-gray-700">
+                      Mobile number (India number can be 10 digits)
+                    </label>
+                    <input
+                      id="phone-number"
+                      type="tel"
+                      value={phoneInput}
+                      onChange={(e) => setPhoneInput(e.target.value)}
+                      autoComplete="tel"
+                      placeholder="+919876543210"
+                      className="w-full rounded-xl border border-gray-300 px-4 py-3 text-sm outline-none focus:border-black"
+                    />
+                    {!phoneOtpSent ? (
+                      <button
+                        type="button"
+                        onClick={sendPhoneOtp}
+                        disabled={sendingPhone || !phoneInput.trim()}
+                        className="w-full rounded-xl bg-black py-3 text-xs font-bold text-white hover:bg-gray-800 disabled:opacity-50"
+                      >
+                        {sendingPhone ? "Sending SMS OTP..." : "Send Mobile OTP"}
+                      </button>
+                    ) : (
+                      <>
+                        <p className="text-xs leading-5 text-gray-500">
+                          Enter the 6-digit code sent to {phoneInput}.
+                        </p>
+                        <label htmlFor="phone-otp" className="block text-xs font-semibold text-gray-700">Enter mobile OTP</label>
+                        <input
+                          id="phone-otp"
+                          value={phoneOtp}
+                          onChange={(e) => setPhoneOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          maxLength={6}
+                          placeholder="000000"
+                          className="w-full rounded-xl border border-gray-300 px-4 py-3 text-center text-xl tracking-[0.5em] outline-none focus:border-black"
+                        />
+                        <button
+                          type="button"
+                          onClick={verifyPhoneOtp}
+                          disabled={verifyingPhone || phoneOtp.length !== 6}
+                          className="w-full rounded-xl bg-black py-3 text-xs font-bold text-white hover:bg-gray-800 disabled:opacity-50"
+                        >
+                          {verifyingPhone ? "Verifying..." : "Verify Mobile OTP"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={sendPhoneOtp}
+                          disabled={sendingPhone}
+                          className="w-full rounded-xl border border-gray-200 py-3 text-xs font-bold hover:border-black disabled:opacity-50"
+                        >
+                          {sendingPhone ? "Sending..." : "Resend Mobile OTP"}
+                        </button>
+                      </>
+                    )}
+                    <div id="recaptcha-container" />
+                  </div>
+                ) : (
+                  <>
+                    <p className="mt-1 text-xs text-gray-500">{userPhone || auth.currentUser?.phoneNumber}</p>
+                    <p className="mt-3 text-[10px] font-semibold text-green-600">✓ Mobile verification completed</p>
+                  </>
+                )}
               </div>
             </div>
           </section>
 
-          <button type="button" onClick={refreshStatus} disabled={busy} className="mt-5 w-full rounded-xl bg-black py-3.5 text-sm font-bold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50">{busy ? "Checking..." : "Refresh Verification Status"}</button>
+          <button
+            type="button"
+            onClick={refreshStatus}
+            disabled={busy}
+            className="mt-5 w-full rounded-xl bg-black py-3.5 text-sm font-bold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {busy ? "Checking..." : "Refresh Verification Status"}
+          </button>
 
           <div className="mt-5 rounded-2xl border border-gray-200 bg-white p-4">
             <p className="text-xs font-black">Why do we verify you?</p>
@@ -229,7 +571,9 @@ export default function VerifyPage() {
             </div>
           </div>
 
-          <div className="mt-6 text-center"><Link href="/" className="text-xs font-bold text-gray-500 hover:text-black">← Back to ANJIVO</Link></div>
+          <div className="mt-6 text-center">
+            <Link href="/" className="text-xs font-bold text-gray-500 hover:text-black">← Back to ANJIVO</Link>
+          </div>
         </div>
       </main>
     </div>
