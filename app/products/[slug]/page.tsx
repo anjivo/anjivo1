@@ -608,34 +608,29 @@ export default function ProductDetailsPage({
           stock:
             product.stock,
 
-          sellingMode:
-            product.sellingMode,
+          ...(product.sellingMode
+            ? { sellingMode: product.sellingMode }
+            : {}),
 
-          wholesaleUnit:
-            pricingType ===
-            "wholesale"
-              ? effectiveWholesaleUnit
-              : undefined,
+          ...(pricingType === "wholesale"
+            ? { wholesaleUnit: effectiveWholesaleUnit }
+            : {}),
 
-          piecesPerSet:
-            isSet
-              ? piecesPerSet
-              : undefined,
+          ...(isSet && Number(piecesPerSet) > 0
+            ? { piecesPerSet }
+            : {}),
 
-          setName:
-            isSet
-              ? setName
-              : undefined,
+          ...(isSet && Boolean(setName)
+            ? { setName }
+            : {}),
 
-          setBreakAllowed:
-            isSet
-              ? setBreakAllowed
-              : undefined,
+          ...(isSet && typeof setBreakAllowed === "boolean"
+            ? { setBreakAllowed }
+            : {}),
 
-          setComposition:
-            isSet
-              ? setComposition
-              : undefined,
+          ...(isSet && Array.isArray(setComposition)
+            ? { setComposition }
+            : {}),
 
           isSet,
         },
