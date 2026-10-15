@@ -1,4 +1,3 @@
-
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 
@@ -9,72 +8,61 @@ export const runtime = "nodejs";
 
 const CASHFREE_API_VERSION = "2023-08-01";
 
+type PaymentIntent = {
+  userId?: string;
+  provider?: string;
+  providerOrderId?: string;
+  paymentStatus?: string;
+  status?: string;
+  total?: number | string;
+  currency?: string;
+};
+
 function errorResponse(message: string, status: number) {
-  return NextResponse.json(
-    { success: false, error: message },
-    { status },
-  );
+  return NextResponse.json({ success: false, error: message }, { status });
 }
 
 export async function POST(request: NextRequest) {
   try {
-    // 1. Verify Firebase user
     const authorization = request.headers.get("authorization");
-
     if (!authorization?.startsWith("Bearer ")) {
       return errorResponse("Authentication required.", 401);
     }
 
     const decoded = await verifyIdToken(authorization);
-
     if (!decoded?.uid) {
       return errorResponse("Invalid authentication token.", 401);
     }
-
     const userId = decoded.uid;
 
-    // 2. Read Cashfree order ID
     let body: { orderId?: unknown };
-
     try {
       body = await request.json();
     } catch {
       return errorResponse("Invalid JSON request.", 400);
     }
 
-    const orderId =
-      typeof body.orderId === "string" ? body.orderId.trim() : "";
-
-    if (
-      !orderId ||
-      orderId.length > 180 ||
-      orderId.includes("/")
-    ) {
+    const orderId = typeof body.orderId === "string" ? body.orderId.trim() : "";
+    if (!/^anjivo_[a-f0-9]{32}$/i.test(orderId)) {
       return errorResponse("A valid Cashfree orderId is required.", 400);
     }
 
-    // 3. Read server-side payment intent
-    const intentRef = adminDb
-      .collection("paymentIntents")
-      .doc(orderId);
-
+    const intentRef = adminDb.collection("paymentIntents").doc(orderId);
     const intentSnapshot = await intentRef.get();
-
     if (!intentSnapshot.exists) {
       return errorResponse("Payment intent not found.", 404);
     }
 
-    const intent = intentSnapshot.data();
-
+    const intent = intentSnapshot.data() as PaymentIntent | undefined;
     if (intent?.userId !== userId) {
       return errorResponse("You cannot verify this payment.", 403);
     }
+    if (intent.provider !== "CASHFREE" || (intent.providerOrderId && intent.providerOrderId !== orderId)) {
+      return errorResponse("Payment provider/order mismatch.", 409);
+    }
 
-    // Idempotent response for an already verified payment
-    if (
-      intent?.paymentStatus === "PAID" ||
-      intent?.status === "PAID"
-    ) {
+    // A prior successful verification is safe to return idempotently.
+    if (intent.paymentStatus === "PAID" && intent.status === "PAID") {
       return NextResponse.json({
         success: true,
         verified: true,
@@ -84,132 +72,85 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    if (
-      intent?.paymentStatus !== "PENDING" &&
-      intent?.status !== "PENDING"
-    ) {
+    if (intent.paymentStatus !== "PENDING" || (intent.status && intent.status !== "PENDING")) {
       return errorResponse("This payment intent is not pending.", 409);
     }
 
-    // 4. Cashfree credentials and environment
     const clientId = process.env.CASHFREE_CLIENT_ID;
     const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
-    const isProduction =
-      process.env.CASHFREE_ENV === "PRODUCTION";
-
+    const isProduction = process.env.CASHFREE_ENV === "PRODUCTION";
     if (!clientId || !clientSecret) {
-      return errorResponse(
-        "Cashfree server configuration is incomplete.",
-        500,
-      );
+      return errorResponse("Cashfree server configuration is incomplete.", 500);
     }
 
-    const baseUrl = isProduction
-      ? "https://api.cashfree.com/pg"
-      : "https://sandbox.cashfree.com/pg";
-
-    // 5. Ask Cashfree directly for the payment status
-    const cashfreeResponse = await fetch(
-      `${baseUrl}/orders/${encodeURIComponent(orderId)}`,
-      {
-        method: "GET",
-        headers: {
-          "x-client-id": clientId,
-          "x-client-secret": clientSecret,
-          "x-api-version": CASHFREE_API_VERSION,
-          Accept: "application/json",
-        },
-        cache: "no-store",
+    const baseUrl = isProduction ? "https://api.cashfree.com/pg" : "https://sandbox.cashfree.com/pg";
+    const cashfreeResponse = await fetch(`${baseUrl}/orders/${encodeURIComponent(orderId)}`, {
+      method: "GET",
+      headers: {
+        "x-client-id": clientId,
+        "x-client-secret": clientSecret,
+        "x-api-version": CASHFREE_API_VERSION,
+        Accept: "application/json",
       },
-    );
+      cache: "no-store",
+    });
 
     if (!cashfreeResponse.ok) {
-      console.error(
-        "Cashfree order lookup failed:",
-        cashfreeResponse.status,
-      );
-
-      return errorResponse(
-        "Could not verify payment with Cashfree. Please try again.",
-        502,
-      );
+      console.error("Cashfree order lookup failed:", cashfreeResponse.status);
+      return errorResponse("Could not verify payment with Cashfree. Please try again.", 502);
     }
 
     const cashfreeOrder = await cashfreeResponse.json();
-
-    // 6. Verify the actual status and amount
-    if (cashfreeOrder.order_status !== "PAID") {
-      return NextResponse.json(
-        {
-          success: true,
-          verified: false,
-          orderId,
-          paymentStatus: String(
-            cashfreeOrder.order_status ?? "UNKNOWN",
-          ),
-          message: "Payment has not been confirmed yet.",
-        },
-        { status: 200 },
-      );
+    if (cashfreeOrder.order_id !== orderId) {
+      return errorResponse("Cashfree order ID does not match.", 409);
     }
 
-    const expectedAmount = Number(intent?.total);
+    if (cashfreeOrder.order_status !== "PAID") {
+      return NextResponse.json({
+        success: true,
+        verified: false,
+        orderId,
+        paymentStatus: String(cashfreeOrder.order_status ?? "UNKNOWN"),
+        message: "Payment has not been confirmed yet.",
+      });
+    }
+
+    const expectedAmount = Number(intent.total);
     const paidAmount = Number(cashfreeOrder.order_amount);
-    const currency = String(cashfreeOrder.order_currency ?? "");
+    const expectedCurrency = intent.currency || "INR";
+    const actualCurrency = String(cashfreeOrder.order_currency ?? "");
 
     if (
-      !Number.isFinite(expectedAmount) ||
-      expectedAmount <= 0 ||
-      !Number.isFinite(paidAmount) ||
-      Math.abs(expectedAmount - paidAmount) > 0.009 ||
-      currency !== "INR"
+      !Number.isFinite(expectedAmount) || expectedAmount <= 0 ||
+      !Number.isFinite(paidAmount) || Math.abs(expectedAmount - paidAmount) > 0.009 ||
+      expectedCurrency !== "INR" || actualCurrency !== expectedCurrency
     ) {
       console.error("Cashfree payment amount/currency mismatch.", {
-        orderId,
-        expectedAmount,
-        paidAmount,
-        currency,
+        orderId, expectedAmount, paidAmount, expectedCurrency, actualCurrency,
       });
-
-      return errorResponse(
-        "Payment details do not match. Please contact support.",
-        409,
-      );
+      return errorResponse("Payment details do not match. Please contact support.", 409);
     }
 
-    // 7. Mark the intent as paid exactly once
     await adminDb.runTransaction(async (transaction) => {
       const latestSnapshot = await transaction.get(intentRef);
+      if (!latestSnapshot.exists) throw new Error("PAYMENT_INTENT_NOT_FOUND");
 
-      if (!latestSnapshot.exists) {
-        throw new Error("PAYMENT_INTENT_NOT_FOUND");
+      const latest = latestSnapshot.data() as PaymentIntent | undefined;
+      if (latest?.userId !== userId) throw new Error("PAYMENT_OWNER_MISMATCH");
+      if (latest?.provider !== "CASHFREE" || (latest.providerOrderId && latest.providerOrderId !== orderId)) {
+        throw new Error("PAYMENT_PROVIDER_MISMATCH");
       }
 
-      const latest = latestSnapshot.data();
-
-      if (latest?.userId !== userId) {
-        throw new Error("PAYMENT_OWNER_MISMATCH");
-      }
-
-      if (
-        latest?.paymentStatus === "PAID" ||
-        latest?.status === "PAID"
-      ) {
-        return;
-      }
-
-      if (
-        latest?.paymentStatus !== "PENDING" &&
-        latest?.status !== "PENDING"
-      ) {
+      if (latest?.paymentStatus === "PAID" && latest.status === "PAID") return;
+      if (latest?.paymentStatus !== "PENDING" || (latest.status && latest.status !== "PENDING")) {
         throw new Error("PAYMENT_INTENT_NOT_PENDING");
       }
 
-      const latestExpectedAmount = Number(latest?.total);
-
+      const latestExpectedAmount = Number(latest.total);
       if (
         !Number.isFinite(latestExpectedAmount) ||
-        Math.abs(latestExpectedAmount - paidAmount) > 0.009
+        Math.abs(latestExpectedAmount - paidAmount) > 0.009 ||
+        (latest.currency || "INR") !== actualCurrency
       ) {
         throw new Error("PAYMENT_AMOUNT_MISMATCH");
       }
@@ -231,27 +172,14 @@ export async function POST(request: NextRequest) {
       message: "Payment verified successfully.",
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "";
-
-    if (message === "PAYMENT_INTENT_NOT_FOUND") {
-      return errorResponse("Payment intent not found.", 404);
-    }
-
-    if (message === "PAYMENT_OWNER_MISMATCH") {
-      return errorResponse("Payment ownership check failed.", 403);
-    }
-
-    if (message === "PAYMENT_INTENT_NOT_PENDING") {
-      return errorResponse("Payment intent is no longer pending.", 409);
-    }
-
-    if (message === "PAYMENT_AMOUNT_MISMATCH") {
-      return errorResponse("Payment amount mismatch.", 409);
-    }
+    const message = error instanceof Error ? error.message : "";
+    if (message === "PAYMENT_INTENT_NOT_FOUND") return errorResponse("Payment intent not found.", 404);
+    if (message === "PAYMENT_OWNER_MISMATCH") return errorResponse("Payment ownership check failed.", 403);
+    if (message === "PAYMENT_PROVIDER_MISMATCH") return errorResponse("Payment provider/order mismatch.", 409);
+    if (message === "PAYMENT_INTENT_NOT_PENDING") return errorResponse("Payment intent is no longer pending.", 409);
+    if (message === "PAYMENT_AMOUNT_MISMATCH") return errorResponse("Payment amount mismatch.", 409);
 
     console.error("Cashfree verification error:", error);
-
     return errorResponse("Unable to verify payment right now.", 500);
   }
 }
