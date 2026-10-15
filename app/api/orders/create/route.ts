@@ -560,6 +560,13 @@ export async function POST(request: Request) {
         }
 
         if (
+          paymentIntentData?.provider !== "CASHFREE" ||
+          paymentIntentData?.providerOrderId !== paymentIntentId
+        ) {
+          throw new Error("Invalid Cashfree payment intent.");
+        }
+
+        if (
           paymentIntentData?.paymentStatus !== "PAID" &&
           paymentIntentData?.status !== "PAID"
         ) {
@@ -579,6 +586,28 @@ export async function POST(request: Request) {
             itemCount: 0,
             alreadyCreated: true,
           };
+        }
+
+        // The customer must not change the shipping address after paying.
+        const paidAddress = paymentIntentData?.shippingAddress;
+        if (!paidAddress || typeof paidAddress !== "object") {
+          throw new Error("Payment intent has no valid shipping address.");
+        }
+
+        const paidAddressRecord = paidAddress as Record<string, unknown>;
+        const sameAddress =
+          stringValue(paidAddressRecord.fullName) === shippingAddress.fullName &&
+          stringValue(paidAddressRecord.phone) === shippingAddress.phone &&
+          stringValue(paidAddressRecord.addressLine1) === shippingAddress.addressLine1 &&
+          stringValue(paidAddressRecord.addressLine2) === (shippingAddress.addressLine2 || "") &&
+          stringValue(paidAddressRecord.city) === shippingAddress.city &&
+          stringValue(paidAddressRecord.state) === shippingAddress.state &&
+          stringValue(paidAddressRecord.pincode) === shippingAddress.pincode;
+
+        if (!sameAddress) {
+          throw new Error(
+            "Delivery address does not match the address used for payment. Please restart checkout."
+          );
         }
 
         // Bind the paid intent to the exact items that were paid for.
