@@ -318,31 +318,41 @@ export function getCartItemKey(
  * object properties recursively and omit undefined array entries.
  */
 function removeUndefinedDeep<T>(value: T): T {
+  // Firestore rejects undefined values anywhere inside a document.
+  // Keep Firebase special objects, Date, and other non-plain objects intact.
+  if (value === undefined) {
+    return undefined as T;
+  }
+
   if (Array.isArray(value)) {
     return value
       .filter((entry) => entry !== undefined)
       .map((entry) => removeUndefinedDeep(entry)) as T;
   }
 
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    Object.getPrototypeOf(value) === Object.prototype
-  ) {
-    const result: Record<string, unknown> = {};
-
-    for (const [key, entry] of Object.entries(
-      value as Record<string, unknown>
-    )) {
-      if (entry !== undefined) {
-        result[key] = removeUndefinedDeep(entry);
-      }
-    }
-
-    return result as T;
+  if (value === null || typeof value !== "object") {
+    return value;
   }
 
-  return value;
+  const prototype = Object.getPrototypeOf(value);
+
+  // Only recursively rebuild plain data objects. This avoids accidentally
+  // modifying Date, Timestamp, GeoPoint, DocumentReference, or FieldValue.
+  if (prototype !== Object.prototype && prototype !== null) {
+    return value;
+  }
+
+  const result: Record<string, unknown> = {};
+
+  for (const [key, entry] of Object.entries(
+    value as Record<string, unknown>
+  )) {
+    if (entry !== undefined) {
+      result[key] = removeUndefinedDeep(entry);
+    }
+  }
+
+  return result as T;
 }
 
 /* =========================================================
@@ -632,26 +642,17 @@ export async function saveCart(
       0
     );
 
+  const cartDocument = removeUndefinedDeep({
+    userId,
+    items: firestoreSafeItems,
+    subtotal,
+    updatedAt: serverTimestamp(),
+  });
+
   await setDoc(
-    doc(
-      db,
-      "carts",
-      userId
-    ),
-    {
-      userId,
-
-      items:
-        firestoreSafeItems,
-
-      subtotal,
-
-      updatedAt:
-        serverTimestamp(),
-    },
-    {
-      merge: true,
-    }
+    doc(db, "carts", userId),
+    cartDocument,
+    { merge: true }
   );
 }
 
