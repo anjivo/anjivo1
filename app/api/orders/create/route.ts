@@ -340,8 +340,39 @@ export async function POST(request: Request) {
 
     const body = await request.json();
 
-    const paymentMethod =
-      body?.paymentMethod === "ONLINE" ? "ONLINE" : "COD";
+    const paymentMethod = body?.paymentMethod;
+
+    if (paymentMethod !== "COD" && paymentMethod !== "ONLINE") {
+      return NextResponse.json(
+        { success: false, message: "Invalid payment method." },
+        { status: 400 }
+      );
+    }
+
+    const paymentIntentId =
+      typeof body?.paymentIntentId === "string"
+        ? body.paymentIntentId.trim()
+        : "";
+
+    if (paymentMethod === "ONLINE" && !paymentIntentId) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Verified Cashfree payment intent is required.",
+        },
+        { status: 400 }
+      );
+    }
+
+    if (
+      paymentIntentId.length > 180 ||
+      paymentIntentId.includes("/")
+    ) {
+      return NextResponse.json(
+        { success: false, message: "Invalid payment intent ID." },
+        { status: 400 }
+      );
+    }
 
     const shippingAddress = validateShippingAddress(
       body?.shippingAddress
@@ -504,6 +535,93 @@ export async function POST(request: Request) {
 
       const userData = userSnapshot.data() || {};
       const accountStatus = userData.accountStatus;
+
+      // Read and validate the Cashfree payment intent inside the same
+      // Firestore transaction that creates the order and deducts stock.
+      const paymentIntentRef =
+        paymentMethod === "ONLINE"
+          ? adminDb.collection("paymentIntents").doc(paymentIntentId)
+          : null;
+
+      let paymentIntentData: Record<string, unknown> | undefined;
+
+      if (paymentIntentRef) {
+        const paymentIntentSnapshot =
+          await transaction.get(paymentIntentRef);
+
+        if (!paymentIntentSnapshot.exists) {
+          throw new Error("Cashfree payment intent not found.");
+        }
+
+        paymentIntentData = paymentIntentSnapshot.data();
+
+        if (paymentIntentData?.userId !== userId) {
+          throw new Error("Payment intent ownership mismatch.");
+        }
+
+        if (
+          paymentIntentData?.paymentStatus !== "PAID" &&
+          paymentIntentData?.status !== "PAID"
+        ) {
+          throw new Error("Cashfree payment is not verified.");
+        }
+
+        // Prevent the same paid intent from creating a second order.
+        if (paymentIntentData?.placedOrderId) {
+          return {
+            orderId: String(paymentIntentData.placedOrderId),
+            subtotal: numberValue(paymentIntentData.subtotal),
+            shippingCharge: numberValue(paymentIntentData.shippingCharge),
+            discount: numberValue(paymentIntentData.discount),
+            tax: 0,
+            total: numberValue(paymentIntentData.total),
+            sellerCount: 0,
+            itemCount: 0,
+            alreadyCreated: true,
+          };
+        }
+
+        // Bind the paid intent to the exact items that were paid for.
+        if (!Array.isArray(paymentIntentData?.items)) {
+          throw new Error("Payment intent has no valid item snapshot.");
+        }
+
+        const normalizeIntentItem = (item: Record<string, unknown>) => ({
+          productId: stringValue(item.productId ?? item.id),
+          sellerId: stringValue(item.sellerId),
+          quantity: Math.floor(numberValue(item.quantity)),
+          pricingType: item.pricingType === "wholesale" ? "wholesale" : "retail",
+          wholesaleUnit:
+            item.wholesaleUnit === "SET" || item.wholesaleUnit === "PIECE"
+              ? item.wholesaleUnit
+              : "",
+          piecesPerSet: Math.floor(numberValue(item.piecesPerSet)),
+          setName: stringValue(item.setName),
+        });
+
+        const requestedSnapshot = requestedItems
+          .map((item) => normalizeIntentItem(item as unknown as Record<string, unknown>))
+          .sort((a, b) => a.productId.localeCompare(b.productId));
+
+        const paidSnapshot = (paymentIntentData.items as unknown[])
+          .filter((item): item is Record<string, unknown> =>
+            !!item && typeof item === "object"
+          )
+          .map(normalizeIntentItem)
+          .sort((a, b) => a.productId.localeCompare(b.productId));
+
+        if (
+          requestedSnapshot.length !== paidSnapshot.length ||
+          requestedSnapshot.some(
+            (item, index) =>
+              JSON.stringify(item) !== JSON.stringify(paidSnapshot[index])
+          )
+        ) {
+          throw new Error(
+            "Cart items do not match the items paid for. Please restart checkout."
+          );
+        }
+      }
 
       if (
         accountStatus &&
@@ -852,7 +970,9 @@ export async function POST(request: Request) {
        * ----------------------------------------------------------
        */
       const shippingCharge = 0;
-      const discount = 0;
+      // ₹20 instant discount on eligible online prepaid orders of ₹1,000+.
+      const discount =
+        paymentMethod === "ONLINE" && subtotal >= 1000 ? 20 : 0;
       const tax = 0;
 
       const total = Math.max(
@@ -862,6 +982,18 @@ export async function POST(request: Request) {
           tax -
           discount
       );
+
+      if (paymentMethod === "ONLINE") {
+        const intentTotal = Number(paymentIntentData?.total);
+        if (
+          !Number.isFinite(intentTotal) ||
+          Math.abs(intentTotal - total) > 0.009
+        ) {
+          throw new Error(
+            "Paid amount does not match the server-calculated order total. Please contact support."
+          );
+        }
+      }
 
       const sellerGroups = Array.from(
         sellerMap.values()
@@ -900,10 +1032,10 @@ export async function POST(request: Request) {
         currency: "INR",
 
         paymentMethod,
-        paymentStatus:
-          paymentMethod === "COD"
-            ? "PENDING"
-            : "PENDING",
+        paymentStatus: paymentMethod === "ONLINE" ? "PAID" : "PENDING",
+        ...(paymentMethod === "ONLINE"
+          ? { paymentProvider: "CASHFREE", paymentIntentId }
+          : {}),
 
         orderStatus: "PLACED",
         fulfillmentStatus: "PENDING",
@@ -949,7 +1081,11 @@ export async function POST(request: Request) {
           tax: 0,
           total: seller.subtotal,
 
-          paymentStatus: "PENDING",
+          paymentStatus: paymentMethod === "ONLINE" ? "PAID" : "PENDING",
+          paymentMethod,
+          ...(paymentMethod === "ONLINE"
+            ? { paymentProvider: "CASHFREE", paymentIntentId }
+            : {}),
           orderStatus: "PLACED",
           fulfillmentStatus: "PENDING",
 
@@ -1012,7 +1148,10 @@ export async function POST(request: Request) {
         type: "ORDER_CREATED",
 
         paymentMethod,
-        paymentStatus: "PENDING",
+        paymentStatus: paymentMethod === "ONLINE" ? "PAID" : "PENDING",
+        ...(paymentMethod === "ONLINE"
+          ? { paymentProvider: "CASHFREE", paymentIntentId }
+          : {}),
 
         amount: total,
         currency: "INR",
@@ -1060,6 +1199,15 @@ export async function POST(request: Request) {
           FieldValue.serverTimestamp(),
       });
 
+      if (paymentIntentRef) {
+        transaction.update(paymentIntentRef, {
+          placedOrderId: orderId,
+          placedOrderTotal: total,
+          orderCreatedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+
       return {
         orderId,
         subtotal,
@@ -1069,16 +1217,19 @@ export async function POST(request: Request) {
         total,
         sellerCount: sellerGroups.length,
         itemCount: orderItems.length,
+        alreadyCreated: false,
       };
     });
 
     return NextResponse.json(
       {
         success: true,
-        message: "Order created successfully.",
+        message: result.alreadyCreated
+          ? "This payment has already been used for an order."
+          : "Order created successfully.",
         ...result,
       },
-      { status: 201 }
+      { status: result.alreadyCreated ? 200 : 201 }
     );
   } catch (error) {
     console.error("Order creation error:", error);
