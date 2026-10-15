@@ -9,6 +9,21 @@ import { getCart, groupCartBySeller, getCartItemPieceQuantity, getCartItemTotal 
 import type { ShippingAddress } from "@/lib/orders";
 import type { Cart } from "@/lib/cart";
 
+type PaymentMethod = "COD" | "ONLINE";
+
+type CashfreeCheckout = {
+  checkout: (options: {
+    paymentSessionId: string;
+    redirectTarget: "_modal";
+  }) => Promise<unknown>;
+};
+
+type CashfreeWindow = Window & {
+  Cashfree?: (options: { mode: "sandbox" | "production" }) =>
+    | CashfreeCheckout
+    | Promise<CashfreeCheckout>;
+};
+
 type FormErrors = {
   fullName?: string;
   phone?: string;
@@ -25,6 +40,8 @@ export default function CheckoutPage() {
   const [loading, setLoading] = useState(true);
   const [placingOrder, setPlacingOrder] =
     useState(false);
+  const [paymentMethod, setPaymentMethod] =
+    useState<PaymentMethod>("COD");
 
   const [error, setError] = useState("");
   const [errors, setErrors] =
@@ -89,8 +106,8 @@ export default function CheckoutPage() {
 
   const subtotal = cart?.subtotal ?? 0;
   const shippingCharge = 0;
-  const discount = 0;
-  const total = subtotal + shippingCharge - discount;
+  const discount = paymentMethod === "ONLINE" && subtotal >= 1000 ? 20 : 0;
+  const total = Math.max(0, subtotal + shippingCharge - discount);
 
   function updateAddress(
     field: keyof ShippingAddress,
@@ -160,182 +177,192 @@ export default function CheckoutPage() {
       return;
     }
 
-    if (!validateAddress()) {
-      return;
-    }
+    if (!validateAddress()) return;
 
     try {
       setPlacingOrder(true);
       setError("");
 
       const currentUser = auth.currentUser;
-
       if (!currentUser) {
-        setError(
-          "Your login session has expired. Please login again."
-        );
-        return;
+        throw new Error("Your login session has expired. Please login again.");
       }
 
       const idToken = await currentUser.getIdToken();
+      const authHeaders = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${idToken}`,
+      };
 
-      /*
-       * Step 1: Validate the cart on the server.
-       *
-       * The server derives the user ID from the
-       * verified Firebase ID token.
-       * The client does not send or control the user ID.
-       */
-      const validationResponse = await fetch(
-        "/api/checkout/validate",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${idToken}`,
-          },
-          body: JSON.stringify({
-            items: cart.items.map((item) => ({
-              id: item.id,
-              productId: item.id,
-              sellerId: item.sellerId,
-              quantity: item.quantity,
-              pricingType: item.pricingType,
-              wholesaleUnit: item.wholesaleUnit,
-              piecesPerSet: item.piecesPerSet,
-              setName: item.setName,
-              setBreakAllowed: item.setBreakAllowed,
-            })),
-          }),
-        }
-      );
+      const requestedItems = cart.items.map((item) => ({
+        id: item.id,
+        productId: item.id,
+        sellerId: item.sellerId,
+        quantity: item.quantity,
+        pricingType: item.pricingType,
+        wholesaleUnit: item.wholesaleUnit,
+        piecesPerSet: item.piecesPerSet,
+        setName: item.setName,
+        setBreakAllowed: item.setBreakAllowed,
+      }));
 
-      const validationResult =
-        await validationResponse.json();
+      // Revalidate every item, price, wholesale rule and stock on the server.
+      const validationResponse = await fetch("/api/checkout/validate", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ items: requestedItems }),
+        cache: "no-store",
+      });
+      const validationResult = await validationResponse.json();
 
-      if (
-        !validationResponse.ok ||
-        !validationResult.success
-      ) {
-        const validationErrors = Array.isArray(
-          validationResult.errors
-        )
+      if (!validationResponse.ok || !validationResult.success) {
+        const validationErrors = Array.isArray(validationResult.errors)
           ? validationResult.errors
           : [];
-
-        if (validationErrors.length > 0) {
-          setError(
-            validationErrors
-              .map(
-                (item: { message?: string }) =>
-                  item.message || "Cart validation failed."
-              )
-              .join(" ")
-          );
-        } else {
-          setError(
-            validationResult.message ||
-              "Unable to validate your cart."
-          );
-        }
-
-        return;
+        const details = validationErrors
+          .map((item: { message?: string }) => item.message || "Cart validation failed.")
+          .join(" ");
+        throw new Error(
+          details || validationResult.message || "Unable to validate your cart."
+        );
       }
 
-      /*
-       * Step 2: Create the order through the secure
-       * server API.
-       *
-       * IMPORTANT:
-       * Do not send userId here.
-       * /api/orders/create gets the UID from the
-       * verified Firebase ID token.
-       */
-      const validatedItems = Array.isArray(
-        validationResult.items
-      )
+      const validatedItems = Array.isArray(validationResult.items)
         ? validationResult.items
         : [];
-
       if (validatedItems.length === 0) {
-        setError(
-          "No valid items were found for this order."
-        );
-        return;
+        throw new Error("No valid items were found for this order.");
       }
 
-      const orderResponse = await fetch(
-        "/api/orders/create",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${idToken}`,
-          },
-          body: JSON.stringify({
-            shippingAddress: address,
-            paymentMethod: "COD",
-            items: validatedItems.map(
-              (item: {
-                productId?: string;
-                id?: string;
-                sellerId: string;
-                quantity: number;
-                pricingType: "retail" | "wholesale";
-                wholesaleUnit?: "PIECE" | "SET";
-                piecesPerSet?: number;
-                setName?: string;
-                setBreakAllowed?: boolean;
-              }) => ({
-                productId:
-                  item.productId || item.id || "",
-                sellerId: item.sellerId,
-                quantity: item.quantity,
-                pricingType: item.pricingType,
-                wholesaleUnit: item.wholesaleUnit,
-                piecesPerSet: item.piecesPerSet,
-                setName: item.setName,
-                setBreakAllowed: item.setBreakAllowed,
-              })
-            ),
-          }),
-        }
-      );
+      const orderItems = validatedItems.map((item: {
+        productId?: string;
+        id?: string;
+        sellerId: string;
+        quantity: number;
+        pricingType: "retail" | "wholesale";
+        wholesaleUnit?: "PIECE" | "SET";
+        piecesPerSet?: number;
+        setName?: string;
+        setBreakAllowed?: boolean;
+      }) => ({
+        productId: item.productId || item.id || "",
+        sellerId: item.sellerId,
+        quantity: item.quantity,
+        pricingType: item.pricingType,
+        wholesaleUnit: item.wholesaleUnit,
+        piecesPerSet: item.piecesPerSet,
+        setName: item.setName,
+        setBreakAllowed: item.setBreakAllowed,
+      }));
 
+      let paymentIntentId: string | undefined;
+
+      if (paymentMethod === "ONLINE") {
+        // Create a server-priced Cashfree payment session.
+        const createPaymentResponse = await fetch(
+          "/api/payment/cashfree/create-order",
+          {
+            method: "POST",
+            headers: authHeaders,
+            body: JSON.stringify({
+              items: orderItems,
+              shippingAddress: address,
+            }),
+            cache: "no-store",
+          }
+        );
+        const createPaymentResult = await createPaymentResponse.json();
+
+        if (!createPaymentResponse.ok || !createPaymentResult.success) {
+          throw new Error(
+            createPaymentResult.message || "Unable to start online payment."
+          );
+        }
+
+        const orderId = String(createPaymentResult.orderId || "");
+        const paymentSessionId = String(createPaymentResult.paymentSessionId || "");
+        if (!orderId || !paymentSessionId) {
+          throw new Error("Cashfree did not return a valid payment session.");
+        }
+        paymentIntentId = orderId;
+
+        // Load Cashfree's browser SDK only when the customer chooses online payment.
+        const sdkUrl = "https://sdk.cashfree.com/js/v3/cashfree.js";
+        if (!(window as CashfreeWindow).Cashfree) {
+          await new Promise<void>((resolve, reject) => {
+            const existing = document.querySelector<HTMLScriptElement>(`script[src="${sdkUrl}"]`);
+            if (existing) {
+              existing.addEventListener("load", () => resolve(), { once: true });
+              existing.addEventListener("error", () => reject(new Error("Unable to load Cashfree checkout.")), { once: true });
+              if ((window as CashfreeWindow).Cashfree) resolve();
+              return;
+            }
+            const script = document.createElement("script");
+            script.src = sdkUrl;
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error("Unable to load Cashfree checkout."));
+            document.head.appendChild(script);
+          });
+        }
+
+        const cashfreeFactory = (window as CashfreeWindow).Cashfree;
+        if (!cashfreeFactory) {
+          throw new Error("Cashfree checkout could not be initialized. Please try again.");
+        }
+
+        const mode = createPaymentResult.paymentMode === "PRODUCTION"
+          ? "production"
+          : "sandbox";
+        const cashfree = await cashfreeFactory({ mode });
+        await cashfree.checkout({
+          paymentSessionId,
+          redirectTarget: "_modal",
+        });
+
+        // Never trust the browser's checkout result alone. Verify directly with our server.
+        const verifyResponse = await fetch("/api/payment/cashfree/verify", {
+          method: "POST",
+          headers: authHeaders,
+          body: JSON.stringify({ orderId }),
+          cache: "no-store",
+        });
+        const verifyResult = await verifyResponse.json();
+
+        if (!verifyResponse.ok || !verifyResult.success || verifyResult.verified !== true) {
+          throw new Error(
+            verifyResult.message || verifyResult.error ||
+              "Payment has not been confirmed. If money was deducted, please contact support before trying again."
+          );
+        }
+      }
+
+      // Create the final order. Online orders require the verified payment intent.
+      const orderResponse = await fetch("/api/orders/create", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          shippingAddress: address,
+          paymentMethod,
+          ...(paymentMethod === "ONLINE" ? { paymentIntentId } : {}),
+          items: orderItems,
+        }),
+        cache: "no-store",
+      });
       const orderResult = await orderResponse.json();
 
-      if (orderResponse.status === 401) {
-        setError(
-          "Your login session has expired. Please login again."
-        );
-        return;
+      if (!orderResponse.ok || !orderResult.success) {
+        throw new Error(orderResult.message || "Unable to create your order.");
       }
-
-      if (
-        !orderResponse.ok ||
-        !orderResult.success
-      ) {
-        throw new Error(
-          orderResult.message ||
-            "Unable to create your order."
-        );
-      }
-
       if (!orderResult.orderId) {
-        throw new Error(
-          "Order was created but order ID was not returned."
-        );
+        throw new Error("Order was created but order ID was not returned.");
       }
 
-      window.location.href =
-        `/order-success/${orderResult.orderId}`;
+      window.location.href = `/order-success/${orderResult.orderId}`;
     } catch (err) {
       console.error("Checkout error:", err);
-
       setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to place order."
+        err instanceof Error ? err.message : "Unable to place order."
       );
     } finally {
       setPlacingOrder(false);
@@ -549,37 +576,54 @@ export default function CheckoutPage() {
                 <h2 className="text-xl font-bold text-slate-900">
                   2. Payment Method
                 </h2>
-
                 <p className="mt-1 text-sm text-slate-500">
                   Choose how you want to pay.
                 </p>
               </div>
 
-              <div className="rounded-2xl border-2 border-slate-900 bg-slate-50 p-4">
-                <div className="flex items-start gap-4">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white">
-                    ₹
+              <div className="grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("COD")}
+                  disabled={placingOrder}
+                  aria-pressed={paymentMethod === "COD"}
+                  className={`rounded-2xl border-2 p-4 text-left transition ${paymentMethod === "COD" ? "border-slate-900 bg-slate-50" : "border-slate-200 hover:border-slate-400"}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-900 text-lg text-white">₹</span>
+                    <span>
+                      <span className="block font-bold text-slate-900">Cash on Delivery</span>
+                      <span className="mt-1 block text-xs text-slate-500">Pay when delivered</span>
+                    </span>
+                    <span className={`ml-auto h-4 w-4 rounded-full border-2 ${paymentMethod === "COD" ? "border-slate-900 bg-slate-900 ring-2 ring-slate-900 ring-offset-2" : "border-slate-300"}`} />
                   </div>
+                </button>
 
-                  <div>
-                    <p className="font-bold text-slate-900">
-                      Cash on Delivery
-                    </p>
-
-                    <p className="mt-1 text-sm text-slate-500">
-                      Pay when your order is delivered.
-                    </p>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod("ONLINE")}
+                  disabled={placingOrder}
+                  aria-pressed={paymentMethod === "ONLINE"}
+                  className={`rounded-2xl border-2 p-4 text-left transition ${paymentMethod === "ONLINE" ? "border-slate-900 bg-slate-50" : "border-slate-200 hover:border-slate-400"}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-600 text-white"><svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h3"/></svg></span>
+                    <span>
+                      <span className="block font-bold text-slate-900">Online Payment</span>
+                      <span className="mt-1 block text-xs text-slate-500">UPI, cards and supported methods</span>
+                    </span>
+                    <span className={`ml-auto h-4 w-4 rounded-full border-2 ${paymentMethod === "ONLINE" ? "border-slate-900 bg-slate-900 ring-2 ring-slate-900 ring-offset-2" : "border-slate-300"}`} />
                   </div>
+                </button>
+              </div>
 
-                  <div className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-slate-900">
-                    <div className="h-2 w-2 rounded-full bg-white" />
-                  </div>
+              {paymentMethod === "ONLINE" && (
+                <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                  {subtotal >= 1000
+                    ? "₹20 instant prepaid discount applied. ₹20 reward credit may be added after delivery, subject to the reward rules."
+                    : "Pay online securely through Cashfree. Eligible orders of ₹1,000 or more get ₹20 instant discount."}
                 </div>
-              </div>
-
-              <div className="mt-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-700">
-                Online payment will be enabled after payment gateway integration.
-              </div>
+              )}
             </section>
 
             {/* Sellers */}
@@ -839,8 +883,8 @@ export default function CheckoutPage() {
                       </p>
                     </div>
 
-                    <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
-                      COD
+                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${paymentMethod === "ONLINE" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
+                      {paymentMethod === "ONLINE" ? "PREPAID" : "COD"}
                     </span>
                   </div>
                 </div>
@@ -861,10 +905,10 @@ export default function CheckoutPage() {
                 className="mt-7 w-full rounded-2xl bg-slate-900 px-5 py-4 text-base font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {placingOrder
-                  ? "Placing Order..."
-                  : `Place Order • ₹${total.toLocaleString(
-                      "en-IN"
-                    )}`}
+                  ? paymentMethod === "ONLINE" ? "Processing Payment..." : "Placing Order..."
+                  : paymentMethod === "ONLINE"
+                    ? `Pay Securely • ₹${total.toLocaleString("en-IN")}`
+                    : `Place COD Order • ₹${total.toLocaleString("en-IN")}`}
               </button>
 
               <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">
