@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { FieldValue, type DocumentReference } from "firebase-admin/firestore";
 
-import { adminDb } from "@/lib/firebase-admin";
+import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import { verifyIdToken } from "@/lib/firebase-admin-auth";
 
 export const runtime = "nodejs";
@@ -338,6 +338,23 @@ export async function POST(request: Request) {
     );
     const userId = decodedToken.uid;
 
+    // Do not trust Firestore verification flags for authentication.
+    // Firebase Auth is authoritative: emailVerified must be true and
+    // phoneNumber must be present (a linked Firebase phone is verified).
+    const authUser = await adminAuth.getUser(userId);
+
+    if (!authUser.emailVerified || !authUser.phoneNumber) {
+      return NextResponse.json(
+        {
+          success: false,
+          code: "VERIFICATION_REQUIRED",
+          message: "Verify both your email and phone number before placing an order.",
+          redirectTo: "/verify",
+        },
+        { status: 403 }
+      );
+    }
+
     const body = await request.json();
 
     const paymentMethod = body?.paymentMethod;
@@ -652,11 +669,16 @@ export async function POST(request: Request) {
         }
       }
 
-      if (
-        accountStatus &&
-        accountStatus !== "ACTIVE"
-      ) {
+      if (accountStatus !== "ACTIVE") {
         throw new Error("Your account is not active yet.");
+      }
+
+      const userRole = userData.role;
+      if (
+        userRole !== "RETAIL_CUSTOMER" &&
+        userRole !== "WHOLESALE_CUSTOMER"
+      ) {
+        throw new Error("Only verified customer accounts can place orders.");
       }
 
       const isWholesaleCustomer =
