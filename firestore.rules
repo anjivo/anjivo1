@@ -7,12 +7,35 @@ service cloud.firestore {
     // COMMON HELPERS
     // =========================================================
 
-    function signedIn() {
+    // Raw Firebase authentication: permits limited onboarding/profile access.
+    function authenticated() {
       return request.auth != null;
+    }
+
+    // Protected marketplace features require BOTH Firebase Auth verifications.
+    // email_verified is a Firebase ID-token claim; phone_number is present
+    // when a verified phone credential is linked to the Firebase user.
+    function verifiedAccount() {
+      return authenticated()
+        && request.auth.token.email_verified == true
+        && request.auth.token.keys().hasAny(['phone_number'])
+        && request.auth.token.phone_number is string
+        && request.auth.token.phone_number.size() > 0;
+    }
+
+    // Keep the existing helper name, but make all existing protected rules
+    // require both email and phone verification.
+    function signedIn() {
+      return verifiedAccount();
     }
 
     function isOwner(userId) {
       return signedIn()
+        && request.auth.uid == userId;
+    }
+
+    function authenticatedOwner(userId) {
+      return authenticated()
         && request.auth.uid == userId;
     }
 
@@ -118,20 +141,28 @@ service cloud.firestore {
 
     match /users/{userId} {
 
-      allow read: if isOwner(userId)
+      // Unverified users may read their own profile while completing OTP
+      // verification. This does NOT grant access to protected collections.
+      allow read: if authenticatedOwner(userId)
         || isAdmin();
 
-      allow create: if isOwner(userId)
+      // Registration must be possible before the email/phone checks are complete.
+      allow create: if authenticatedOwner(userId)
         && request.resource.data.uid == request.auth.uid
         && request.resource.data.role in [
           "RETAIL_CUSTOMER",
           "WHOLESALE_CUSTOMER"
         ]
-        && request.resource.data.accountStatus == "PENDING_VERIFICATION";
+        && request.resource.data.accountStatus == "PENDING_VERIFICATION"
+        && request.resource.data.emailVerified == false
+        && request.resource.data.phoneVerified == false;
 
+      // Users can edit ordinary profile fields while onboarding, but cannot
+      // self-assign roles, activate the account, or change verification flags.
+      // Verification status must be updated by trusted backend code.
       allow update: if isAdmin()
         || (
-          isOwner(userId)
+          authenticatedOwner(userId)
 
           && request.resource.data.uid
              == resource.data.uid
