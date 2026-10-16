@@ -205,9 +205,26 @@ export default function LoginPage() {
         role === "RETAIL_CUSTOMER" ||
         role === "WHOLESALE_CUSTOMER"
       ) {
-        router.push(
-          "/account"
-        );
+        // Refresh Firebase Auth so these checks use the latest verified state.
+        await user.reload();
+        const currentUser = auth.currentUser;
+
+        if (!currentUser) {
+          router.replace("/login");
+          return;
+        }
+
+        // Firebase Auth is authoritative; do not trust client-editable
+        // Firestore verification flags for login routing.
+        const emailVerified = currentUser.emailVerified === true;
+        const phoneVerified = Boolean(currentUser.phoneNumber);
+
+        if (!emailVerified || !phoneVerified) {
+          router.replace("/verify");
+          return;
+        }
+
+        router.replace("/account");
         return;
       }
 
