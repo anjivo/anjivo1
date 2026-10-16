@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import { useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
@@ -156,10 +156,23 @@ export default function MyOrdersPage() {
           setLoading(true);
           setError("");
 
-          const result = await getUserOrders(
-            user.uid
-          );
+          // Refresh Firebase Auth claims before checking verification.
+          await user.reload();
+          const currentUser = auth.currentUser as User | null;
 
+          if (!currentUser) {
+            router.replace("/login?redirect=/account/orders");
+            return;
+          }
+
+          // Firebase Auth is authoritative for email and linked phone verification.
+          // Do not trust Firestore boolean flags alone.
+          if (!currentUser.emailVerified || !currentUser.phoneNumber) {
+            router.replace("/verify");
+            return;
+          }
+
+          const result = await getUserOrders(currentUser.uid);
           setOrders(result);
         } catch (err) {
           console.error(
