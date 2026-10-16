@@ -1,9 +1,12 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import sgMail from "@sendgrid/mail";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import {
+  FieldValue,
+  Timestamp,
+} from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
-import { randomInt } from "crypto";
+import { createHash, randomInt } from "crypto";
 
 export const runtime = "nodejs";
 
@@ -11,27 +14,39 @@ const OTP_EXPIRY_MINUTES = 10;
 const RESEND_COOLDOWN_SECONDS = 60;
 
 function jsonError(message: string, status: number) {
-  return NextResponse.json({ success: false, message }, { status });
+  return NextResponse.json(
+    { success: false, message },
+    { status }
+  );
 }
 
 export async function POST(request: NextRequest) {
   try {
     const apiKey = process.env.SENDGRID_API_KEY?.trim();
     const fromEmail = process.env.SENDGRID_FROM_EMAIL?.trim();
+    const secret = process.env.OTP_HASH_SECRET;
 
     if (!apiKey || !fromEmail) {
       console.error("SendGrid environment variables are missing.");
       return jsonError("Email service is not configured.", 500);
     }
 
+    if (!secret) {
+      console.error("OTP_HASH_SECRET is missing.");
+      return jsonError("Email verification is not configured.", 500);
+    }
+
     sgMail.setApiKey(apiKey);
 
-    // Require a Firebase ID token; never accept a UID from the request body.
+    // Authenticate the currently signed-in Firebase user.
     const authorization = request.headers.get("authorization");
     const match = authorization?.match(/^Bearer\s+(.+)$/i);
 
     if (!match) {
-      return jsonError("Please log in again to verify your email.", 401);
+      return jsonError(
+        "Please log in again to verify your email.",
+        401
+      );
     }
 
     let decodedToken;
@@ -39,14 +54,21 @@ export async function POST(request: NextRequest) {
     try {
       decodedToken = await adminAuth.verifyIdToken(match[1], true);
     } catch {
-      return jsonError("Your session has expired. Please log in again.", 401);
+      return jsonError(
+        "Your session has expired. Please log in again.",
+        401
+      );
     }
 
-    const user = await adminAuth.getUser(decodedToken.uid);
+    const uid = decodedToken.uid;
+    const user = await adminAuth.getUser(uid);
     const email = user.email?.trim().toLowerCase();
 
     if (!email) {
-      return jsonError("No email address is linked to this account.", 400);
+      return jsonError(
+        "No email address is linked to this account.",
+        400
+      );
     }
 
     if (user.emailVerified) {
@@ -58,13 +80,15 @@ export async function POST(request: NextRequest) {
     }
 
     const db = adminDb;
-    const userRef = db.collection("users").doc(user.uid);
-    const otpRef = db.collection("emailVerificationOtps").doc(user.uid);
+    const userRef = db.collection("users").doc(uid);
+    const otpRef = db.collection("emailVerificationOtps").doc(uid);
 
     const now = Date.now();
-
-    // Check the resend cooldown and update the OTP record transactionally.
     const otp = String(randomInt(0, 1_000_000)).padStart(6, "0");
+
+    const otpHash = createHash("sha256")
+      .update(`${uid}:${otp}:${secret}`)
+      .digest("hex");
 
     const result = await db.runTransaction(async (transaction) => {
       const [userSnap, otpSnap] = await Promise.all([
@@ -77,13 +101,11 @@ export async function POST(request: NextRequest) {
       }
 
       const userData = userSnap.data();
-
-      // Prevent sending to a different email than the account's email.
       const storedEmail = String(userData?.email ?? "")
         .trim()
         .toLowerCase();
 
-      if (storedEmail && storedEmail !== email) {
+      if (!storedEmail || storedEmail !== email) {
         throw new Error("EMAIL_MISMATCH");
       }
 
@@ -92,9 +114,10 @@ export async function POST(request: NextRequest) {
 
       if (
         lastSentAt instanceof Timestamp &&
-        now - lastSentAt.toMillis() < RESEND_COOLDOWN_SECONDS * 1000
+        now - lastSentAt.toMillis() <
+          RESEND_COOLDOWN_SECONDS * 1000
       ) {
-        return { cooldown: true };
+        return { cooldown: true as const };
       }
 
       const expiresAt = Timestamp.fromMillis(
@@ -102,16 +125,16 @@ export async function POST(request: NextRequest) {
       );
 
       transaction.set(otpRef, {
-        uid: user.uid,
+        uid,
         email,
-        otpHash: "", // Filled below only in a follow-up implementation.
+        otpHash,
         expiresAt,
         lastSentAt: Timestamp.fromMillis(now),
         attempts: 0,
         createdAt: FieldValue.serverTimestamp(),
       });
 
-      return { cooldown: false, expiresAt };
+      return { cooldown: false as const };
     });
 
     if (result.cooldown) {
@@ -119,43 +142,57 @@ export async function POST(request: NextRequest) {
         {
           success: false,
           message: "Please wait 60 seconds before requesting another OTP.",
+          resendAfterSeconds: RESEND_COOLDOWN_SECONDS,
         },
         { status: 429 }
       );
     }
-
-    // Store only a hash of the OTP, not the plain OTP.
-    const { createHash } = await import("crypto");
-    const otpHash = createHash("sha256")
-      .update(`${user.uid}:${otp}:${process.env.OTP_HASH_SECRET ?? apiKey}`)
-      .digest("hex");
-
-    await otpRef.update({ otpHash });
 
     try {
       await sgMail.send({
         to: email,
         from: fromEmail,
         subject: "Your ANJIVO email verification code",
-        text: `Your ANJIVO verification code is ${otp}. It expires in ${OTP_EXPIRY_MINUTES} minutes. Do not share this code with anyone.`,
+        text:
+          `Your ANJIVO verification code is ${otp}. ` +
+          `It expires in ${OTP_EXPIRY_MINUTES} minutes. ` +
+          "Do not share this code with anyone.",
         html: `
           <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:24px;color:#222">
             <h2>Verify your ANJIVO email</h2>
-            <p>Use the following one-time password to verify your account:</p>
+            <p>Use this one-time password to verify your account:</p>
             <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:16px 0">${otp}</div>
             <p>This code expires in ${OTP_EXPIRY_MINUTES} minutes.</p>
             <p>If you did not request this code, you can ignore this email.</p>
           </div>
         `,
       });
-    } catch (error) {
-      console.error("SendGrid email delivery failed:", error);
+    } catch (error: unknown) {
+      const err = error as {
+        code?: number | string;
+        message?: string;
+        response?: {
+          statusCode?: number;
+          body?: unknown;
+        };
+      };
 
-      // Invalidate the OTP if email delivery failed.
-      await otpRef.delete().catch(() => undefined);
+      // Keep diagnostic details in server logs only.
+      console.error("SendGrid email delivery failed:", {
+        code: err.code,
+        statusCode: err.response?.statusCode,
+        details: err.response?.body,
+        message: err.message,
+      });
+
+      // Invalidate this challenge if email delivery failed.
+      // A later request can create a fresh OTP.
+      await otpRef.delete().catch((deleteError) => {
+        console.error("Failed to invalidate undelivered OTP:", deleteError);
+      });
 
       return jsonError(
-        "Could not send the verification email. Please try again later.",
+        "Could not send the verification email. Check SendGrid configuration and server logs.",
         502
       );
     }
@@ -181,6 +218,10 @@ export async function POST(request: NextRequest) {
     }
 
     console.error("Email OTP send route error:", error);
-    return jsonError("Something went wrong while sending the OTP.", 500);
+
+    return jsonError(
+      "Something went wrong while sending the OTP.",
+      500
+    );
   }
 }
