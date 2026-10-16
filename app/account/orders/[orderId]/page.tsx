@@ -212,13 +212,34 @@ export default function OrderDetailsPage() {
     let unsubscribeOrder: (() => void) | undefined;
     let isActive = true;
 
-    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
       // Stop any previous user's order listener if auth changes.
       unsubscribeOrder?.();
       unsubscribeOrder = undefined;
 
       if (!user) {
         router.replace(`/login?redirect=/account/orders/${orderId}`);
+        return;
+      }
+
+      // Require authoritative Firebase Auth verification before loading order data.
+      try {
+        await user.reload();
+      } catch (authError) {
+        console.error("Could not refresh Firebase user:", authError);
+        setError("Unable to confirm your account status. Please sign in again.");
+        setLoading(false);
+        return;
+      }
+
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        router.replace(`/login?redirect=/account/orders/${orderId}`);
+        return;
+      }
+
+      if (!currentUser.emailVerified || !currentUser.phoneNumber) {
+        router.replace("/verify");
         return;
       }
 
