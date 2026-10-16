@@ -96,12 +96,11 @@ export default function VerifyPage() {
     setUserEmail(user.email || "");
     const userSnap = await getDoc(doc(db, "users", user.uid));
     const data = userSnap.exists() ? userSnap.data() : {};
+    // Verification status must come from Firebase Authentication, not editable
+    // Firestore flags. Firestore values are used only to display the saved phone.
     const next = {
-      emailVerified: user.emailVerified || data.emailVerified === true,
-      // Firebase Auth is the authoritative source that the phone credential was verified.
-      phoneVerified:
-        user.phoneNumber !== null ||
-        data.phoneVerified === true,
+      emailVerified: user.emailVerified === true,
+      phoneVerified: Boolean(user.phoneNumber),
     };
 
     const savedPhone =
@@ -282,23 +281,27 @@ export default function VerifyPage() {
 
       const credentialResult = await confirmation.confirm(phoneOtp);
       const verifiedUser = credentialResult.user;
-      const verifiedPhone = verifiedUser.phoneNumber;
+      await verifiedUser.reload();
+      const currentUser = auth.currentUser || verifiedUser;
+      const verifiedPhone = currentUser.phoneNumber;
 
       if (!verifiedPhone) {
         throw new Error("Firebase did not return a verified phone number. Please try again.");
       }
 
-      const userRef = doc(db, "users", verifiedUser.uid);
+      const userRef = doc(db, "users", currentUser.uid);
       const userSnap = await getDoc(userRef);
-      const data = userSnap.exists() ? userSnap.data() : {};
-      const emailVerified =
-        verifiedUser.emailVerified || data.emailVerified === true;
+      if (!userSnap.exists()) {
+        throw new Error("Account profile was not found. Please contact support.");
+      }
+
+      // Do not activate an account from the browser. The account activation
+      // decision must be made by a trusted server after checking both factors.
+      const emailVerified = currentUser.emailVerified === true;
 
       await updateDoc(userRef, {
         phone: verifiedPhone,
-        phoneVerified: true,
         updatedAt: serverTimestamp(),
-        ...(emailVerified ? { accountStatus: "ACTIVE" } : {}),
       });
 
       confirmationRef.current = null;
@@ -335,11 +338,6 @@ export default function VerifyPage() {
       await user.reload();
       const next = await loadStatus(auth.currentUser || user);
       if (next.emailVerified && next.phoneVerified) {
-        const current = auth.currentUser || user;
-        await updateDoc(doc(db, "users", current.uid), {
-          accountStatus: "ACTIVE",
-          updatedAt: serverTimestamp(),
-        });
         router.replace("/account");
       } else {
         setMessage("Verification status refreshed.");
