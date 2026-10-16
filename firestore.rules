@@ -23,10 +23,18 @@ service cloud.firestore {
         && request.auth.token.phone_number.size() > 0;
     }
 
-    // Keep the existing helper name, but make all existing protected rules
-    // require both email and phone verification.
+    // Protected marketplace access requires both verified Firebase Auth
+    // claims AND an ACTIVE Firestore user profile. The separate
+    // authenticatedOwner() helper intentionally remains available for the
+    // user's own onboarding/profile verification flow.
     function signedIn() {
-      return verifiedAccount();
+      return verifiedAccount()
+        && exists(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        )
+        && get(
+          /databases/$(database)/documents/users/$(request.auth.uid)
+        ).data.accountStatus == "ACTIVE";
     }
 
     function isOwner(userId) {
