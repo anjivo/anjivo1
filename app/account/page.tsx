@@ -27,40 +27,60 @@ export default function AccountPage() {
   const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      async (currentUser) => {
-        if (!currentUser) {
+    let active = true;
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser) {
+        router.replace("/login");
+        return;
+      }
+
+      try {
+        // Refresh Firebase Auth so emailVerified is not a stale client value.
+        await currentUser.reload();
+        const freshUser = auth.currentUser;
+
+        if (!freshUser) {
           router.replace("/login");
           return;
         }
 
-        setUser(currentUser);
+        // Treat Firebase Auth as authoritative. A Firestore flag alone must
+        // never grant access to the buyer account dashboard.
+        const emailVerified = freshUser.emailVerified === true;
+        const phoneVerified = Boolean(freshUser.phoneNumber);
 
-        try {
-          const userRef = doc(
-            db,
-            "users",
-            currentUser.uid
-          );
-
-          const snapshot = await getDoc(userRef);
-
-          if (snapshot.exists()) {
-            setProfile(snapshot.data() as UserProfile);
-          }
-        } catch (error) {
-          console.error(
-            "Failed to load user profile:",
-            error
-          );
-        } finally {
-          setLoading(false);
+        if (!emailVerified || !phoneVerified) {
+          router.replace("/verify");
+          return;
         }
-      }
-    );
 
-    return () => unsubscribe();
+        const userRef = doc(db, "users", freshUser.uid);
+        const snapshot = await getDoc(userRef);
+
+        if (!snapshot.exists()) {
+          console.error("ANJIVO user profile is missing for UID:", freshUser.uid);
+          router.replace("/verify");
+          return;
+        }
+
+        if (!active) return;
+        setUser(freshUser);
+        setProfile(snapshot.data() as UserProfile);
+      } catch (error) {
+        console.error("Failed to validate account access:", error);
+        if (active) {
+          router.replace("/verify");
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    });
+
+    return () => {
+      active = false;
+      unsubscribe();
+    };
   }, [router]);
 
   async function handleLogout() {
