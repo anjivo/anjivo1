@@ -13,6 +13,7 @@ import {
 } from "firebase/auth";
 import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
+import FloatingHelpButton from "@/components/support/FloatingHelpButton";
 
 type VerificationStatus = {
   emailVerified: boolean;
@@ -167,6 +168,41 @@ export default function VerifyPage() {
     }
   }
 
+  async function activateAccountIfVerified(user: User): Promise<boolean> {
+    await user.reload();
+    const freshUser = auth.currentUser;
+    if (!freshUser) {
+      router.replace("/login");
+      return false;
+    }
+
+    const emailVerified = freshUser.emailVerified === true;
+    const phoneVerified = Boolean(freshUser.phoneNumber);
+
+    setStatus({ emailVerified, phoneVerified });
+
+    if (!emailVerified || !phoneVerified) {
+      return false;
+    }
+
+    const token = await freshUser.getIdToken(true);
+    const response = await fetch("/api/verification/account/activate", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(
+        result.message ||
+          "Both checks passed, but account activation could not be completed. Please try again."
+      );
+    }
+
+    router.replace("/account");
+    return true;
+  }
+
   async function verifyEmailOtp() {
     setVerifyingEmail(true);
     setError("");
@@ -194,7 +230,7 @@ export default function VerifyPage() {
         const next = await loadStatus(auth.currentUser || user);
         setMessage(result.message || "Email verified successfully.");
         if (next.emailVerified && next.phoneVerified) {
-          router.replace("/account");
+          await activateAccountIfVerified(auth.currentUser || user);
         }
       }
     } catch (e) {
@@ -313,7 +349,7 @@ export default function VerifyPage() {
       setMessage("Mobile number verified successfully.");
 
       if (emailVerified) {
-        router.replace("/account");
+        await activateAccountIfVerified(auth.currentUser || currentUser);
       }
     } catch (e) {
       console.error("Verify mobile OTP failed:", e);
@@ -338,7 +374,7 @@ export default function VerifyPage() {
       await user.reload();
       const next = await loadStatus(auth.currentUser || user);
       if (next.emailVerified && next.phoneVerified) {
-        router.replace("/account");
+        await activateAccountIfVerified(auth.currentUser || user);
       } else {
         setMessage("Verification status refreshed.");
       }
@@ -362,6 +398,7 @@ export default function VerifyPage() {
 
   return (
     <div className="min-h-screen bg-[#f7f8fa] text-gray-950">
+      <FloatingHelpButton />
       <header className="border-b border-gray-200 bg-white">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
           <Link href="/" className="relative block h-14 w-32" aria-label="ANJIVO Home">
