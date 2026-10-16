@@ -1,5 +1,4 @@
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -7,15 +6,10 @@ import {
   onSnapshot,
   query,
   where,
-  serverTimestamp,
 } from "firebase/firestore";
 
-import { db } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 
-import {
-  getCart,
-  getWholesalePrice,
-} from "@/lib/cart";
 
 /* ----------------------------------------
    Shipping Address
@@ -186,6 +180,35 @@ function clean(value: unknown): string {
   return typeof value === "string"
     ? value.trim()
     : "";
+}
+
+/* ----------------------------------------
+   Customer verification guard
+---------------------------------------- */
+
+/**
+ * Client-side guard for customer order reads.
+ * Firebase Auth is reloaded so verification fields are refreshed.
+ * Server APIs and Firestore Rules must enforce verification and ownership too.
+ */
+async function requireVerifiedCustomer(userId: string): Promise<void> {
+  const currentUser = auth.currentUser;
+
+  if (!currentUser || currentUser.uid !== userId) {
+    throw new Error("Please sign in to view this order.");
+  }
+
+  await currentUser.reload();
+
+  const refreshedUser = auth.currentUser;
+
+  if (!refreshedUser || refreshedUser.uid !== userId) {
+    throw new Error("Your session has changed. Please sign in again.");
+  }
+
+  if (!refreshedUser.emailVerified || !refreshedUser.phoneNumber) {
+    throw new Error("Please verify both your email and phone number first.");
+  }
 }
 
 /* ----------------------------------------
@@ -483,6 +506,8 @@ export async function getOrderById(
     return null;
   }
 
+  await requireVerifiedCustomer(userId);
+
   const orderRef = doc(
     db,
     "orders",
@@ -534,31 +559,54 @@ export function subscribeToOrderById(
     return () => {};
   }
 
-  const orderRef = doc(db, "orders", orderId);
+  let cancelled = false;
+  let unsubscribeSnapshot: (() => void) | undefined;
 
-  return onSnapshot(
-    orderRef,
-    (orderSnap) => {
-      if (!orderSnap.exists()) {
-        onOrder(null);
-        return;
-      }
+  // Verify the signed-in customer before opening the live order listener.
+  void requireVerifiedCustomer(userId)
+    .then(() => {
+      if (cancelled) return;
 
-      const data = orderSnap.data();
+      const orderRef = doc(db, "orders", orderId);
 
-      // Enforce customer ownership in the client as an additional check.
-      // Firestore Security Rules must enforce this on the server as well.
-      if (data.userId !== userId) {
-        onOrder(null);
-        return;
-      }
+      unsubscribeSnapshot = onSnapshot(
+        orderRef,
+        (orderSnap) => {
+          if (!orderSnap.exists()) {
+            onOrder(null);
+            return;
+          }
 
-      onOrder(mapOrder(orderSnap.id, data));
-    },
-    (error) => {
-      onError?.(error);
-    }
-  );
+          const data = orderSnap.data();
+
+          // Additional client-side ownership check. Firestore Rules must
+          // enforce ownership independently.
+          if (data.userId !== userId) {
+            onOrder(null);
+            return;
+          }
+
+          onOrder(mapOrder(orderSnap.id, data));
+        },
+        (error) => {
+          onError?.(error);
+        }
+      );
+    })
+    .catch((error: unknown) => {
+      if (cancelled) return;
+      onOrder(null);
+      onError?.(
+        error instanceof Error
+          ? error
+          : new Error("Unable to verify your account before loading this order.")
+      );
+    });
+
+  return () => {
+    cancelled = true;
+    unsubscribeSnapshot?.();
+  };
 }
 
 /* ----------------------------------------
@@ -571,6 +619,8 @@ export async function getUserOrders(
   if (!userId) {
     return [];
   }
+
+  await requireVerifiedCustomer(userId);
 
   const ordersRef =
     collection(
