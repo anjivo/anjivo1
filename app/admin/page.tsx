@@ -581,7 +581,9 @@ export default function AdminDashboard() {
         couponsCount,
         notificationsCount,
       ] = await Promise.all([
-        countCollection("users"),
+        // Client-side Firestore Rules should not expose the entire users collection.
+        // Keep this metric at 0 until it is supplied by a server-side admin-only API.
+        Promise.resolve(0),
 
         countCollection("sellers"),
 
@@ -674,7 +676,8 @@ export default function AdminDashboard() {
       );
 
       return result.data().count;
-    } catch {
+    } catch (error) {
+      console.error(`Admin dashboard: count failed for collection "${collectionName}"`, error);
       return 0;
     }
   }
@@ -694,7 +697,8 @@ export default function AdminDashboard() {
       );
 
       return result.data().count;
-    } catch {
+    } catch (error) {
+      console.error(`Admin dashboard: count query failed for "${collectionName}" on field "${field}"`, error);
       return 0;
     }
   }
