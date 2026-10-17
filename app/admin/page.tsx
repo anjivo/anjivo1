@@ -7,6 +7,8 @@ import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
+  doc,
+  getDoc,
   getCountFromServer,
   query,
   where,
@@ -503,27 +505,34 @@ export default function AdminDashboard() {
         try {
           setError("");
 
-          const userSnapshot = await getCountFromServer(
-            query(
-              collection(db, "users"),
-              where("uid", "==", user.uid)
-            )
-          );
+          // Read only the signed-in user's profile by its document ID.
+          // A collection query is not a substitute for document-level access:
+          // Firestore Security Rules are not filters and may reject that query.
+          const userSnapshot = await getDoc(doc(db, "users", user.uid));
 
-          if (userSnapshot.data().count === 0) {
-            setError("Admin account not found.");
+          if (!userSnapshot.exists()) {
+            setError("Admin profile was not found at users/{your Firebase UID}.");
             setLoading(false);
             return;
           }
 
-          /*
-           * NOTE:
-           * Firestore security rules remain the final authority.
-           * The query above only confirms that a user document exists.
-           *
-           * Actual admin access is enforced by Firestore rules.
-           */
+          const profile = userSnapshot.data();
+          const role = String(profile.role ?? "").toUpperCase();
+          const status = String(profile.accountStatus ?? "").toUpperCase();
 
+          if (!["ADMIN", "SUPERADMIN"].includes(role)) {
+            setError(`Access denied: this account role is ${profile.role ?? "missing"}, not ADMIN/SUPERADMIN.`);
+            setLoading(false);
+            return;
+          }
+
+          if (status !== "ACTIVE") {
+            setError(`Access denied: admin accountStatus is ${profile.accountStatus ?? "missing"}; it must be ACTIVE.`);
+            setLoading(false);
+            return;
+          }
+
+          // Firestore Security Rules remain the final authority for all reads.
           await loadStats();
         } catch (err) {
           console.error("Admin dashboard error:", err);
