@@ -40,14 +40,6 @@ export async function GET(request: NextRequest) {
       return jsonError("Your session is invalid or expired. Please sign in again.", 401);
     }
 
-    const authUser = await getAdminAuth().getUser(decodedToken.uid);
-    if (!authUser.emailVerified) {
-      return jsonError("Admin email verification is required.", 403);
-    }
-    if (!authUser.phoneNumber) {
-      return jsonError("Admin phone verification is required.", 403);
-    }
-
     const profileSnapshot = await getAdminDb().collection("users").doc(decodedToken.uid).get();
     if (!profileSnapshot.exists) return jsonError("Admin profile was not found.", 403);
 
