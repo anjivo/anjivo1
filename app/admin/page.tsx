@@ -4,15 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { onAuthStateChanged } from "firebase/auth";
-import {
-  collection,
-  doc,
-  getDoc,
-  getCountFromServer,
-  query,
-  where,
-} from "firebase/firestore";
+import { onAuthStateChanged, type User } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
@@ -535,7 +528,7 @@ export default function AdminDashboard() {
           }
 
           // Firestore Security Rules remain the final authority for all reads.
-          await loadStats();
+          await loadStats(user);
         } catch (err) {
           console.error("Admin profile/dashboard initialization failed:", err);
           const firebaseError = err as { code?: string; message?: string };
@@ -553,158 +546,49 @@ export default function AdminDashboard() {
     return () => unsubscribe();
   }, [router]);
 
-  async function loadStats() {
+  async function loadStats(user: User | null = auth.currentUser) {
+    if (!user) {
+      setError("Please sign in again to load admin statistics.");
+      return;
+    }
+
     setRefreshing(true);
     setError("");
 
     try {
-      const [
-        usersCount,
-        sellersCount,
-        productsCount,
-        activeProductsCount,
-        draftProductsCount,
-        blockedProductsCount,
-        outOfStockProductsCount,
-
-        ordersCount,
-        pendingOrdersCount,
-        deliveredOrdersCount,
-        cancelledOrdersCount,
-
-        categoriesCount,
-        reviewsCount,
-        pendingReviewsCount,
-
-        pendingSellersCount,
-        approvedSellersCount,
-        blockedSellersCount,
-
-        wholesaleEnquiriesCount,
-        returnsCount,
-        pendingReturnsCount,
-        couponsCount,
-        notificationsCount,
-      ] = await Promise.all([
-        // Client-side Firestore Rules should not expose the entire users collection.
-        // Keep this metric at 0 until it is supplied by a server-side admin-only API.
-        Promise.resolve(0),
-
-        countCollection("sellers"),
-
-        countCollection("products"),
-
-        countWhere("products", "status", "==", "active"),
-
-        countWhere("products", "status", "==", "draft"),
-
-        countWhere("products", "status", "==", "blocked"),
-
-        countWhere("products", "status", "==", "out_of_stock"),
-
-        countCollection("orders"),
-
-        countWhere("orders", "status", "==", "pending"),
-
-        countWhere("orders", "status", "==", "delivered"),
-
-        countWhere("orders", "status", "==", "cancelled"),
-
-        countCollection("categories"),
-
-        countCollection("reviews"),
-
-        countWhere("reviews", "status", "==", "pending"),
-
-        countWhere("sellers", "status", "==", "pending"),
-
-        countWhere("sellers", "status", "==", "approved"),
-
-        countWhere("sellers", "status", "==", "blocked"),
-
-        countCollection("wholesaleEnquiries"),
-
-        countCollection("returns"),
-
-        countWhere("returns", "status", "==", "pending"),
-
-        countCollection("coupons"),
-
-        countCollection("notifications"),
-      ]);
-
-      setStats({
-        users: usersCount,
-        sellers: sellersCount,
-
-        products: productsCount,
-        activeProducts: activeProductsCount,
-        draftProducts: draftProductsCount,
-        blockedProducts: blockedProductsCount,
-        outOfStockProducts: outOfStockProductsCount,
-
-        orders: ordersCount,
-        pendingOrders: pendingOrdersCount,
-        deliveredOrders: deliveredOrdersCount,
-        cancelledOrders: cancelledOrdersCount,
-
-        categories: categoriesCount,
-        reviews: reviewsCount,
-        pendingReviews: pendingReviewsCount,
-
-        pendingSellers: pendingSellersCount,
-        approvedSellers: approvedSellersCount,
-        blockedSellers: blockedSellersCount,
-
-        wholesaleEnquiries: wholesaleEnquiriesCount,
-        returns: returnsCount,
-        pendingReturns: pendingReturnsCount,
-        coupons: couponsCount,
-
-        notifications: notificationsCount,
+      const idToken = await user.getIdToken();
+      const response = await fetch("/api/admin/dashboard-stats", {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          "Cache-Control": "no-store",
+        },
+        cache: "no-store",
       });
-    } catch (err) {
-      console.error("Stats error:", err);
 
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          typeof payload.error === "string"
+            ? payload.error
+            : `Dashboard statistics request failed (${response.status}).`
+        );
+      }
+
+      if (!payload.stats || typeof payload.stats.products !== "number") {
+        throw new Error("The dashboard statistics API returned an invalid response.");
+      }
+
+      setStats((previous) => ({ ...previous, ...payload.stats }));
+    } catch (err) {
+      console.error("Admin dashboard stats API failed:", err);
       setError(
-        "Some dashboard statistics could not be loaded. Check whether the related Firestore collections exist and whether Admin permissions allow reading them."
+        err instanceof Error
+          ? err.message
+          : "Could not load dashboard statistics from the secure admin API."
       );
     } finally {
       setRefreshing(false);
-    }
-  }
-
-  async function countCollection(collectionName: string) {
-    try {
-      const result = await getCountFromServer(
-        collection(db, collectionName)
-      );
-
-      return result.data().count;
-    } catch (error) {
-      console.error(`Admin dashboard: count failed for collection "${collectionName}"`, error);
-      return 0;
-    }
-  }
-
-  async function countWhere(
-    collectionName: string,
-    field: string,
-    operator: "==" | ">=" | "<=",
-    value: unknown
-  ) {
-    try {
-      const result = await getCountFromServer(
-        query(
-          collection(db, collectionName),
-          where(field, operator, value)
-        )
-      );
-
-      return result.data().count;
-    } catch (error) {
-      console.error(`Admin dashboard: count query failed for "${collectionName}" on field "${field}"`, error);
-      return 0;
     }
   }
 
@@ -852,7 +736,7 @@ export default function AdminDashboard() {
 
             <button
               type="button"
-              onClick={() => loadStats()}
+              onClick={() => loadStats(auth.currentUser)}
               disabled={refreshing}
               className="rounded-xl bg-black px-4 py-3 text-xs font-bold text-white hover:bg-gray-800 disabled:opacity-50"
             >
