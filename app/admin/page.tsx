@@ -505,9 +505,11 @@ export default function AdminDashboard() {
         try {
           setError("");
 
-          // Read only the signed-in user's profile by its document ID.
-          // A collection query is not a substitute for document-level access:
-          // Firestore Security Rules are not filters and may reject that query.
+          // Refresh the ID token so Firestore receives the latest auth claims.
+          // This does not grant permissions; Firestore Rules remain authoritative.
+          await user.getIdToken(true);
+
+          // Read only this user's profile by document ID, never by collection query.
           const userSnapshot = await getDoc(doc(db, "users", user.uid));
 
           if (!userSnapshot.exists()) {
@@ -535,9 +537,12 @@ export default function AdminDashboard() {
           // Firestore Security Rules remain the final authority for all reads.
           await loadStats();
         } catch (err) {
-          console.error("Admin dashboard error:", err);
+          console.error("Admin profile/dashboard initialization failed:", err);
+          const firebaseError = err as { code?: string; message?: string };
+          const code = firebaseError?.code ?? "unknown-error";
+          const message = firebaseError?.message ?? "No error message was provided.";
           setError(
-            "Unable to load Admin Dashboard. Please check Firestore permissions."
+            `Could not verify the admin profile (${code}): ${message}. Check that the deployed app uses the correct Firebase project and published Firestore Rules.`
           );
         } finally {
           setLoading(false);
