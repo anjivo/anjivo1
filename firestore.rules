@@ -47,11 +47,10 @@ service cloud.firestore {
         && request.auth.uid == userId;
     }
 
-    function userExists() {
-      return signedIn()
-        && exists(
-          /databases/$(database)/documents/users/$(request.auth.uid)
-        );
+    function userProfileExists(userId) {
+      return exists(
+        /databases/$(database)/documents/users/$(userId)
+      );
     }
 
     function currentUser() {
@@ -60,16 +59,19 @@ service cloud.firestore {
       );
     }
 
+    // Admin access is intentionally strict: Firebase email + phone must be
+    // verified, and the Firestore profile must explicitly be ACTIVE and admin.
+    // Do not remove these checks to silence permission errors.
     function isAdmin() {
-      return userExists()
+      return verifiedAccount()
+        && userProfileExists(request.auth.uid)
+        && currentUser().data.accountStatus == "ACTIVE"
         && currentUser().data.role in [
           "ADMIN",
           "SUPERADMIN",
           "admin",
           "superadmin"
-        ]
-        && currentUser().data.accountStatus != "BLOCKED"
-        && currentUser().data.accountStatus != "blocked";
+        ];
     }
 
     function isSeller() {
@@ -2219,7 +2221,20 @@ service cloud.firestore {
 
       allow read: if isAdmin();
 
-      allow create: if true;
+      // Public contact form: allow creation only, never public reads or writes.
+      // Keep accepted fields bounded to reduce abuse; adjust names to match the form.
+      allow create: if request.resource.data.keys().hasOnly([
+          "name", "email", "phone", "message", "source", "createdAt"
+        ])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 120
+        && request.resource.data.message is string
+        && request.resource.data.message.size() <= 3000
+        && (!request.resource.data.keys().hasAny(["email"])
+          || request.resource.data.email is string)
+        && (!request.resource.data.keys().hasAny(["phone"])
+          || request.resource.data.phone is string);
 
       allow update, delete: if isAdmin();
     }
