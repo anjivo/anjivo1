@@ -120,7 +120,6 @@ export async function GET(request: NextRequest) {
       console.error(
         "[ADMIN DASHBOARD STATS] Product count mismatch from aggregate queries.",
         {
-          projectId: db.app.options.projectId,
           aggregateProducts: products,
           activeProducts,
         }
@@ -133,7 +132,6 @@ export async function GET(request: NextRequest) {
       console.error(
         "[ADMIN DASHBOARD STATS] Product count mismatch persists after fallback.",
         {
-          projectId: db.app.options.projectId,
           products,
           activeProducts,
         }
