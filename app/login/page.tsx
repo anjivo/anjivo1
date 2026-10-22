@@ -142,30 +142,31 @@ export default function LoginPage() {
           return;
         }
 
-        // Refresh Firebase Auth state before checking verification.
-        // Admin API also validates these factors server-side; this UI check
-        // gives a clear message instead of sending the user to a failing dashboard.
+        // Refresh the Firebase Auth user and force-refresh its ID token.
+        // Keep verification enforced; never trust Firestore profile flags alone.
         await user.reload();
+        await user.getIdToken(true);
+
         const currentUser = auth.currentUser;
 
-        if (!currentUser) {
+        if (!currentUser || currentUser.uid !== user.uid) {
           await logoutUser();
           setError("Your session expired. Please sign in again.");
           return;
         }
 
-        if (!currentUser.emailVerified) {
-          await logoutUser();
+        if (currentUser.emailVerified !== true) {
+          // Do not silently bypass this check. Firebase Authentication is
+          // authoritative for the emailVerified claim.
           setError(
-            "Admin email verification required. Verify this admin email in Firebase Authentication, then sign in again."
+            "Firebase Authentication still reports this email as unverified. Check Authentication → Users in the same Firebase project, then sign out and sign in again."
           );
           return;
         }
 
         if (!currentUser.phoneNumber) {
-          await logoutUser();
           setError(
-            "Admin phone verification required. Add a verified phone number to this Firebase Authentication user before signing in."
+            "Admin phone verification required. This Firebase Authentication user must have a verified phone number linked to the account."
           );
           return;
         }
