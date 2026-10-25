@@ -16,6 +16,8 @@ import type {
   ProductSellingMode,
   ProductSizeChart,
   ProductSizeChartRow,
+  ProductVariant,
+  ProductVariantConfiguration,
 } from "@/types/product";
 
 const productsCollection = collection(
@@ -474,6 +476,116 @@ function normalizeSellingMode(
   return "PIECE";
 }
 
+
+/* =========================================
+   PRODUCT VARIANT CONFIGURATION MAPPER
+========================================= */
+
+function mapProductVariantConfiguration(
+  value: unknown
+): ProductVariantConfiguration | undefined {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value)
+  ) {
+    return undefined;
+  }
+
+  const source = value as Record<string, unknown>;
+  const validTypes = ["SIZE", "COLOR", "SIZE_COLOR", "CUSTOM"] as const;
+
+  const type = validTypes.includes(
+    source.type as (typeof validTypes)[number]
+  )
+    ? (source.type as ProductVariantConfiguration["type"])
+    : "SIZE_COLOR";
+
+  const variants: ProductVariant[] = (
+    Array.isArray(source.variants) ? source.variants : []
+  )
+    .map((raw): ProductVariant | null => {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return null;
+      }
+
+      const item = raw as Record<string, unknown>;
+      const id = stringValue(item.id).trim();
+      const sku = stringValue(item.sku).trim();
+      const name = stringValue(item.name).trim();
+
+      if (
+        !id ||
+        !sku ||
+        !name ||
+        !validTypes.includes(item.variantType as (typeof validTypes)[number])
+      ) {
+        return null;
+      }
+
+      const stock = Math.max(0, Math.floor(numberValue(item.stock, 0)));
+      const status =
+        item.status === "inactive"
+          ? "inactive"
+          : stock === 0 || item.status === "out_of_stock"
+            ? "out_of_stock"
+            : "active";
+
+      const images = Array.isArray(item.images)
+        ? item.images.filter(
+            (image): image is string =>
+              typeof image === "string" && image.trim() !== ""
+          ).map((image) => image.trim())
+        : [];
+
+      const metadata =
+        item.metadata &&
+        typeof item.metadata === "object" &&
+        !Array.isArray(item.metadata)
+          ? (item.metadata as ProductVariant["metadata"])
+          : undefined;
+
+      return {
+        id,
+        sku,
+        name,
+        variantType: item.variantType as ProductVariant["variantType"],
+        stock,
+        status,
+        ...(typeof item.size === "string" ? { size: item.size.trim() } : {}),
+        ...(typeof item.color === "string" ? { color: item.color.trim() } : {}),
+        ...(typeof item.value === "string" ? { value: item.value.trim() } : {}),
+        ...(item.price !== undefined
+          ? { price: Math.max(0, numberValue(item.price, 0)) }
+          : {}),
+        ...(item.mrp !== undefined
+          ? { mrp: Math.max(0, numberValue(item.mrp, 0)) }
+          : {}),
+        ...(images.length > 0 ? { images } : {}),
+        ...(typeof item.barcode === "string" ? { barcode: item.barcode } : {}),
+        ...(metadata ? { metadata } : {}),
+        ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
+        ...(item.updatedAt !== undefined ? { updatedAt: item.updatedAt } : {}),
+      };
+    })
+    .filter((variant): variant is ProductVariant => variant !== null);
+
+  const sizes = Array.isArray(source.sizes)
+    ? source.sizes.filter((size): size is string => typeof size === "string")
+    : [];
+  const colors = Array.isArray(source.colors)
+    ? source.colors.filter((color): color is string => typeof color === "string")
+    : [];
+
+  return {
+    enabled: booleanValue(source.enabled, false),
+    type,
+    sizes,
+    colors,
+    variants,
+  };
+}
+
 /* =========================================
    PRODUCT MAPPER
 ========================================= */
@@ -499,6 +611,8 @@ function mapProduct(
     );
 
   const sizeChart = mapSizeChart(data.sizeChart);
+  const variantConfiguration =
+    mapProductVariantConfiguration(data.variantConfiguration);
 
   return {
     id,
@@ -617,6 +731,8 @@ function mapProduct(
     sellingMode,
 
     wholesaleConfiguration,
+
+    ...(variantConfiguration ? { variantConfiguration } : {}),
 
     stock: Math.max(
       0,
