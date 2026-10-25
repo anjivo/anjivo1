@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { FieldValue } from "firebase-admin/firestore";
-
 import { adminDb } from "@/lib/firebase-admin";
 import { verifyIdToken } from "@/lib/firebase-admin-auth";
 
@@ -18,6 +16,12 @@ type CheckoutItemInput = {
   piecesPerSet?: number;
   setName?: string;
   setBreakAllowed?: boolean;
+  variantId?: string;
+  variantSku?: string;
+  variantName?: string;
+  selectedSize?: string;
+  selectedColor?: string;
+  selectedVariantValue?: string;
 };
 
 type NormalizedCheckoutItem = Omit<
@@ -78,6 +82,14 @@ type ProductRecord = {
   sellingMode?: "PIECE" | "SET" | "BOTH";
 
   wholesaleConfiguration?: WholesaleConfiguration;
+  variantConfiguration?: {
+    type?: string;
+    variants?: Array<{
+      id?: string; sku?: string; name?: string; variantType?: string;
+      size?: string; color?: string; value?: string;
+      price?: number; mrp?: number; stock?: number; status?: string;
+    }>;
+  };
 };
 
 type ValidatedItem = {
@@ -116,6 +128,12 @@ type ValidatedItem = {
     maxQuantity?: number;
     price: number;
   };
+  variantId?: string;
+  variantSku?: string;
+  variantName?: string;
+  selectedSize?: string;
+  selectedColor?: string;
+  selectedVariantValue?: string;
 };
 
 function badRequest(message: string, details?: unknown) {
@@ -677,6 +695,12 @@ export async function POST(
 
             setBreakAllowed:
               source.setBreakAllowed,
+            variantId: typeof source.variantId === "string" ? source.variantId.trim() : undefined,
+            variantSku: typeof source.variantSku === "string" ? source.variantSku.trim() : undefined,
+            variantName: typeof source.variantName === "string" ? source.variantName.trim() : undefined,
+            selectedSize: typeof source.selectedSize === "string" ? source.selectedSize.trim() : undefined,
+            selectedColor: typeof source.selectedColor === "string" ? source.selectedColor.trim() : undefined,
+            selectedVariantValue: typeof source.selectedVariantValue === "string" ? source.selectedVariantValue.trim() : undefined,
           };
         }
       );
@@ -884,11 +908,9 @@ export async function POST(
         number
       >();
 
-    const requiredSetsByProduct =
-      new Map<
-        string,
-        number
-      >();
+    const requiredSetsByProduct = new Map<string, number>();
+    const requiredPiecesByVariant = new Map<string, number>();
+    const requiredSetsByVariant = new Map<string, number>();
 
     /*
      * ---------------------------------------------------------
@@ -935,16 +957,27 @@ export async function POST(
         );
       }
 
-      const productStock =
-        Math.max(
-          0,
-          Math.floor(
-            normalizeNumber(
-              product.stock,
-              0
-            )
-          )
-        );
+      const productStock = Math.max(0, Math.floor(normalizeNumber(product.stock, 0)));
+      const configuredVariants = Array.isArray(product.variantConfiguration?.variants)
+        ? product.variantConfiguration.variants : [];
+      const hasVariants = configuredVariants.length > 0;
+      let selectedVariant: NonNullable<NonNullable<ProductRecord["variantConfiguration"]>["variants"]>[number] | null = null;
+
+      if (hasVariants) {
+        if (!item.variantId) return badRequest(`Please select a size/colour variant for ${product.name || item.productId}.`);
+        selectedVariant = configuredVariants.find((variant) => variant.id === item.variantId) || null;
+        if (!selectedVariant) return badRequest(`Selected variant is no longer available for ${product.name || item.productId}. Please refresh your cart.`);
+        if (selectedVariant.status && selectedVariant.status !== "active") return badRequest(`Selected variant is not available for ${product.name || item.productId}.`);
+        if (item.variantSku && selectedVariant.sku && item.variantSku !== selectedVariant.sku) return badRequest(`Variant SKU mismatch for ${product.name || item.productId}. Please refresh your cart.`);
+        if (item.selectedSize && (selectedVariant.size || "") !== item.selectedSize) return badRequest(`Selected size mismatch for ${product.name || item.productId}. Please refresh your cart.`);
+        if (item.selectedColor && (selectedVariant.color || "") !== item.selectedColor) return badRequest(`Selected colour mismatch for ${product.name || item.productId}. Please refresh your cart.`);
+        if (item.selectedVariantValue && (selectedVariant.value || "") !== item.selectedVariantValue) return badRequest(`Selected variant mismatch for ${product.name || item.productId}. Please refresh your cart.`);
+        if (normalizeNumber(selectedVariant.stock, 0) < 1) return badRequest(`Selected variant is out of stock for ${product.name || item.productId}.`);
+      } else if (item.variantId) {
+        return badRequest(`Variant configuration changed for ${product.name || item.productId}. Please refresh your cart.`);
+      }
+      const effectiveStock = selectedVariant ? Math.max(0, Math.floor(normalizeNumber(selectedVariant.stock, 0))) : productStock;
+      const variantKey = selectedVariant ? `${product.id}::${selectedVariant.id}` : null;
 
       /*
        * -------------------------------------------------------
@@ -967,11 +1000,8 @@ export async function POST(
           );
         }
 
-        const retailPrice =
-          normalizeNumber(
-            product.retailPrice,
-            0
-          );
+        const variantPrice = selectedVariant ? normalizeNumber(selectedVariant.price, 0) : 0;
+        const retailPrice = variantPrice > 0 ? variantPrice : normalizeNumber(product.retailPrice, 0);
 
         if (
           retailPrice <= 0
@@ -981,16 +1011,11 @@ export async function POST(
           );
         }
 
-        const existingPieces =
-          requiredPiecesByProduct.get(
-            product.id
-          ) || 0;
-
-        requiredPiecesByProduct.set(
-          product.id,
-          existingPieces +
-            item.quantity
-        );
+        if (variantKey) {
+          requiredPiecesByVariant.set(variantKey, (requiredPiecesByVariant.get(variantKey) || 0) + item.quantity);
+        } else {
+          requiredPiecesByProduct.set(product.id, (requiredPiecesByProduct.get(product.id) || 0) + item.quantity);
+        }
 
         validatedItems.push({
           productId:
@@ -1026,8 +1051,15 @@ export async function POST(
               retailPrice
             ),
 
-          stock:
-            productStock,
+          stock: effectiveStock,
+          ...(selectedVariant ? {
+            variantId: selectedVariant.id, variantSku: selectedVariant.sku,
+            variantName: selectedVariant.name,
+            ...(selectedVariant.size ? { selectedSize: selectedVariant.size } : {}),
+            ...(selectedVariant.color ? { selectedColor: selectedVariant.color } : {}),
+            ...(selectedVariant.value ? { selectedVariantValue: selectedVariant.value } : {}),
+            mrp: normalizeNumber(selectedVariant.mrp, normalizeNumber(product.mrp, retailPrice)),
+          } : {}),
         });
 
         continue;
@@ -1133,16 +1165,11 @@ export async function POST(
           );
         }
 
-        const existingPieces =
-          requiredPiecesByProduct.get(
-            product.id
-          ) || 0;
-
-        requiredPiecesByProduct.set(
-          product.id,
-          existingPieces +
-            item.quantity
-        );
+        if (variantKey) {
+          requiredPiecesByVariant.set(variantKey, (requiredPiecesByVariant.get(variantKey) || 0) + item.quantity);
+        } else {
+          requiredPiecesByProduct.set(product.id, (requiredPiecesByProduct.get(product.id) || 0) + item.quantity);
+        }
 
         validatedItems.push({
           productId:
@@ -1183,8 +1210,14 @@ export async function POST(
                 0
             ),
 
-          stock:
-            productStock,
+          stock: effectiveStock,
+          ...(selectedVariant ? {
+            variantId: selectedVariant.id, variantSku: selectedVariant.sku,
+            variantName: selectedVariant.name,
+            ...(selectedVariant.size ? { selectedSize: selectedVariant.size } : {}),
+            ...(selectedVariant.color ? { selectedColor: selectedVariant.color } : {}),
+            ...(selectedVariant.value ? { selectedVariantValue: selectedVariant.value } : {}),
+          } : {}),
 
           wholesaleUnit:
             "PIECE",
@@ -1320,12 +1353,9 @@ export async function POST(
         item.quantity *
         setSize;
 
-      const availableSets =
-        calculateAvailableSets(
-          product,
-          setSize,
-          composition
-        );
+      const availableSets = selectedVariant
+        ? Math.floor(effectiveStock / setSize)
+        : calculateAvailableSets(product, setSize, composition);
 
       if (
         item.quantity >
@@ -1339,27 +1369,13 @@ export async function POST(
       /*
        * Aggregate both piece and set requirements.
        */
-      const existingPieces =
-        requiredPiecesByProduct.get(
-          product.id
-        ) || 0;
-
-      requiredPiecesByProduct.set(
-        product.id,
-        existingPieces +
-          requiredPieces
-      );
-
-      const existingSets =
-        requiredSetsByProduct.get(
-          product.id
-        ) || 0;
-
-      requiredSetsByProduct.set(
-        product.id,
-        existingSets +
-          item.quantity
-      );
+      if (variantKey) {
+        requiredPiecesByVariant.set(variantKey, (requiredPiecesByVariant.get(variantKey) || 0) + requiredPieces);
+        requiredSetsByVariant.set(variantKey, (requiredSetsByVariant.get(variantKey) || 0) + item.quantity);
+      } else {
+        requiredPiecesByProduct.set(product.id, (requiredPiecesByProduct.get(product.id) || 0) + requiredPieces);
+        requiredSetsByProduct.set(product.id, (requiredSetsByProduct.get(product.id) || 0) + item.quantity);
+      }
 
       /*
        * Set wholesale tiers use SET quantity.
@@ -1433,8 +1449,14 @@ export async function POST(
             0
           ),
 
-        stock:
-          productStock,
+        stock: effectiveStock,
+        ...(selectedVariant ? {
+          variantId: selectedVariant.id, variantSku: selectedVariant.sku,
+          variantName: selectedVariant.name,
+          ...(selectedVariant.size ? { selectedSize: selectedVariant.size } : {}),
+          ...(selectedVariant.color ? { selectedColor: selectedVariant.color } : {}),
+          ...(selectedVariant.value ? { selectedVariantValue: selectedVariant.value } : {}),
+        } : {}),
 
         wholesaleUnit:
           "SET",
@@ -1512,6 +1534,18 @@ export async function POST(
         return badRequest(
           `Insufficient stock for ${product.name || productId}. Available: ${availablePieces} pieces, required: ${requiredPieces} pieces.`
         );
+      }
+    }
+
+    for (const [variantKey, requiredPieces] of requiredPiecesByVariant) {
+      const separator = variantKey.lastIndexOf("::");
+      const productId = variantKey.slice(0, separator);
+      const variantId = variantKey.slice(separator + 2);
+      const product = products.get(productId);
+      const variant = product?.variantConfiguration?.variants?.find((entry) => entry.id === variantId);
+      const available = Math.max(0, Math.floor(normalizeNumber(variant?.stock, 0)));
+      if (!product || !variant || requiredPieces > available) {
+        return badRequest(`Insufficient stock for selected variant of ${product?.name || productId}. Available: ${available}, required: ${requiredPieces} pieces.`);
       }
     }
 
