@@ -32,6 +32,18 @@ export type CartItem = {
 
   image?: string;
 
+  /* =======================================================
+     SELECTED PRODUCT VARIANT
+     ======================================================= */
+
+  /** Unique purchasable variant ID; absent for legacy products. */
+  variantId?: string;
+  variantSku?: string;
+  variantName?: string;
+  selectedSize?: string;
+  selectedColor?: string;
+  selectedVariantValue?: string;
+
   mrp: number;
   retailPrice: number;
 
@@ -305,6 +317,10 @@ export function getCartItemKey(
     item.wholesaleUnit || "NONE",
     item.piecesPerSet || 0,
     item.setName || "",
+    item.variantId || "",
+    item.selectedSize || "",
+    item.selectedColor || "",
+    item.selectedVariantValue || "",
   ].join("::");
 }
 
@@ -418,6 +434,24 @@ function normalizeCartItem(
 
     image:
       item.image || "",
+
+    variantId:
+      item.variantId || undefined,
+
+    variantSku:
+      item.variantSku || undefined,
+
+    variantName:
+      item.variantName || undefined,
+
+    selectedSize:
+      item.selectedSize || undefined,
+
+    selectedColor:
+      item.selectedColor || undefined,
+
+    selectedVariantValue:
+      item.selectedVariantValue || undefined,
 
     mrp:
       Number(item.mrp || 0),
@@ -815,6 +849,10 @@ export async function updateCartQuantity(
     wholesaleUnit?: WholesaleUnit;
     piecesPerSet?: number;
     setName?: string;
+    variantId?: string;
+    selectedSize?: string;
+    selectedColor?: string;
+    selectedVariantValue?: string;
   }
 ): Promise<Cart> {
   const cart =
@@ -852,6 +890,34 @@ export async function updateCartQuantity(
           options?.setName !== undefined &&
           item.setName !==
             options.setName
+        ) {
+          return false;
+        }
+
+        if (
+          options?.variantId !== undefined &&
+          (item.variantId || "") !== options.variantId
+        ) {
+          return false;
+        }
+
+        if (
+          options?.selectedSize !== undefined &&
+          (item.selectedSize || "") !== options.selectedSize
+        ) {
+          return false;
+        }
+
+        if (
+          options?.selectedColor !== undefined &&
+          (item.selectedColor || "") !== options.selectedColor
+        ) {
+          return false;
+        }
+
+        if (
+          options?.selectedVariantValue !== undefined &&
+          (item.selectedVariantValue || "") !== options.selectedVariantValue
         ) {
           return false;
         }
@@ -931,6 +997,10 @@ export async function removeFromCart(
     wholesaleUnit?: WholesaleUnit;
     piecesPerSet?: number;
     setName?: string;
+    variantId?: string;
+    selectedSize?: string;
+    selectedColor?: string;
+    selectedVariantValue?: string;
   }
 ): Promise<Cart> {
   const cart =
@@ -968,6 +1038,34 @@ export async function removeFromCart(
           options?.setName !== undefined &&
           item.setName !==
             options.setName
+        ) {
+          return true;
+        }
+
+        if (
+          options?.variantId !== undefined &&
+          (item.variantId || "") !== options.variantId
+        ) {
+          return true;
+        }
+
+        if (
+          options?.selectedSize !== undefined &&
+          (item.selectedSize || "") !== options.selectedSize
+        ) {
+          return true;
+        }
+
+        if (
+          options?.selectedColor !== undefined &&
+          (item.selectedColor || "") !== options.selectedColor
+        ) {
+          return true;
+        }
+
+        if (
+          options?.selectedVariantValue !== undefined &&
+          (item.selectedVariantValue || "") !== options.selectedVariantValue
         ) {
           return true;
         }
