@@ -204,6 +204,12 @@ export default function CheckoutPage() {
         piecesPerSet: item.piecesPerSet,
         setName: item.setName,
         setBreakAllowed: item.setBreakAllowed,
+        variantId: item.variantId,
+        variantSku: item.variantSku,
+        variantName: item.variantName,
+        selectedSize: item.selectedSize,
+        selectedColor: item.selectedColor,
+        selectedVariantValue: item.selectedVariantValue,
       }));
 
       // Revalidate every item, price, wholesale rule and stock on the server.
@@ -244,6 +250,12 @@ export default function CheckoutPage() {
         piecesPerSet?: number;
         setName?: string;
         setBreakAllowed?: boolean;
+        variantId?: string;
+        variantSku?: string;
+        variantName?: string;
+        selectedSize?: string;
+        selectedColor?: string;
+        selectedVariantValue?: string;
       }) => ({
         productId: item.productId || item.id || "",
         sellerId: item.sellerId,
@@ -253,6 +265,12 @@ export default function CheckoutPage() {
         piecesPerSet: item.piecesPerSet,
         setName: item.setName,
         setBreakAllowed: item.setBreakAllowed,
+        variantId: item.variantId,
+        variantSku: item.variantSku,
+        variantName: item.variantName,
+        selectedSize: item.selectedSize,
+        selectedColor: item.selectedColor,
+        selectedVariantValue: item.selectedVariantValue,
       }));
 
       let paymentIntentId: string | undefined;
@@ -687,6 +705,40 @@ export default function CheckoutPage() {
                               <p className="line-clamp-2 text-sm font-semibold text-slate-900">
                                 {item.name}
                               </p>
+
+                              {(item.variantName ||
+                                item.selectedSize ||
+                                item.selectedColor ||
+                                item.selectedVariantValue ||
+                                item.variantSku) && (
+                                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                                  {item.variantName && (
+                                    <span className="rounded-full bg-indigo-50 px-2 py-1 text-indigo-700">
+                                      Variant: {item.variantName}
+                                    </span>
+                                  )}
+                                  {item.selectedSize && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                      Size: {item.selectedSize}
+                                    </span>
+                                  )}
+                                  {item.selectedColor && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                      Color: {item.selectedColor}
+                                    </span>
+                                  )}
+                                  {item.selectedVariantValue && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                      Option: {item.selectedVariantValue}
+                                    </span>
+                                  )}
+                                  {item.variantSku && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-500">
+                                      SKU: {item.variantSku}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
 
                               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                                 <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">
