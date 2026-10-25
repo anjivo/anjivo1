@@ -41,6 +41,10 @@ function getItemKey(item: CartItem) {
     item.wholesaleUnit || "NONE",
     item.piecesPerSet || 0,
     item.setName || "",
+    item.variantId || "",
+    item.selectedSize || "",
+    item.selectedColor || "",
+    item.selectedVariantValue || "",
   ].join("-");
 }
 
@@ -229,6 +233,14 @@ export default function CartPage() {
               item.piecesPerSet,
             setName:
               item.setName,
+            variantId:
+              item.variantId || "",
+            selectedSize:
+              item.selectedSize || "",
+            selectedColor:
+              item.selectedColor || "",
+            selectedVariantValue:
+              item.selectedVariantValue || "",
           }
         );
 
@@ -280,6 +292,14 @@ export default function CartPage() {
               item.piecesPerSet,
             setName:
               item.setName,
+            variantId:
+              item.variantId || "",
+            selectedSize:
+              item.selectedSize || "",
+            selectedColor:
+              item.selectedColor || "",
+            selectedVariantValue:
+              item.selectedVariantValue || "",
           }
         );
 
@@ -541,6 +561,42 @@ export default function CartPage() {
                                     item.name
                                   }
                                 </Link>
+
+                                {/* SELECTED PRODUCT VARIANT */}
+
+                                {(item.selectedSize ||
+                                  item.selectedColor ||
+                                  item.selectedVariantValue ||
+                                  item.variantName ||
+                                  item.variantSku) && (
+                                  <div className="mt-2 flex flex-wrap gap-2">
+                                    {item.variantName && (
+                                      <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-600">
+                                        Variant: {item.variantName}
+                                      </span>
+                                    )}
+                                    {item.selectedSize && (
+                                      <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-600">
+                                        Size: {item.selectedSize}
+                                      </span>
+                                    )}
+                                    {item.selectedColor && (
+                                      <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-600">
+                                        Color: {item.selectedColor}
+                                      </span>
+                                    )}
+                                    {item.selectedVariantValue && (
+                                      <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-600">
+                                        Option: {item.selectedVariantValue}
+                                      </span>
+                                    )}
+                                    {item.variantSku && (
+                                      <span className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[10px] font-semibold text-gray-500">
+                                        SKU: {item.variantSku}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
 
                                 {/* BUYING TYPE */}
 
