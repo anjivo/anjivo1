@@ -23,6 +23,7 @@ import { addToCart } from "@/lib/cart";
 
 import type {
   Product,
+  ProductVariant,
   WholesaleUnit,
 } from "@/types/product";
 
@@ -53,6 +54,9 @@ export default function ProductDetailsPage({
 
   const [product, setProduct] =
     useState<Product | null>(null);
+
+  const [selectedVariantId, setSelectedVariantId] =
+    useState("");
 
   const [user, setUser] =
     useState<User | null>(null);
@@ -128,6 +132,67 @@ export default function ProductDetailsPage({
 
     return () => unsubscribe();
   }, []);
+
+  /* =======================================================
+     PRODUCT VARIANT SELECTION
+  ======================================================= */
+
+  const variantConfiguration = product?.variantConfiguration;
+  const variantsEnabled =
+    variantConfiguration?.enabled === true &&
+    Array.isArray(variantConfiguration.variants) &&
+    variantConfiguration.variants.length > 0;
+
+  const availableVariants = useMemo(
+    () =>
+      variantsEnabled
+        ? (variantConfiguration?.variants || []).filter(
+            (variant) =>
+              variant.status === "active" &&
+              Number(variant.stock) > 0
+          )
+        : [],
+    [variantsEnabled, variantConfiguration]
+  );
+
+  useEffect(() => {
+    if (!variantsEnabled) {
+      setSelectedVariantId("");
+      return;
+    }
+
+    const selectedStillAvailable = availableVariants.some(
+      (variant) => variant.id === selectedVariantId
+    );
+
+    if (!selectedStillAvailable) {
+      setSelectedVariantId(availableVariants[0]?.id || "");
+    }
+  }, [variantsEnabled, availableVariants, selectedVariantId]);
+
+  const selectedVariant: ProductVariant | undefined =
+    availableVariants.find(
+      (variant) => variant.id === selectedVariantId
+    );
+
+  const availableStock = variantsEnabled
+    ? Number(selectedVariant?.stock || 0)
+    : Number(product?.stock || 0);
+
+  const selectedRetailPrice =
+    selectedVariant && Number(selectedVariant.price) > 0
+      ? Number(selectedVariant.price)
+      : Number(product?.retailPrice || 0);
+
+  const selectedMrp =
+    selectedVariant && Number(selectedVariant.mrp) > 0
+      ? Number(selectedVariant.mrp)
+      : Number(product?.mrp || 0);
+
+  const selectedImages =
+    selectedVariant?.images?.filter(Boolean).length
+      ? selectedVariant.images.filter(Boolean)
+      : product?.images || [];
 
   /* =======================================================
      WHOLESALE CONFIG
@@ -309,7 +374,7 @@ export default function ProductDetailsPage({
   const selectedPrice =
     pricingType === "wholesale"
       ? wholesalePrice
-      : product?.retailPrice ?? 0;
+      : selectedRetailPrice;
 
   /* =======================================================
      PRICE UNIT LABEL
@@ -339,12 +404,12 @@ export default function ProductDetailsPage({
 
   const discount =
     product &&
-    product.mrp > product.retailPrice
+    selectedMrp > selectedRetailPrice
       ? Math.round(
           (
-            (product.mrp -
-              product.retailPrice) /
-            product.mrp
+            (selectedMrp -
+              selectedRetailPrice) /
+            selectedMrp
           ) * 100
         )
       : 0;
@@ -422,7 +487,7 @@ export default function ProductDetailsPage({
     setQuantity(
       Math.min(
         nextMoq,
-        product.stock
+        availableStock
       )
     );
 
@@ -489,9 +554,14 @@ export default function ProductDetailsPage({
       return;
     }
 
-    if (product.stock <= 0) {
+    if (variantsEnabled && !selectedVariant) {
+      setCartMessage("Please select an available size, color, or variant.");
+      return;
+    }
+
+    if (availableStock <= 0) {
       setCartMessage(
-        "This product is currently out of stock."
+        "This product or selected variant is currently out of stock."
       );
 
       return;
@@ -536,7 +606,7 @@ export default function ProductDetailsPage({
     }
 
     /*
-     * For SET products, product.stock is treated
+     * For SET products, availableStock is treated
      * as available SET quantity on the product page.
      *
      * Final component-level inventory is checked
@@ -544,13 +614,13 @@ export default function ProductDetailsPage({
      */
     if (
       quantity >
-      product.stock
+      availableStock
     ) {
       setCartMessage(
         effectiveWholesaleUnit ===
           "SET"
-          ? `Only ${product.stock} sets are currently available.`
-          : `Only ${product.stock} pieces are currently available.`
+          ? `Only ${availableStock} sets are currently available.`
+          : `Only ${availableStock} pieces are currently available.`
       );
 
       return;
@@ -582,12 +652,23 @@ export default function ProductDetailsPage({
             product.sellerName,
 
           image:
-            product.images[0] || "",
+            selectedImages[0] || "",
 
-          mrp: product.mrp,
+          ...(selectedVariant
+            ? {
+                variantId: selectedVariant.id,
+                variantSku: selectedVariant.sku,
+                variantName: selectedVariant.name,
+                ...(selectedVariant.size ? { selectedSize: selectedVariant.size } : {}),
+                ...(selectedVariant.color ? { selectedColor: selectedVariant.color } : {}),
+                ...(selectedVariant.value ? { selectedVariantValue: selectedVariant.value } : {}),
+              }
+            : {}),
+
+          mrp: selectedMrp,
 
           retailPrice:
-            product.retailPrice,
+            selectedRetailPrice,
 
           wholesalePrice:
             product.wholesalePrice,
@@ -606,7 +687,7 @@ export default function ProductDetailsPage({
           pricingType,
 
           stock:
-            product.stock,
+            availableStock,
 
           ...(product.sellingMode
             ? { sellingMode: product.sellingMode }
@@ -757,7 +838,7 @@ export default function ProductDetailsPage({
   ======================================================= */
 
   const mainImage =
-    product.images[0];
+    selectedImages[0];
 
   const sizeChart = (
     product as Product & { sizeChart?: SizeChartData }
@@ -854,7 +935,7 @@ export default function ProductDetailsPage({
                 )}
               </div>
 
-              {product.images.length > 1 && (
+              {selectedImages.length > 1 && (
                 <div className="mt-3 grid grid-cols-5 gap-2">
                   {product.images
                     .slice(0, 5)
@@ -1005,6 +1086,78 @@ export default function ProductDetailsPage({
               )}
 
               {/* =================================================
+                  VARIANT SELECTION
+              ================================================= */}
+
+              {variantsEnabled && (
+                <section className="mt-6 rounded-2xl border border-gray-200 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-xs font-black">
+                      Select {variantConfiguration?.type === "SIZE" ? "Size" : variantConfiguration?.type === "COLOR" ? "Color" : variantConfiguration?.type === "CUSTOM" ? "Option" : "Size / Color"}
+                    </h2>
+                    {selectedVariant && (
+                      <span className="text-[10px] font-semibold text-gray-500">
+                        {selectedVariant.sku ? `SKU: ${selectedVariant.sku}` : selectedVariant.name}
+                      </span>
+                    )}
+                  </div>
+
+                  {availableVariants.length > 0 ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {availableVariants.map((variant) => {
+                        const active = variant.id === selectedVariantId;
+                        const label =
+                          variant.name ||
+                          variant.size ||
+                          variant.color ||
+                          variant.value ||
+                          variant.sku;
+
+                        return (
+                          <button
+                            key={variant.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedVariantId(variant.id);
+                              setQuantity((current) =>
+                                Math.min(Math.max(1, current), Number(variant.stock || 0))
+                              );
+                              setCartMessage("");
+                            }}
+                            className={`rounded-xl border px-4 py-2.5 text-xs font-bold transition ${
+                              active
+                                ? "border-black bg-black text-white"
+                                : "border-gray-200 bg-white hover:border-black"
+                            }`}
+                            aria-pressed={active}
+                          >
+                            {label}
+                            <span className={`ml-2 text-[10px] ${active ? "text-gray-300" : "text-gray-400"}`}>
+                              ({variant.stock})
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs font-semibold text-red-600">
+                      All variants are currently out of stock.
+                    </p>
+                  )}
+
+                  {selectedVariant && (
+                    <p className="mt-3 text-[10px] text-gray-500">
+                      {selectedVariant.size ? `Size: ${selectedVariant.size}` : ""}
+                      {selectedVariant.size && selectedVariant.color ? " · " : ""}
+                      {selectedVariant.color ? `Color: ${selectedVariant.color}` : ""}
+                      {!selectedVariant.size && !selectedVariant.color && selectedVariant.value ? selectedVariant.value : ""}
+                      {" · "}{selectedVariant.stock} available
+                    </p>
+                  )}
+                </section>
+              )}
+
+              {/* =================================================
                   BUYING MODE
               ================================================= */}
 
@@ -1089,7 +1242,7 @@ export default function ProductDetailsPage({
                           setQuantity(
                             Math.min(
                               minimum,
-                              product.stock
+                              availableStock
                             )
                           );
                         } else {
@@ -1106,7 +1259,7 @@ export default function ProductDetailsPage({
                                     1
                                 )
                               ),
-                              product.stock
+                              availableStock
                             )
                           );
                         }
@@ -1347,11 +1500,11 @@ export default function ProductDetailsPage({
 
                   {pricingType ===
                     "retail" &&
-                    product.mrp >
-                      product.retailPrice && (
+                    selectedMrp >
+                      selectedRetailPrice && (
                       <span className="mb-1 text-sm text-gray-400 line-through">
                         ₹
-                        {product.mrp.toLocaleString(
+                        {selectedMrp.toLocaleString(
                           "en-IN"
                         )}
                       </span>
@@ -1440,7 +1593,7 @@ export default function ProductDetailsPage({
                                 setQuantity(
                                   Math.min(
                                     nextQuantity,
-                                    product.stock
+                                    availableStock
                                   )
                                 );
 
@@ -1498,7 +1651,7 @@ export default function ProductDetailsPage({
                   </p>
 
                   <p className="text-[10px] text-gray-400">
-                    {product.stock}{" "}
+                    {availableStock}{" "}
                     {pricingType ===
                       "wholesale" &&
                     effectiveWholesaleUnit ===
@@ -1552,14 +1705,14 @@ export default function ProductDetailsPage({
                     onClick={() =>
                       setQuantity(
                         Math.min(
-                          product.stock,
+                          availableStock,
                           quantity + 1
                         )
                       )
                     }
                     disabled={
                       quantity >=
-                      product.stock
+                      availableStock
                     }
                     className="flex h-11 w-11 items-center justify-center rounded-xl border border-gray-200 text-lg font-bold disabled:opacity-40"
                   >
@@ -1641,7 +1794,7 @@ export default function ProductDetailsPage({
                   }
                   disabled={
                     addingToCart ||
-                    product.stock <= 0
+                    availableStock <= 0
                   }
                   className="rounded-xl border border-black bg-white py-3.5 text-sm font-bold text-black transition hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
                 >
@@ -1657,7 +1810,7 @@ export default function ProductDetailsPage({
                   }
                   disabled={
                     addingToCart ||
-                    product.stock <= 0
+                    availableStock <= 0
                   }
                   className="rounded-xl bg-black py-3.5 text-sm font-bold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-40"
                 >
