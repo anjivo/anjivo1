@@ -308,6 +308,10 @@ export function getCartItemKey(
     | "wholesaleUnit"
     | "piecesPerSet"
     | "setName"
+    | "variantId"
+    | "selectedSize"
+    | "selectedColor"
+    | "selectedVariantValue"
   >
 ): string {
   return [
