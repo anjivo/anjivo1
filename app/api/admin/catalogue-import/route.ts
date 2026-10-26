@@ -1,6 +1,6 @@
 
 import { NextRequest, NextResponse } from "next/server";
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
 import catalogue from "@/data/catalogue-import.json";
 
@@ -268,8 +268,10 @@ export async function POST(request: NextRequest) {
                 : "CUSTOM"),
         status:
           variant.stock > 0 ? "inactive" as const : "out_of_stock" as const,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
+        // Firestore serverTimestamp() transforms are not supported inside arrays.
+        // A concrete Firestore Timestamp is valid in variant arrays.
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
       }));
 
       const sizes = [
