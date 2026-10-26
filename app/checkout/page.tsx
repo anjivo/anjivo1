@@ -167,6 +167,8 @@ export default function CheckoutPage() {
   }
 
   async function placeOrder() {
+    if (placingOrder) return;
+
     if (!userId) {
       setError("Please login before placing your order.");
       return;
@@ -684,7 +686,16 @@ export default function CheckoutPage() {
                       <div className="space-y-3">
                         {items.map((item) => (
                           <div
-                            key={`${item.id}-${item.pricingType}`}
+                            key={[
+                              item.id,
+                              item.pricingType,
+                              item.wholesaleUnit || "",
+                              item.piecesPerSet || "",
+                              item.setName || "",
+                              item.variantId || "",
+                              item.selectedSize || "",
+                              item.selectedColor || "",
+                            ].join("-")}
                             className="flex gap-3"
                           >
                             <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl bg-slate-100">
