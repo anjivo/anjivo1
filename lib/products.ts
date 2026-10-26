@@ -510,24 +510,33 @@ function mapProductVariantConfiguration(
       }
 
       const item = raw as Record<string, unknown>;
-      const id = stringValue(item.id).trim();
-      const sku = stringValue(item.sku).trim();
-      const name = stringValue(item.name).trim();
 
-      if (
-        !id ||
-        !sku ||
-        !name ||
-        !validTypes.includes(item.variantType as (typeof validTypes)[number])
-      ) {
+      // Keep the stored ID unchanged: cart and checkout use it to locate
+      // the exact Firestore variant. A variant without an ID is not safe to buy.
+      const id = stringValue(item.id).trim();
+      if (!id) {
         return null;
       }
 
+      const sku = stringValue(item.sku).trim();
+      const name = stringValue(item.name).trim();
+
+      // Normalize known variant types; older imports may use lowercase or omit it.
+      const rawVariantType = stringValue(item.variantType).trim().toUpperCase();
+      const variantType = validTypes.includes(
+        rawVariantType as (typeof validTypes)[number]
+      )
+        ? (rawVariantType as ProductVariant["variantType"])
+        : type;
+
       const stock = Math.max(0, Math.floor(numberValue(item.stock, 0)));
+      const rawStatus = stringValue(item.status).trim().toLowerCase();
+      // Do not override explicit inactive/out_of_stock status merely because stock > 0;
+      // checkout validates the raw Firestore record too.
       const status =
-        item.status === "inactive"
+        rawStatus === "inactive"
           ? "inactive"
-          : stock === 0 || item.status === "out_of_stock"
+          : stock <= 0 || rawStatus === "out_of_stock"
             ? "out_of_stock"
             : "active";
 
@@ -547,9 +556,9 @@ function mapProductVariantConfiguration(
 
       return {
         id,
-        sku,
-        name,
-        variantType: item.variantType as ProductVariant["variantType"],
+        sku: sku || id,
+        name: name || stringValue(item.size).trim() || stringValue(item.color).trim() || stringValue(item.value).trim() || sku || id,
+        variantType,
         stock,
         status,
         ...(typeof item.size === "string" ? { size: item.size.trim() } : {}),
