@@ -6,6 +6,13 @@ import {
 } from "firebase/auth";
 
 import {
+  getDownloadURL,
+  getStorage,
+  ref as storageRef,
+  uploadBytes,
+} from "firebase/storage";
+
+import {
   collection,
   getDocs,
   orderBy,
@@ -78,6 +85,15 @@ export default function AdminEditProductPage() {
 
   const [imageUrl, setImageUrl] =
     useState("");
+
+  const [selectedImage, setSelectedImage] =
+    useState<File | null>(null);
+
+  const [imagePreviewUrl, setImagePreviewUrl] =
+    useState("");
+
+  const [imageUploading, setImageUploading] =
+    useState(false);
 
   const [mrp, setMrp] = useState("");
   const [retailPrice, setRetailPrice] =
@@ -504,6 +520,43 @@ export default function AdminEditProductPage() {
     try {
       setSaving(true);
 
+      let finalImageUrl = imageUrl.trim();
+
+      // Upload a newly selected image to Firebase Storage before saving
+      // its download URL in the Firestore product document.
+      if (selectedImage) {
+        setImageUploading(true);
+
+        const allowedTypes = [
+          "image/jpeg",
+          "image/png",
+          "image/webp",
+        ];
+
+        if (!allowedTypes.includes(selectedImage.type)) {
+          throw new Error("Please select a JPG, PNG, or WebP image.");
+        }
+
+        if (selectedImage.size >= 10 * 1024 * 1024) {
+          throw new Error("Image must be smaller than 10 MB.");
+        }
+
+        const storage = getStorage(auth.app);
+        const safeFileName = selectedImage.name
+          .replace(/[^a-zA-Z0-9._-]/g, "-")
+          .slice(-100);
+        const imagePath =
+          `product-images/${user.uid}/${product.id}/` +
+          `${Date.now()}-${safeFileName}`;
+        const imageRef = storageRef(storage, imagePath);
+
+        const uploaded = await uploadBytes(imageRef, selectedImage, {
+          contentType: selectedImage.type,
+        });
+
+        finalImageUrl = await getDownloadURL(uploaded.ref);
+      }
+
       await updateAdminProduct(
         product.id,
         {
@@ -531,8 +584,8 @@ export default function AdminEditProductPage() {
             selectedCategory?.name ||
             categoryName,
 
-          images: imageUrl.trim()
-            ? [imageUrl.trim()]
+          images: finalImageUrl
+            ? [finalImageUrl]
             : [],
 
           mrp: mrpValue,
@@ -585,9 +638,12 @@ export default function AdminEditProductPage() {
       console.error(err);
 
       setError(
-        "Unable to update product. Please try again."
+        err instanceof Error
+          ? err.message
+          : "Unable to update product. Please try again."
       );
     } finally {
+      setImageUploading(false);
       setSaving(false);
     }
   }
@@ -823,31 +879,77 @@ export default function AdminEditProductPage() {
 
               <div>
                 <label className="mb-2 block text-sm font-semibold text-slate-700">
-                  Product Image URL
+                  Upload Product Image
+                </label>
+
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null;
+
+                    if (!file) {
+                      setSelectedImage(null);
+                      setImagePreviewUrl("");
+                      return;
+                    }
+
+                    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+                      setError("Please select a JPG, PNG, or WebP image.");
+                      e.target.value = "";
+                      setSelectedImage(null);
+                      setImagePreviewUrl("");
+                      return;
+                    }
+
+                    if (file.size >= 10 * 1024 * 1024) {
+                      setError("Image must be smaller than 10 MB.");
+                      e.target.value = "";
+                      setSelectedImage(null);
+                      setImagePreviewUrl("");
+                      return;
+                    }
+
+                    setError("");
+                    setSelectedImage(file);
+                    setImagePreviewUrl(URL.createObjectURL(file));
+                  }}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 outline-none focus:border-slate-900"
+                />
+
+                <p className="mt-2 text-xs text-slate-500">
+                  JPG, PNG or WebP. Maximum file size: 10 MB.
+                  The image uploads to Firebase Storage when you click Save Product.
+                </p>
+
+                <label className="mb-2 mt-4 block text-sm font-semibold text-slate-700">
+                  Or use an existing image URL
                 </label>
 
                 <input
                   value={imageUrl}
-                  onChange={(e) =>
-                    setImageUrl(
-                      e.target.value
-                    )
-                  }
+                  onChange={(e) => {
+                    setImageUrl(e.target.value);
+                    if (e.target.value.trim()) {
+                      setSelectedImage(null);
+                      setImagePreviewUrl("");
+                    }
+                  }}
                   className="w-full rounded-xl border border-slate-300 px-4 py-3 outline-none focus:border-slate-900"
                   placeholder="https://..."
                 />
               </div>
             </div>
 
-            {imageUrl && (
+            {(imagePreviewUrl || imageUrl) && (
               <div className="mt-5">
                 <p className="mb-2 text-sm font-semibold text-slate-700">
-                  Preview
+                  {selectedImage ? "Selected image preview" : "Current image preview"}
                 </p>
 
                 <img
-                  src={imageUrl}
-                  alt={name}
+                  src={imagePreviewUrl || imageUrl}
+                  alt={name || "Product image preview"}
                   className="h-40 w-40 rounded-2xl border object-cover"
                 />
               </div>
@@ -1246,9 +1348,11 @@ export default function AdminEditProductPage() {
                   disabled={saving}
                   className="rounded-xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {saving
-                    ? "Saving..."
-                    : "Save Product"}
+                  {imageUploading
+                    ? "Uploading image..."
+                    : saving
+                      ? "Saving..."
+                      : "Save Product"}
                 </button>
               </div>
             </div>
