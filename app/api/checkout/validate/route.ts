@@ -798,6 +798,8 @@ export async function POST(
           0,
         item.setName ||
           "",
+        item.variantId ||
+          "NO_VARIANT",
       ].join("|");
 
       if (
