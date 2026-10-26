@@ -788,8 +788,7 @@ export async function POST(request: Request) {
 
         const variantConfiguration = product.variantConfiguration;
         const variantsEnabled =
-          variantConfiguration?.enabled === true &&
-          Array.isArray(variantConfiguration.variants) &&
+          Array.isArray(variantConfiguration?.variants) &&
           variantConfiguration.variants.length > 0;
         let selectedVariant: ProductVariantRecord | undefined;
 
@@ -803,7 +802,13 @@ export async function POST(request: Request) {
           if (!selectedVariant) {
             throw new Error(`${product.name}: selected variant no longer exists. Please refresh your cart.`);
           }
-          if (selectedVariant.status !== "active" || numberValue(selectedVariant.stock) <= 0) {
+          if (!stringValue(selectedVariant.id)) {
+            throw new Error(`${product.name}: selected variant configuration is invalid. Please contact support.`);
+          }
+          if (
+            (selectedVariant.status && selectedVariant.status !== "active") ||
+            numberValue(selectedVariant.stock) <= 0
+          ) {
             throw new Error(`${product.name}: selected variant is out of stock.`);
           }
           const mismatches =
@@ -846,9 +851,13 @@ export async function POST(request: Request) {
             );
           }
 
-          const variantPrice = selectedVariant
-            ? numberValue(selectedVariant.retailPrice ?? selectedVariant.price, product.retailPrice)
-            : product.retailPrice;
+          const configuredVariantPrice = selectedVariant
+            ? numberValue(selectedVariant.price, 0)
+            : 0;
+          const variantPrice =
+            configuredVariantPrice > 0
+              ? configuredVariantPrice
+              : product.retailPrice;
           if (variantPrice <= 0) {
             throw new Error(
               `${product.name}: retail price is not configured.`
