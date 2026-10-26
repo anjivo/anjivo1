@@ -747,7 +747,7 @@
       },
       {
         "id": "ms-02-grey-28",
-        "sku": "MS-02-GRE-28",
+        "sku": "MS-02-GRY-28",
         "variantType": "SIZE_COLOR",
         "name": "28 / Grey",
         "size": "28",
@@ -758,7 +758,7 @@
       },
       {
         "id": "ms-02-grey-30",
-        "sku": "MS-02-GRE-30",
+        "sku": "MS-02-GRY-30",
         "variantType": "SIZE_COLOR",
         "name": "30 / Grey",
         "size": "30",
@@ -769,7 +769,7 @@
       },
       {
         "id": "ms-02-grey-32",
-        "sku": "MS-02-GRE-32",
+        "sku": "MS-02-GRY-32",
         "variantType": "SIZE_COLOR",
         "name": "32 / Grey",
         "size": "32",
@@ -780,7 +780,7 @@
       },
       {
         "id": "ms-02-grey-34",
-        "sku": "MS-02-GRE-34",
+        "sku": "MS-02-GRY-34",
         "variantType": "SIZE_COLOR",
         "name": "34 / Grey",
         "size": "34",
@@ -791,7 +791,7 @@
       },
       {
         "id": "ms-02-grey-36",
-        "sku": "MS-02-GRE-36",
+        "sku": "MS-02-GRY-36",
         "variantType": "SIZE_COLOR",
         "name": "36 / Grey",
         "size": "36",
@@ -1254,7 +1254,7 @@
       },
       {
         "id": "ks-01-grey-28",
-        "sku": "KS-01-GRE-28",
+        "sku": "KS-01-GRY-28",
         "variantType": "SIZE_COLOR",
         "name": "28 / Grey",
         "size": "28",
@@ -1265,7 +1265,7 @@
       },
       {
         "id": "ks-01-grey-30",
-        "sku": "KS-01-GRE-30",
+        "sku": "KS-01-GRY-30",
         "variantType": "SIZE_COLOR",
         "name": "30 / Grey",
         "size": "30",
@@ -1276,7 +1276,7 @@
       },
       {
         "id": "ks-01-grey-32",
-        "sku": "KS-01-GRE-32",
+        "sku": "KS-01-GRY-32",
         "variantType": "SIZE_COLOR",
         "name": "32 / Grey",
         "size": "32",
@@ -1287,7 +1287,7 @@
       },
       {
         "id": "ks-01-grey-34",
-        "sku": "KS-01-GRE-34",
+        "sku": "KS-01-GRY-34",
         "variantType": "SIZE_COLOR",
         "name": "34 / Grey",
         "size": "34",
@@ -1513,7 +1513,7 @@
       },
       {
         "id": "mp-01-grey-28",
-        "sku": "MP-01-GRE-28",
+        "sku": "MP-01-GRY-28",
         "variantType": "SIZE_COLOR",
         "name": "28 / Grey",
         "size": "28",
@@ -1524,7 +1524,7 @@
       },
       {
         "id": "mp-01-grey-30",
-        "sku": "MP-01-GRE-30",
+        "sku": "MP-01-GRY-30",
         "variantType": "SIZE_COLOR",
         "name": "30 / Grey",
         "size": "30",
@@ -1535,7 +1535,7 @@
       },
       {
         "id": "mp-01-grey-32",
-        "sku": "MP-01-GRE-32",
+        "sku": "MP-01-GRY-32",
         "variantType": "SIZE_COLOR",
         "name": "32 / Grey",
         "size": "32",
@@ -1546,7 +1546,7 @@
       },
       {
         "id": "mp-01-grey-34",
-        "sku": "MP-01-GRE-34",
+        "sku": "MP-01-GRY-34",
         "variantType": "SIZE_COLOR",
         "name": "34 / Grey",
         "size": "34",
@@ -1557,7 +1557,7 @@
       },
       {
         "id": "mp-01-grey-36",
-        "sku": "MP-01-GRE-36",
+        "sku": "MP-01-GRY-36",
         "variantType": "SIZE_COLOR",
         "name": "36 / Grey",
         "size": "36",
