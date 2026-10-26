@@ -136,7 +136,7 @@ export default function OrderSuccessPage() {
                 </div>
 
                 <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold uppercase text-amber-700">
-                  {order.status || "pending"}
+                  {String(order.orderStatus || "PLACED").replaceAll("_", " ")}
                 </span>
               </div>
             </div>
@@ -144,7 +144,7 @@ export default function OrderSuccessPage() {
             <div className="mt-6 grid gap-4 sm:grid-cols-3">
               <Info
                 label="Payment"
-                value="Cash on Delivery"
+                value={`${order.paymentMethod === "ONLINE" ? "Online Payment" : "Cash on Delivery"} · ${String(order.paymentStatus || "PENDING")}`}
               />
 
               <Info
@@ -169,7 +169,7 @@ export default function OrderSuccessPage() {
               <Info
                 label="Total"
                 value={`₹${Number(
-                  order.totalAmount || 0
+                  order.total ?? order.totalAmount ?? 0
                 ).toLocaleString("en-IN")}`}
               />
             </div>
@@ -225,14 +225,14 @@ export default function OrderSuccessPage() {
                   order.items.map(
                     (item: any, index: number) => (
                       <div
-                        key={`${item.productId}-${index}`}
+                        key={`${item.productId || item.id || "product"}-${item.variantId || item.selectedSize || ""}-${item.selectedColor || ""}-${index}`}
                         className="flex items-center gap-3 rounded-2xl border p-3"
                       >
                         <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-slate-100">
                           {item.image ? (
                             <img
                               src={item.image}
-                              alt={item.name}
+                              alt={item.productName || item.name || "Product"}
                               className="h-full w-full object-cover"
                             />
                           ) : (
@@ -244,13 +244,46 @@ export default function OrderSuccessPage() {
 
                         <div className="min-w-0 flex-1">
                           <p className="line-clamp-2 text-sm font-semibold text-slate-900">
-                            {item.name}
+                            {item.productName || item.name || "Product"}
                           </p>
+
+                          {(item.variantName ||
+                            item.selectedSize ||
+                            item.selectedColor ||
+                            item.selectedVariantValue ||
+                            item.variantSku) && (
+                            <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
+                              {item.variantName && (
+                                <span className="rounded-full bg-indigo-50 px-2 py-1 text-indigo-700">
+                                  Variant: {item.variantName}
+                                </span>
+                              )}
+                              {item.selectedSize && (
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Size: {item.selectedSize}
+                                </span>
+                              )}
+                              {item.selectedColor && (
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Colour: {item.selectedColor}
+                                </span>
+                              )}
+                              {item.selectedVariantValue && (
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                                  Option: {item.selectedVariantValue}
+                                </span>
+                              )}
+                              {item.variantSku && (
+                                <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-500">
+                                  SKU: {item.variantSku}
+                                </span>
+                              )}
+                            </div>
+                          )}
 
                           <p className="mt-1 text-xs text-slate-500">
                             Qty: {item.quantity} •{" "}
-                            {item.pricingType ===
-                            "wholesale"
+                            {item.pricingType === "wholesale"
                               ? "Wholesale"
                               : "Retail"}
                           </p>
@@ -302,7 +335,7 @@ export default function OrderSuccessPage() {
                 <span className="text-2xl font-black text-slate-900">
                   ₹
                   {Number(
-                    order.totalAmount || 0
+                    order.total ?? order.totalAmount ?? 0
                   ).toLocaleString("en-IN")}
                 </span>
               </div>
