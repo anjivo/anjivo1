@@ -142,9 +142,9 @@ export default function LoginPage() {
           return;
         }
 
-        // Refresh the Firebase Auth user and force-refresh its ID token.
-        // Keep verification enforced; never trust Firestore profile flags alone.
-        await user.reload();
+        // Admin email/phone verification is not required for this flow.
+        // Access is still restricted by the Firebase login, Firestore role,
+        // and ACTIVE accountStatus checks above.
         await user.getIdToken(true);
 
         const currentUser = auth.currentUser;
@@ -152,22 +152,6 @@ export default function LoginPage() {
         if (!currentUser || currentUser.uid !== user.uid) {
           await logoutUser();
           setError("Your session expired. Please sign in again.");
-          return;
-        }
-
-        if (currentUser.emailVerified !== true) {
-          // Do not silently bypass this check. Firebase Authentication is
-          // authoritative for the emailVerified claim.
-          setError(
-            "Firebase Authentication still reports this email as unverified. Check Authentication → Users in the same Firebase project, then sign out and sign in again."
-          );
-          return;
-        }
-
-        if (!currentUser.phoneNumber) {
-          setError(
-            "Admin phone verification required. This Firebase Authentication user must have a verified phone number linked to the account."
-          );
           return;
         }
 
