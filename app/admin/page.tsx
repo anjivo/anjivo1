@@ -71,6 +71,15 @@ const moduleSections: ModuleSection[] = [
       "Products, sellers, customers, categories and marketplace operations.",
     items: [
       {
+        title: "Catalogue Import",
+        description:
+          "Import ANJIVO catalogue products, prices, images, sizes, colours and stock.",
+        href: "/admin/catalogue-import",
+        icon: "📥",
+        badge: "New",
+        badgeType: "new",
+      },
+      {
         title: "Products",
         description:
           "Approve, block, edit, feature and manage marketplace products.",
@@ -1046,6 +1055,13 @@ export default function AdminDashboard() {
               icon="📦"
               title="Review Products"
               description={`${stats.draftProducts} products need attention`}
+            />
+
+            <QuickAction
+              href="/admin/catalogue-import"
+              icon="📥"
+              title="Catalogue Import"
+              description="Import products, variants, prices and inventory"
             />
 
             <QuickAction
