@@ -1,9 +1,10 @@
-
+```ts
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function errorResponse(message: string, status: number) {
   return NextResponse.json(
@@ -14,11 +15,11 @@ function errorResponse(message: string, status: number) {
 
 export async function POST(request: NextRequest) {
   try {
-    // 1. Authenticate the currently signed-in Firebase user.
+    // 1. Validate the Firebase ID token.
     const authorization = request.headers.get("authorization");
     const match = authorization?.match(/^Bearer\s+(.+)$/i);
 
-    if (!match) {
+    if (!match?.[1]) {
       return errorResponse("Please log in again.", 401);
     }
 
@@ -30,7 +31,10 @@ export async function POST(request: NextRequest) {
         true
       );
     } catch (error) {
-      console.error("Account activation token verification failed:", error);
+      console.error(
+        "Account activation token verification failed:",
+        error
+      );
 
       return errorResponse(
         "Your session has expired. Please log in again.",
@@ -40,7 +44,7 @@ export async function POST(request: NextRequest) {
 
     const uid = decodedToken.uid;
 
-    // 2. Read authoritative verification status from Firebase Auth.
+    // 2. Fetch authoritative user information from Firebase Auth.
     const authUser = await adminAuth.getUser(uid);
 
     if (!authUser.email || authUser.emailVerified !== true) {
@@ -57,7 +61,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 3. Read the user's existing Firestore profile.
+    // 3. Load the existing Firestore profile.
     const userRef = adminDb.collection("users").doc(uid);
     const userSnap = await userRef.get();
 
@@ -70,15 +74,17 @@ export async function POST(request: NextRequest) {
 
     const profile = userSnap.data();
 
-    if (!profile || profile.uid !== uid) {
+    if (!profile) {
       return errorResponse(
         "Account profile is invalid. Please contact support.",
         403
       );
     }
 
-    // 4. Only activate supported customer account types.
-    const role = String(profile.role ?? "").toUpperCase();
+    // 4. Permit customer accounts only.
+    const role = String(profile.role ?? "")
+      .trim()
+      .toUpperCase();
 
     const allowedRoles = [
       "RETAIL_CUSTOMER",
@@ -92,16 +98,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 5. Never reactivate an account blocked by an administrator.
+    // 5. Never reactivate a restricted account.
     const currentStatus = String(
       profile.accountStatus ?? ""
-    ).toUpperCase();
+    )
+      .trim()
+      .toUpperCase();
 
-    if (
-      ["SUSPENDED", "BLOCKED", "DISABLED", "DEACTIVATED"].includes(
-        currentStatus
-      )
-    ) {
+    const restrictedStatuses = [
+      "SUSPENDED",
+      "BLOCKED",
+      "DISABLED",
+      "DEACTIVATED",
+    ];
+
+    if (restrictedStatuses.includes(currentStatus)) {
       return errorResponse(
         "This account is restricted. Please contact support.",
         403
@@ -118,9 +129,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // 6. Synchronize verified information and activate the account.
+    // 6. Synchronize verified details and activate the account.
+    // Admin SDK bypasses Firestore client security rules.
     await userRef.set(
       {
+        uid,
         email: authUser.email.trim().toLowerCase(),
         phone: authUser.phoneNumber,
         emailVerified: true,
@@ -147,3 +160,4 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+```
