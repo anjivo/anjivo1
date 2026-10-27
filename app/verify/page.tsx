@@ -52,8 +52,11 @@ function firebaseErrorMessage(error: unknown): string {
     case "auth/quota-exceeded":
       return "SMS quota has been exceeded. Please try again later.";
     case "auth/captcha-check-failed":
+      return "Firebase rejected the reCAPTCHA hostname. Check that this exact website domain is authorized in Firebase Authentication and that the Vercel Firebase environment variables belong to the same Firebase project.";
     case "auth/invalid-app-credential":
-      return "reCAPTCHA verification failed. Refresh the page and try again.";
+      return "Firebase rejected the phone verification credential. Check the Firebase project/API key configuration and authorized domains, then refresh and try again.";
+    case "auth/app-not-authorized":
+      return "This website is not authorized for Firebase phone authentication. Add the current hostname in Firebase Authentication > Settings > Authorized domains.";
     case "auth/credential-already-in-use":
       return "This phone number is already linked to another ANJIVO account.";
     case "auth/provider-already-linked":
@@ -292,8 +295,27 @@ export default function VerifyPage() {
       setPhoneOtp("");
       setMessage(`OTP sent to ${normalizedPhone}.`);
     } catch (e) {
-      console.error("Send mobile OTP failed:", e);
-      recaptchaRef.current?.clear();
+      const firebaseCode =
+        typeof e === "object" && e !== null && "code" in e
+          ? String((e as { code?: unknown }).code ?? "unknown")
+          : "unknown";
+      const firebaseMessage = e instanceof Error ? e.message : String(e);
+
+      // Log diagnostics without exposing API keys, tokens, or OTP values.
+      console.error("Send mobile OTP failed:", {
+        code: firebaseCode,
+        message: firebaseMessage,
+        hostname: typeof window !== "undefined" ? window.location.hostname : "server",
+        firebaseProjectId: auth.app.options.projectId ?? "missing",
+        firebaseAuthDomain: auth.app.options.authDomain ?? "missing",
+      });
+
+      confirmationRef.current = null;
+      try {
+        recaptchaRef.current?.clear();
+      } catch (clearError) {
+        console.warn("Could not clear reCAPTCHA verifier:", clearError);
+      }
       recaptchaRef.current = null;
       setError(firebaseErrorMessage(e));
     } finally {
