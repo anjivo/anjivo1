@@ -146,11 +146,14 @@ export default function ProductDetailsPage({
   const availableVariants = useMemo(
     () =>
       variantsEnabled
-        ? (variantConfiguration?.variants || []).filter(
-            (variant) =>
-              variant.status === "active" &&
-              Number(variant.stock) > 0
-          )
+        ? (variantConfiguration?.variants || []).filter((variant) => {
+            // Firestore data may contain "active" or "ACTIVE".
+            // Normalize status before checking availability.
+            const status = String(variant.status ?? "").trim().toLowerCase();
+            const stock = Number(variant.stock ?? 0);
+
+            return status === "active" && Number.isFinite(stock) && stock > 0;
+          })
         : [],
     [variantsEnabled, variantConfiguration]
   );
