@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import ShippingLabelButton from "@/components/ShippingLabelButton";
 
 import { auth, db } from "@/lib/firebase";
 
@@ -580,6 +581,8 @@ export default function SellerOrdersPage() {
                   <SellerOrderCard
                     key={order.id}
                     order={order}
+                    sellerId={sellerId}
+                    sellerName={sellerName}
                     updating={
                       updatingOrderId === order.id
                     }
@@ -604,10 +607,14 @@ export default function SellerOrdersPage() {
 
 function SellerOrderCard({
   order,
+  sellerId,
+  sellerName,
   updating,
   onStatusUpdate,
 }: {
   order: SellerOrder;
+  sellerId: string;
+  sellerName: string;
   updating: boolean;
   onStatusUpdate: (
     orderId: string,
@@ -666,6 +673,22 @@ function SellerOrderCard({
               order.paymentStatus ||
               "pending"
             }
+          />
+
+          <ShippingLabelButton
+            orderId={order.id}
+            shippingAddress={order.shippingAddress}
+            items={order.items.map((item) => ({
+              name: item.name,
+              quantity: item.quantity,
+              sellerId,
+            }))}
+            paymentMethod={order.paymentMethod}
+            paymentStatus={order.paymentStatus}
+            totalAmount={order.totalAmount}
+            sellerId={sellerId}
+            sellerName={sellerName}
+            variant="compact"
           />
 
         </div>
