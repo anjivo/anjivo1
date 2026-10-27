@@ -19,6 +19,10 @@ type LabelItem = {
   size?: string;
   color?: string;
   variantLabel?: string;
+  selectedPrice?: number;
+  unitPrice?: number;
+  price?: number;
+  subtotal?: number;
 };
 
 type ShippingLabelButtonProps = {
@@ -42,6 +46,25 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+function getItemPrice(item: LabelItem): number {
+  const price = Number(
+    item.selectedPrice ?? item.unitPrice ?? item.price ?? 0
+  );
+
+  return Number.isFinite(price) && price >= 0 ? price : 0;
+}
+
+function getItemSubtotal(item: LabelItem): number {
+  const quantity = Math.max(0, Number(item.quantity ?? 0));
+  const subtotal = Number(item.subtotal);
+
+  if (Number.isFinite(subtotal) && subtotal >= 0 && item.subtotal !== undefined) {
+    return subtotal;
+  }
+
+  return getItemPrice(item) * quantity;
+}
+
 export default function ShippingLabelButton({
   orderId,
   shippingAddress,
@@ -56,60 +79,99 @@ export default function ShippingLabelButton({
   function printLabel() {
     const address = shippingAddress ?? {};
 
-    // Seller label mein sirf us seller ke items dikhayein.
+    // Admin: poore order ke items.
+    // Seller: sirf us seller ke items.
     const labelItems = (items ?? []).filter((item) => {
       if (!sellerId) return true;
       return item.sellerId === sellerId;
     });
 
-    const isCod = String(paymentMethod ?? "")
-      .toUpperCase() === "COD";
+    const isCod =
+      String(paymentMethod ?? "").trim().toUpperCase() === "COD";
 
-    const isPaid = String(paymentStatus ?? "")
-      .toLowerCase() === "paid";
+    const normalizedPaymentStatus = String(paymentStatus ?? "")
+      .trim()
+      .toLowerCase();
 
-    const codAmount =
-      isCod && !isPaid ? Number(totalAmount ?? 0) : 0;
+    const isPaid = normalizedPaymentStatus === "paid";
 
-    const itemRows = labelItems.map((item) => {
-      const name = escapeHtml(
-        item.name || item.productName || "Product"
-      );
+    const isSellerLabel = Boolean(sellerId);
 
-      const quantity = Math.max(
-        0,
-        Number(item.quantity ?? 0)
-      );
+    const sellerItemsAmount = labelItems.reduce(
+      (sum, item) => sum + getItemSubtotal(item),
+      0
+    );
 
-      const variantText = escapeHtml(
-        item.variantLabel ||
-          [item.size, item.color]
-            .filter(Boolean)
-            .join(" / ")
-      );
+    // Admin label par full order total.
+    // Seller label par sirf seller ke products ka subtotal.
+    // Seller subtotal mein order-level shipping/discount include nahi hain.
+    const amountToCollect = isSellerLabel
+      ? sellerItemsAmount
+      : Math.max(0, Number(totalAmount ?? 0));
 
-      return `
-        <tr>
-          <td>
-            ${name}
-            ${variantText ? `<small>${variantText}</small>` : ""}
-          </td>
-          <td class="qty">${quantity}</td>
-        </tr>
-      `;
-    }).join("");
+    const showCodCollection = isCod && !isPaid;
+
+    const itemRows = labelItems
+      .map((item) => {
+        const name = escapeHtml(
+          item.name || item.productName || "Product"
+        );
+
+        const quantityValue = Number(item.quantity ?? 0);
+        const quantity =
+          Number.isFinite(quantityValue) && quantityValue > 0
+            ? quantityValue
+            : 0;
+
+        const rawVariant =
+          item.variantLabel ||
+          [item.size, item.color].filter(Boolean).join(" / ");
+
+        const variantText = escapeHtml(rawVariant);
+
+        return `
+          <tr>
+            <td>
+              ${name}
+              ${variantText ? `<small>${variantText}</small>` : ""}
+            </td>
+            <td class="qty">${quantity}</td>
+          </tr>
+        `;
+      })
+      .join("");
 
     const addressLines = [
       address.addressLine1,
       address.addressLine2,
-      [address.city, address.state]
-        .filter(Boolean)
-        .join(", "),
+      [address.city, address.state].filter(Boolean).join(", "),
       address.pincode ? `PIN: ${address.pincode}` : "",
     ]
       .filter(Boolean)
       .map((line) => `<div>${escapeHtml(line)}</div>`)
       .join("");
+
+    const collectionSection = showCodCollection
+      ? `
+        <div class="payment">
+          <div>
+            <div class="heading">Collect on Delivery</div>
+            <strong>₹${amountToCollect.toLocaleString("en-IN")}</strong>
+          </div>
+          <div class="muted">COD — verify order amount</div>
+        </div>
+      `
+      : `
+        <div class="payment">
+          <div>
+            <div class="heading">Payment</div>
+            <strong>${isPaid ? "PAID" : escapeHtml(paymentMethod || "See order details")}</strong>
+          </div>
+          <div class="muted">
+            ${isPaid ? "Payment received" : "Check payment status"}
+          </div>
+        </div>
+      `;
 
     const html = `<!doctype html>
 <html>
@@ -209,12 +271,13 @@ td small {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   margin-top: 10px;
   border: 2px solid #111;
   padding: 8px;
 }
 .payment strong { font-size: 16px; }
-.muted { font-size: 9px; }
+.muted { font-size: 9px; text-align: right; }
 .footer {
   margin-top: 12px;
   border-top: 1px dashed #555;
@@ -266,29 +329,7 @@ td small {
     </table>
   </div>
 
-  <div class="payment">
-    <div>
-      <div class="heading">
-        ${isCod && !isPaid ? "Collect on Delivery" : "Payment"}
-      </div>
-      <strong>
-        ${
-          isCod && !isPaid
-            ? `₹${codAmount.toLocaleString("en-IN")}`
-            : isPaid
-              ? "PAID"
-              : escapeHtml(paymentMethod || "See order details")
-        }
-      </strong>
-    </div>
-    <div class="muted">
-      ${
-        isCod && !isPaid
-          ? "Collect exact amount"
-          : "Collect cash only if marked COD"
-      }
-    </div>
-  </div>
+  ${collectionSection}
 
   ${
     sellerName
