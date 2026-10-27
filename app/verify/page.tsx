@@ -11,7 +11,7 @@ import {
   linkWithPhoneNumber,
   type ConfirmationResult,
 } from "firebase/auth";
-import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { auth, db } from "@/lib/firebase";
 import FloatingHelpButton from "@/components/support/FloatingHelpButton";
 
@@ -353,14 +353,10 @@ export default function VerifyPage() {
         throw new Error("Account profile was not found. Please contact support.");
       }
 
-      // Do not activate an account from the browser. The account activation
-      // decision must be made by a trusted server after checking both factors.
+      // Do not write verification flags or phone details from the browser.
+      // The trusted activation API synchronizes the verified phone/email and
+      // account status in Firestore after checking Firebase Authentication.
       const emailVerified = currentUser.emailVerified === true;
-
-      await updateDoc(userRef, {
-        phone: verifiedPhone,
-        updatedAt: serverTimestamp(),
-      });
 
       confirmationRef.current = null;
       setPhoneOtp("");
