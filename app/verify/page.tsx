@@ -202,7 +202,7 @@ export default function VerifyPage() {
       );
     }
 
-    router.replace("/account");
+    router.replace("/");
     return true;
   }
 
