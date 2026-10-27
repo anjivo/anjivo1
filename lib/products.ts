@@ -529,7 +529,17 @@ function mapProductVariantConfiguration(
         ? (rawVariantType as ProductVariant["variantType"])
         : type;
 
-      const stock = Math.max(0, Math.floor(numberValue(item.stock, 0)));
+      // Older/imported catalog records may store inventory under a legacy field.
+      // Normalize those fields into the canonical `stock` property used by the
+      // product page, cart, and checkout. Prefer explicit `stock` when present.
+      const rawStock =
+        item.stock ??
+        item.quantity ??
+        item.availableStock ??
+        item.inventory ??
+        item.stockQuantity ??
+        item.inventoryQuantity;
+      const stock = Math.max(0, Math.floor(numberValue(rawStock, 0)));
       const rawStatus = stringValue(item.status).trim().toLowerCase();
       // Do not override explicit inactive/out_of_stock status merely because stock > 0;
       // checkout validates the raw Firestore record too.
