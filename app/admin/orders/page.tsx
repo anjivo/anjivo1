@@ -1260,6 +1260,14 @@ function OrderRow({
               View Order
             </button>
 
+            <Link
+              href={`/admin/orders/${encodeURIComponent(order.id)}`}
+              className="inline-flex items-center rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-black text-white hover:bg-indigo-700"
+              aria-label={`Generate shipping label for order ${order.id}`}
+            >
+              🏷️ Generate Label
+            </Link>
+
             <select
               value={order.status}
               disabled={processing}
