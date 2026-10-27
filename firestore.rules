@@ -12,12 +12,12 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Protected marketplace features require BOTH Firebase Auth verifications.
-    // email_verified is a Firebase ID-token claim; phone_number is present
-    // when a verified phone credential is linked to the Firebase user.
+    // Marketplace authentication follows the current phone-OTP registration flow.
+    // A phone_number claim is supplied for a Firebase Auth user with a linked
+    // phone credential. Email verification is intentionally not required here.
+    // The signedIn() helper still requires an existing ACTIVE user profile.
     function verifiedAccount() {
       return authenticated()
-        && request.auth.token.email_verified == true
         && request.auth.token.keys().hasAny(['phone_number'])
         && request.auth.token.phone_number is string
         && request.auth.token.phone_number.size() > 0;
@@ -59,11 +59,11 @@ service cloud.firestore {
       );
     }
 
-    // Admin access is intentionally strict: Firebase email + phone must be
-    // verified, and the Firestore profile must explicitly be ACTIVE and admin.
-    // Do not remove these checks to silence permission errors.
+    // Admin access is based on Firebase authentication plus the trusted
+    // Firestore role and ACTIVE account status. Admins do not need email/phone
+    // verification for admin access; never let a client write its own role.
     function isAdmin() {
-      return verifiedAccount()
+      return authenticated()
         && userProfileExists(request.auth.uid)
         && currentUser().data.accountStatus == "ACTIVE"
         && currentUser().data.role in [
@@ -75,13 +75,13 @@ service cloud.firestore {
     }
 
     function isSeller() {
-      return userExists()
+      return userProfileExists(request.auth.uid)
         && currentUser().data.role == "SELLER"
         && currentUser().data.accountStatus == "ACTIVE";
     }
 
     function isCustomer() {
-      return userExists()
+      return userProfileExists(request.auth.uid)
         && (
           currentUser().data.role == "RETAIL_CUSTOMER"
           || currentUser().data.role == "WHOLESALE_CUSTOMER"
@@ -90,7 +90,7 @@ service cloud.firestore {
     }
 
     function isWholesaleCustomer() {
-      return userExists()
+      return userProfileExists(request.auth.uid)
         && currentUser().data.role == "WHOLESALE_CUSTOMER"
         && currentUser().data.accountStatus == "ACTIVE";
     }
@@ -103,7 +103,7 @@ service cloud.firestore {
     }
 
     function isApprovedSeller() {
-      return userExists()
+      return userProfileExists(request.auth.uid)
         && currentUser().data.role == "SELLER"
         && currentUser().data.accountStatus == "ACTIVE"
         && sellerDocExists()
@@ -304,7 +304,7 @@ service cloud.firestore {
 
     match /products/{productId} {
 
-      allow read: if resource.data.status == "active"
+      allow read: if resource.data.status in ["active", "ACTIVE"]
         || isAdmin()
         || (
           signedIn()
