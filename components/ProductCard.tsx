@@ -6,7 +6,7 @@ import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
 import { addToCart } from "@/lib/cart";
-import type { Product } from "@/types/product";
+import type { Product, ProductVariant } from "@/types/product";
 
 type ProductCardProps = {
   product: Product;
@@ -19,6 +19,15 @@ export default function ProductCard({
   const [adding, setAdding] = useState(false);
   const [added, setAdded] = useState(false);
   const [error, setError] = useState("");
+  const [variantDialogOpen, setVariantDialogOpen] = useState(false);
+  const [selectedVariantId, setSelectedVariantId] = useState("");
+
+  const variantConfiguration = product.variantConfiguration;
+  const variantsEnabled = variantConfiguration?.enabled === true && Array.isArray(variantConfiguration.variants) && variantConfiguration.variants.length > 0;
+  const availableVariants = (variantConfiguration?.variants || []).filter((variant) =>
+    String(variant.status ?? "").trim().toLowerCase() === "active" && Number.isFinite(Number(variant.stock)) && Number(variant.stock) > 0
+  );
+  const selectedVariant: ProductVariant | undefined = availableVariants.find((variant) => variant.id === selectedVariantId);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -68,7 +77,21 @@ export default function ProductCard({
       return;
     }
 
-    if (stock <= 0) {
+    if (variantsEnabled && !selectedVariant) {
+      if (availableVariants.length === 0) {
+        setError("All variants are currently out of stock.");
+        return;
+      }
+      setSelectedVariantId(availableVariants[0].id);
+      setVariantDialogOpen(true);
+      return;
+    }
+
+    if (variantsEnabled && (!selectedVariant || Number(selectedVariant.stock) <= 0)) {
+      setError("Please select an available size, colour, or variant.");
+      return;
+    }
+    if (!variantsEnabled && stock <= 0) {
       setError("Product is out of stock.");
       return;
     }
@@ -85,13 +108,21 @@ export default function ProductCard({
           sellerId: product.sellerId,
           sellerName: product.sellerName,
           image,
-          mrp,
-          retailPrice,
+          ...(selectedVariant ? {
+            variantId: selectedVariant.id,
+            variantSku: selectedVariant.sku,
+            variantName: selectedVariant.name,
+            ...(selectedVariant.size ? { selectedSize: selectedVariant.size } : {}),
+            ...(selectedVariant.color ? { selectedColor: selectedVariant.color } : {}),
+            ...(selectedVariant.value ? { selectedVariantValue: selectedVariant.value } : {}),
+          } : {}),
+          mrp: selectedVariant?.mrp ?? mrp,
+          retailPrice: selectedVariant?.price ?? retailPrice,
           wholesalePrice,
           wholesaleTiers: product.wholesaleTiers || [],
           moq,
           pricingType: "retail",
-          stock,
+          stock: selectedVariant ? Number(selectedVariant.stock) : stock,
         },
         1
       );
@@ -273,9 +304,9 @@ export default function ProductCard({
           <button
             type="button"
             onClick={handleAddToCart}
-            disabled={adding || stock <= 0}
+            disabled={adding || (!variantsEnabled && stock <= 0) || (variantsEnabled && availableVariants.length === 0)}
             className={`rounded-xl px-3 py-2.5 text-sm font-semibold text-white transition ${
-              stock <= 0
+              (!variantsEnabled && stock <= 0) || (variantsEnabled && availableVariants.length === 0)
                 ? "cursor-not-allowed bg-gray-400"
                 : added
                 ? "bg-green-600"
@@ -290,6 +321,38 @@ export default function ProductCard({
           </button>
         </div>
       </div>
+
+      {variantDialogOpen && variantsEnabled && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Select product variant">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">Select size / colour</h3>
+                <p className="mt-1 text-sm text-gray-500">Choose your variant before adding this item to cart.</p>
+              </div>
+              <button type="button" onClick={() => setVariantDialogOpen(false)} className="rounded-lg px-2 py-1 text-xl text-gray-500" aria-label="Close">×</button>
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              {availableVariants.map((variant) => {
+                const active = variant.id === selectedVariantId;
+                return (
+                  <button key={variant.id} type="button" onClick={() => setSelectedVariantId(variant.id)} aria-pressed={active}
+                    className={`rounded-xl border p-3 text-left ${active ? "border-black bg-gray-100 ring-1 ring-black" : "border-gray-200 hover:border-gray-500"}`}>
+                    <span className="block text-sm font-semibold text-gray-900">{variant.name || variant.size || variant.color || variant.value || variant.sku}</span>
+                    {(variant.size || variant.color) && <span className="mt-1 block text-xs text-gray-500">{[variant.size && `Size: ${variant.size}`, variant.color && `Colour: ${variant.color}`].filter(Boolean).join(" · ")}</span>}
+                    <span className="mt-1 block text-xs text-gray-500">{Number(variant.stock)} in stock</span>
+                    {typeof variant.price === "number" && <span className="mt-1 block text-sm font-bold">₹{variant.price.toLocaleString("en-IN")}</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-5 flex gap-2">
+              <button type="button" onClick={() => setVariantDialogOpen(false)} className="flex-1 rounded-xl border border-gray-300 px-4 py-3 text-sm font-semibold">Cancel</button>
+              <button type="button" onClick={() => { if (!selectedVariant) { setError("Please select an available variant."); return; } setVariantDialogOpen(false); void handleAddToCart(); }} disabled={!selectedVariant || adding} className="flex-1 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-400">{adding ? "Adding…" : "Confirm & Add"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </article>
   );
 }
