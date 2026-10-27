@@ -10,6 +10,14 @@ import type { ShippingAddress } from "@/lib/orders";
 import type { Cart } from "@/lib/cart";
 
 type PaymentMethod = "COD" | "ONLINE";
+type AddressLabel = "Home" | "Work" | "Other";
+type SavedAddress = ShippingAddress & {
+  id: string;
+  label: AddressLabel;
+  isDefault: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
 
 type CashfreeCheckout = {
   checkout: (options: {
@@ -44,8 +52,15 @@ export default function CheckoutPage() {
     useState<PaymentMethod>("COD");
 
   const [error, setError] = useState("");
-  const [errors, setErrors] =
-    useState<FormErrors>({});
+  const [errors, setErrors] = useState<FormErrors>({});
+  const [savedAddresses, setSavedAddresses] = useState<SavedAddress[]>([]);
+  const [selectedAddressId, setSelectedAddressId] = useState("");
+  const [showAddressForm, setShowAddressForm] = useState(true);
+  const [editingAddressId, setEditingAddressId] = useState("");
+  const [addressLabel, setAddressLabel] = useState<AddressLabel>("Home");
+  const [addressesLoading, setAddressesLoading] = useState(false);
+  const [savingAddress, setSavingAddress] = useState(false);
+  const [deletingAddressId, setDeletingAddressId] = useState("");
 
   const [address, setAddress] =
     useState<ShippingAddress>({
@@ -74,19 +89,52 @@ export default function CheckoutPage() {
         try {
           const currentCart = await getCart(user.uid);
           setCart(currentCart);
-
           setAddress((current) => ({
             ...current,
-            fullName:
-              current.fullName ||
-              user.displayName ||
-              "",
+            fullName: current.fullName || user.displayName || "",
           }));
+
+          setAddressesLoading(true);
+          try {
+            const token = await user.getIdToken();
+            const response = await fetch("/api/account/addresses", {
+              method: "GET",
+              headers: { Authorization: `Bearer ${token}` },
+              cache: "no-store",
+            });
+            const result = await response.json();
+            if (!response.ok || !result.success) {
+              throw new Error(result.message || "Unable to load saved addresses.");
+            }
+
+            const addresses = Array.isArray(result.addresses)
+              ? (result.addresses as SavedAddress[])
+              : [];
+            setSavedAddresses(addresses);
+            const preferred = addresses.find((item) => item.isDefault) || addresses[0];
+            if (preferred) {
+              setSelectedAddressId(preferred.id);
+              setAddress({
+                fullName: preferred.fullName,
+                phone: preferred.phone,
+                addressLine1: preferred.addressLine1,
+                addressLine2: preferred.addressLine2 || "",
+                city: preferred.city,
+                state: preferred.state,
+                pincode: preferred.pincode,
+              });
+              setAddressLabel(preferred.label || "Home");
+              setShowAddressForm(false);
+            }
+          } catch (addressError) {
+            // Checkout remains usable with a manually entered address if saved-address loading fails.
+            console.error("Saved addresses could not be loaded:", addressError);
+          } finally {
+            setAddressesLoading(false);
+          }
         } catch (err) {
           console.error(err);
-          setError(
-            "Unable to load your cart."
-          );
+          setError("Unable to load your cart.");
         } finally {
           setLoading(false);
         }
@@ -124,6 +172,136 @@ export default function CheckoutPage() {
     }));
 
     setError("");
+  }
+
+  function selectSavedAddress(saved: SavedAddress) {
+    setSelectedAddressId(saved.id);
+    setEditingAddressId("");
+    setAddressLabel(saved.label || "Home");
+    setAddress({
+      fullName: saved.fullName,
+      phone: saved.phone,
+      addressLine1: saved.addressLine1,
+      addressLine2: saved.addressLine2 || "",
+      city: saved.city,
+      state: saved.state,
+      pincode: saved.pincode,
+    });
+    setErrors({});
+    setError("");
+    setShowAddressForm(false);
+  }
+
+  function startNewAddress() {
+    setSelectedAddressId("");
+    setEditingAddressId("");
+    setAddressLabel("Home");
+    setAddress({
+      fullName: auth.currentUser?.displayName || "",
+      phone: "",
+      addressLine1: "",
+      addressLine2: "",
+      city: "",
+      state: "",
+      pincode: "",
+    });
+    setErrors({});
+    setError("");
+    setShowAddressForm(true);
+  }
+
+  function startEditAddress(saved: SavedAddress) {
+    selectSavedAddress(saved);
+    setEditingAddressId(saved.id);
+    setShowAddressForm(true);
+  }
+
+  async function saveAddress() {
+    if (savingAddress || !validateAddress()) return;
+
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setError("Please log in again to save your address.");
+      return;
+    }
+
+    try {
+      setSavingAddress(true);
+      setError("");
+      const token = await currentUser.getIdToken();
+      const payload = {
+        ...address,
+        label: addressLabel,
+        isDefault: true,
+        ...(editingAddressId ? { id: editingAddressId } : {}),
+      };
+      const response = await fetch("/api/account/addresses", {
+        method: editingAddressId ? "PATCH" : "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+        cache: "no-store",
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success || !result.address) {
+        throw new Error(result.message || "Unable to save this address.");
+      }
+
+      const saved = result.address as SavedAddress;
+      setSavedAddresses((current) => {
+        const next = current
+          .filter((item) => item.id !== saved.id)
+          .map((item) => ({ ...item, isDefault: false }));
+        return [saved, ...next];
+      });
+      selectSavedAddress(saved);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : "Unable to save this address.");
+    } finally {
+      setSavingAddress(false);
+    }
+  }
+
+  async function deleteAddress(id: string) {
+    if (deletingAddressId) return;
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setError("Please log in again to manage saved addresses.");
+      return;
+    }
+    if (!window.confirm("Delete this saved address?")) return;
+
+    try {
+      setDeletingAddressId(id);
+      setError("");
+      const token = await currentUser.getIdToken();
+      const response = await fetch(`/api/account/addresses?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || "Unable to delete this address.");
+      }
+
+      const remaining = savedAddresses.filter((item) => item.id !== id);
+      setSavedAddresses(remaining);
+      if (selectedAddressId === id || editingAddressId === id) {
+        const replacement = remaining.find((item) => item.isDefault) || remaining[0];
+        if (replacement) {
+          selectSavedAddress(replacement);
+        } else {
+          startNewAddress();
+        }
+      }
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : "Unable to delete this address.");
+    } finally {
+      setDeletingAddressId("");
+    }
   }
 
   function validateAddress(): boolean {
@@ -489,104 +667,126 @@ export default function CheckoutPage() {
           {/* LEFT */}
 
           <div className="space-y-6">
-            {/* Address */}
-
+            {/* Saved Delivery Addresses */}
             <section className="rounded-3xl border bg-white p-5 shadow-sm sm:p-7">
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-slate-900">
-                  1. Delivery Address
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-500">
-                  Where should we deliver your order?
-                </p>
+              <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-slate-900">1. Delivery Address</h2>
+                  <p className="mt-1 text-sm text-slate-500">Choose a saved address or add a new delivery address.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={startNewAddress}
+                  disabled={placingOrder || savingAddress}
+                  className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-bold text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  + Add Address
+                </button>
               </div>
 
-              <div className="grid gap-5 sm:grid-cols-2">
-                <Field
-                  label="Full Name"
-                  value={address.fullName}
-                  onChange={(value) =>
-                    updateAddress("fullName", value)
-                  }
-                  error={errors.fullName}
-                  placeholder="Enter full name"
-                />
+              {addressesLoading && (
+                <p className="mb-4 rounded-xl bg-slate-50 p-3 text-sm text-slate-500">Loading saved addresses...</p>
+              )}
 
-                <Field
-                  label="Mobile Number"
-                  value={address.phone}
-                  onChange={(value) =>
-                    updateAddress("phone", value)
-                  }
-                  error={errors.phone}
-                  placeholder="10 digit mobile number"
-                  type="tel"
-                />
-
-                <div className="sm:col-span-2">
-                  <Field
-                    label="Address Line 1"
-                    value={address.addressLine1}
-                    onChange={(value) =>
-                      updateAddress(
-                        "addressLine1",
-                        value
-                      )
-                    }
-                    error={errors.addressLine1}
-                    placeholder="House / Shop / Street / Area"
-                  />
+              {savedAddresses.length > 0 && (
+                <div className="mb-6 grid gap-3">
+                  {savedAddresses.map((saved) => {
+                    const selected = selectedAddressId === saved.id && !showAddressForm;
+                    return (
+                      <div
+                        key={saved.id}
+                        className={`rounded-2xl border p-4 transition ${selected ? "border-slate-900 bg-slate-50 ring-1 ring-slate-900" : "border-slate-200"}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => selectSavedAddress(saved)}
+                          disabled={placingOrder || savingAddress}
+                          className="flex w-full items-start gap-3 text-left disabled:opacity-60"
+                        >
+                          <span className={`mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${selected ? "border-slate-900" : "border-slate-300"}`}>
+                            {selected && <span className="h-2 w-2 rounded-full bg-slate-900" />}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-slate-900">{saved.fullName}</span>
+                              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">{saved.label || "Home"}</span>
+                              {saved.isDefault && <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">Default</span>}
+                            </span>
+                            <span className="mt-1 block text-sm leading-6 text-slate-600">
+                              {saved.addressLine1}{saved.addressLine2 ? `, ${saved.addressLine2}` : ""}, {saved.city}, {saved.state} - {saved.pincode}
+                            </span>
+                            <span className="mt-1 block text-sm text-slate-500">Mobile: {saved.phone}</span>
+                          </span>
+                        </button>
+                        <div className="mt-3 flex gap-4 pl-7 text-sm font-semibold">
+                          <button type="button" onClick={() => startEditAddress(saved)} disabled={placingOrder || savingAddress} className="text-slate-700 hover:text-black disabled:opacity-50">Edit</button>
+                          <button type="button" onClick={() => void deleteAddress(saved.id)} disabled={placingOrder || !!deletingAddressId} className="text-red-600 hover:text-red-700 disabled:opacity-50">
+                            {deletingAddressId === saved.id ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
+              )}
 
-                <div className="sm:col-span-2">
-                  <Field
-                    label="Address Line 2"
-                    value={address.addressLine2 || ""}
-                    onChange={(value) =>
-                      updateAddress(
-                        "addressLine2",
-                        value
-                      )
-                    }
-                    placeholder="Landmark / Area (optional)"
-                  />
+              {showAddressForm && (
+                <div className="rounded-2xl border border-slate-200 p-4 sm:p-5">
+                  <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="font-bold text-slate-900">{editingAddressId ? "Edit Address" : "Add New Address"}</h3>
+                    {savedAddresses.length > 0 && (
+                      <button type="button" onClick={() => {
+                        const selected = savedAddresses.find((item) => item.id === selectedAddressId);
+                        if (selected) selectSavedAddress(selected);
+                        else setShowAddressForm(false);
+                      }} className="text-sm font-semibold text-slate-500 hover:text-slate-900">Cancel</button>
+                    )}
+                  </div>
+
+                  <div className="mb-5">
+                    <label className="mb-2 block text-sm font-semibold text-slate-700">Save address as</label>
+                    <div className="flex flex-wrap gap-2">
+                      {(["Home", "Work", "Other"] as AddressLabel[]).map((label) => (
+                        <button key={label} type="button" onClick={() => setAddressLabel(label)} aria-pressed={addressLabel === label} className={`rounded-full border px-4 py-2 text-sm font-semibold ${addressLabel === label ? "border-slate-900 bg-slate-900 text-white" : "border-slate-300 text-slate-700 hover:bg-slate-50"}`}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid gap-5 sm:grid-cols-2">
+                    <Field label="Full Name" value={address.fullName} onChange={(value) => updateAddress("fullName", value)} error={errors.fullName} placeholder="Enter full name" />
+                    <Field label="Mobile Number" value={address.phone} onChange={(value) => updateAddress("phone", value.replace(/\D/g, "").slice(0, 10))} error={errors.phone} placeholder="10 digit mobile number" type="tel" />
+                    <div className="sm:col-span-2">
+                      <Field label="Address Line 1" value={address.addressLine1} onChange={(value) => updateAddress("addressLine1", value)} error={errors.addressLine1} placeholder="House / Shop / Street / Area" />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Field label="Address Line 2" value={address.addressLine2 || ""} onChange={(value) => updateAddress("addressLine2", value)} placeholder="Landmark / Area (optional)" />
+                    </div>
+                    <Field label="City" value={address.city} onChange={(value) => updateAddress("city", value)} error={errors.city} placeholder="City" />
+                    <Field label="State" value={address.state} onChange={(value) => updateAddress("state", value)} error={errors.state} placeholder="State" />
+                    <Field label="Pincode" value={address.pincode} onChange={(value) => updateAddress("pincode", value.replace(/\D/g, "").slice(0, 6))} error={errors.pincode} placeholder="6 digit pincode" />
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button type="button" onClick={() => void saveAddress()} disabled={savingAddress || placingOrder} className="rounded-xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60">
+                      {savingAddress ? "Saving Address..." : editingAddressId ? "Update Address" : "Save Address"}
+                    </button>
+                    <button type="button" onClick={() => {
+                      const selected = savedAddresses.find((item) => item.id === selectedAddressId);
+                      if (selected) selectSavedAddress(selected);
+                      else setShowAddressForm(false);
+                    }} disabled={savingAddress} className="rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">Use Without Saving</button>
+                  </div>
                 </div>
+              )}
 
-                <Field
-                  label="City"
-                  value={address.city}
-                  onChange={(value) =>
-                    updateAddress("city", value)
-                  }
-                  error={errors.city}
-                  placeholder="City"
-                />
-
-                <Field
-                  label="State"
-                  value={address.state}
-                  onChange={(value) =>
-                    updateAddress("state", value)
-                  }
-                  error={errors.state}
-                  placeholder="State"
-                />
-
-                <Field
-                  label="Pincode"
-                  value={address.pincode}
-                  onChange={(value) =>
-                    updateAddress(
-                      "pincode",
-                      value.replace(/\D/g, "").slice(0, 6)
-                    )
-                  }
-                  error={errors.pincode}
-                  placeholder="6 digit pincode"
-                  type="text"
-                />
-              </div>
+              {!showAddressForm && selectedAddressId && (
+                <button type="button" onClick={() => {
+                  const selected = savedAddresses.find((item) => item.id === selectedAddressId);
+                  if (selected) startEditAddress(selected);
+                }} className="text-sm font-semibold text-slate-600 underline underline-offset-4 hover:text-slate-900">Edit selected delivery details</button>
+              )}
             </section>
 
             {/* Payment */}
