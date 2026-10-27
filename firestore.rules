@@ -167,30 +167,27 @@ service cloud.firestore {
         && request.resource.data.emailVerified == false
         && request.resource.data.phoneVerified == false;
 
-      // Users can edit ordinary profile fields while onboarding, but cannot
-      // self-assign roles, activate the account, or change verification flags.
-      // Verification status must be updated by trusted backend code.
+      // Buyers may update ordinary account/profile fields only.
+      // Identity, role, verification, account status, seller status and security
+      // fields remain controlled by trusted backend/admin code.
       allow update: if isAdmin()
         || (
           authenticatedOwner(userId)
-
-          && request.resource.data.uid
-             == resource.data.uid
-
-          && request.resource.data.role
-             == resource.data.role
-
-          && request.resource.data.accountStatus
-             == resource.data.accountStatus
-
-          && request.resource.data.sellerApplicationStatus
-             == resource.data.sellerApplicationStatus
-
-          && request.resource.data.emailVerified
-             == resource.data.emailVerified
-
-          && request.resource.data.phoneVerified
-             == resource.data.phoneVerified
+          && request.resource.data.uid == resource.data.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "displayName",
+            "name",
+            "firstName",
+            "lastName",
+            "photoURL",
+            "photoUrl",
+            "avatar",
+            "avatarUrl",
+            "gender",
+            "dateOfBirth",
+            "preferredLanguage",
+            "updatedAt"
+          ])
         );
 
       allow delete: if isAdmin();
@@ -304,6 +301,9 @@ service cloud.firestore {
 
     match /products/{productId} {
 
+      // Buyers can read active product documents, including embedded size,
+      // colour and variant data. Price/stock must still be revalidated by the
+      // trusted checkout API before creating an order.
       allow read: if resource.data.status in ["active", "ACTIVE"]
         || isAdmin()
         || (
@@ -347,6 +347,18 @@ service cloud.firestore {
         );
     }
 
+
+    // Product variant subcollection (if variants are stored separately).
+    // Public read only for variants belonging to an active product; clients
+    // cannot change prices, stock, SKU or variant availability.
+    match /products/{productId}/variants/{variantId} {
+      allow read: if exists(/databases/$(database)/documents/products/$(productId))
+        && get(/databases/$(database)/documents/products/$(productId)).data.status in ["active", "ACTIVE"]
+        || isAdmin();
+      allow create, update, delete: if isAdmin()
+        || (isApprovedSeller()
+          && get(/databases/$(database)/documents/products/$(productId)).data.sellerId == request.auth.uid);
+    }
 
     // =========================================================
     // CATEGORIES
@@ -400,6 +412,13 @@ service cloud.firestore {
         || isAdmin();
     }
 
+
+    // Cart line items (if the cart uses a subcollection).
+    // Buyers may store selected size/colour/variant and quantity in their own
+    // cart. Checkout must not trust client-supplied price or stock values.
+    match /carts/{userId}/items/{itemId} {
+      allow read, create, update, delete: if isOwner(userId) || isAdmin();
+    }
 
     // =========================================================
     // WISHLISTS
