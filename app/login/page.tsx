@@ -237,7 +237,7 @@ export default function LoginPage() {
           return;
         }
 
-        router.replace("/account");
+        router.replace("/");
         return;
       }
 
