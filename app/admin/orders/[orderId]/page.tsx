@@ -17,6 +17,7 @@ import { useParams, useRouter } from "next/navigation";
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import ShippingLabelButton from "@/components/ShippingLabelButton";
 
 import { auth, db } from "@/lib/firebase";
 
@@ -681,13 +682,23 @@ export default function AdminOrderDetailsPage() {
             Admin Dashboard
           </Link>
 
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="rounded-xl bg-black px-4 py-2.5 text-xs font-black text-white hover:bg-gray-800 print:hidden"
-          >
-            🖨️ Print Packing Slip
-          </button>
+          <div className="flex flex-wrap gap-2 print:hidden">
+            <ShippingLabelButton
+              orderId={order.id}
+              shippingAddress={order.shippingAddress}
+              items={order.items}
+              paymentMethod={order.paymentMethod}
+              paymentStatus={order.paymentStatus}
+              totalAmount={order.totalAmount}
+            />
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className="rounded-xl bg-black px-4 py-2.5 text-xs font-black text-white hover:bg-gray-800"
+            >
+              🖨️ Print Packing Slip
+            </button>
+          </div>
 
         </div>
 
