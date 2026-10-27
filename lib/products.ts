@@ -900,11 +900,7 @@ export async function getProducts(
   const productsQuery =
     query(
       productsCollection,
-      where(
-        "status",
-        "==",
-        "active"
-      )
+      where("status", "in", ["active", "ACTIVE"])
     );
 
   const snapshot =
@@ -942,8 +938,9 @@ export async function getProductBySlug(
       where(
         "slug",
         "==",
-        slug
+        slug.trim()
       ),
+      where("status", "in", ["active", "ACTIVE"]),
       limit(1)
     );
 
@@ -987,11 +984,7 @@ export async function getFeaturedProducts(
   const productsQuery =
     query(
       productsCollection,
-      where(
-        "status",
-        "==",
-        "active"
-      )
+      where("status", "in", ["active", "ACTIVE"])
     );
 
   const snapshot =
@@ -1032,11 +1025,7 @@ export async function getBestSellerProducts(
   const productsQuery =
     query(
       productsCollection,
-      where(
-        "status",
-        "==",
-        "active"
-      )
+      where("status", "in", ["active", "ACTIVE"])
     );
 
   const snapshot =
@@ -1077,11 +1066,7 @@ export async function getTrendingProducts(
   const productsQuery =
     query(
       productsCollection,
-      where(
-        "status",
-        "==",
-        "active"
-      )
+      where("status", "in", ["active", "ACTIVE"])
     );
 
   const snapshot =
@@ -1164,11 +1149,7 @@ export async function searchProducts(
   const productsQuery =
     query(
       productsCollection,
-      where(
-        "status",
-        "==",
-        "active"
-      )
+      where("status", "in", ["active", "ACTIVE"])
     );
 
   const snapshot =
