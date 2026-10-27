@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
@@ -20,6 +21,7 @@ export default function ProductCard({
   const [added, setAdded] = useState(false);
   const [error, setError] = useState("");
   const [variantDialogOpen, setVariantDialogOpen] = useState(false);
+  const [portalReady, setPortalReady] = useState(false);
   const [selectedVariantId, setSelectedVariantId] = useState("");
 
   const variantConfiguration = product.variantConfiguration;
@@ -28,6 +30,11 @@ export default function ProductCard({
     String(variant.status ?? "").trim().toLowerCase() === "active" && Number.isFinite(Number(variant.stock)) && Number(variant.stock) > 0
   );
   const selectedVariant: ProductVariant | undefined = availableVariants.find((variant) => variant.id === selectedVariantId);
+
+  useEffect(() => {
+    // Render the modal only after the component mounts in the browser.
+    setPortalReady(true);
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -322,8 +329,8 @@ export default function ProductCard({
         </div>
       </div>
 
-      {variantDialogOpen && variantsEnabled && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Select product variant">
+      {portalReady && variantDialogOpen && variantsEnabled && createPortal(
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Select product variant" onMouseDown={(event) => { if (event.target === event.currentTarget) setVariantDialogOpen(false); }}>
           <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -351,7 +358,8 @@ export default function ProductCard({
               <button type="button" onClick={() => { if (!selectedVariant) { setError("Please select an available variant."); return; } setVariantDialogOpen(false); void handleAddToCart(); }} disabled={!selectedVariant || adding} className="flex-1 rounded-xl bg-black px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-gray-400">{adding ? "Adding…" : "Confirm & Add"}</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </article>
   );
