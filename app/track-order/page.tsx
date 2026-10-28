@@ -1,8 +1,8 @@
 
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import {
@@ -54,11 +54,8 @@ function formatStatus(status: string): string {
 
 export default function TrackOrderPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
-  const [orderIdInput, setOrderIdInput] = useState(
-    searchParams.get("orderId") || ""
-  );
+  const [orderIdInput, setOrderIdInput] = useState("");
   const [activeOrderId, setActiveOrderId] = useState("");
   const [order, setOrder] = useState<Order | null>(null);
   const [userId, setUserId] = useState("");
@@ -67,6 +64,18 @@ export default function TrackOrderPage() {
   const [error, setError] = useState("");
   const [listenerError, setListenerError] = useState("");
 
+  // Read orderId from the URL without useSearchParams().
+  // This avoids the Next.js Suspense build error.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const orderId = params.get("orderId");
+
+    if (orderId?.trim()) {
+      setOrderIdInput(orderId.trim());
+    }
+  }, []);
+
+  // Monitor Firebase authentication.
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUserId(user?.uid || "");
@@ -76,6 +85,7 @@ export default function TrackOrderPage() {
     return unsubscribe;
   }, []);
 
+  // Subscribe to the selected order.
   useEffect(() => {
     if (!activeOrderId || !userId) {
       setOrder(null);
@@ -84,6 +94,7 @@ export default function TrackOrderPage() {
     }
 
     let isCurrent = true;
+
     setLoading(true);
     setError("");
     setListenerError("");
@@ -111,8 +122,9 @@ export default function TrackOrderPage() {
 
         setLoading(false);
         setListenerError(
-          err.message ||
-            "Order load nahi ho paya. Apna account verification check karein."
+          err instanceof Error
+            ? err.message
+            : "Order load nahi ho paya. Apna account verification check karein."
         );
       }
     );
@@ -147,7 +159,9 @@ export default function TrackOrderPage() {
   if (authLoading) {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16">
-        <p className="text-center text-gray-600">Loading account...</p>
+        <p className="text-center text-gray-600">
+          Loading account...
+        </p>
       </main>
     );
   }
@@ -159,9 +173,11 @@ export default function TrackOrderPage() {
           <h1 className="text-2xl font-bold text-gray-900">
             Track Your Order
           </h1>
+
           <p className="mt-3 text-gray-600">
             Order track karne ke liye pehle login karein.
           </p>
+
           <button
             type="button"
             onClick={() => router.push("/login")}
@@ -174,7 +190,8 @@ export default function TrackOrderPage() {
     );
   }
 
-  const currentStatus = order?.status;
+  const currentStatus = order?.fulfillmentStatus || order?.status;
+
   const terminalStatus =
     currentStatus === "cancelled" ||
     currentStatus === "returned" ||
@@ -190,6 +207,7 @@ export default function TrackOrderPage() {
         <h1 className="text-3xl font-bold text-gray-900">
           Track Your Order
         </h1>
+
         <p className="mt-2 text-gray-600">
           Apne order ka current status aur shipment details dekhein.
         </p>
@@ -202,6 +220,7 @@ export default function TrackOrderPage() {
         <label className="sr-only" htmlFor="orderId">
           Order ID
         </label>
+
         <input
           id="orderId"
           type="text"
@@ -212,6 +231,7 @@ export default function TrackOrderPage() {
           required
           className="min-w-0 flex-1 rounded-lg border border-gray-300 px-4 py-3 outline-none focus:border-black"
         />
+
         <button
           type="submit"
           disabled={loading}
@@ -255,10 +275,11 @@ export default function TrackOrderPage() {
                   {order.id}
                 </p>
               </div>
+
               <div>
                 <p className="text-sm text-gray-500">Current Status</p>
                 <p className="mt-1 font-bold text-gray-900">
-                  {formatStatus(order.fulfillmentStatus || order.status)}
+                  {formatStatus(currentStatus || "pending")}
                 </p>
               </div>
             </div>
@@ -270,18 +291,21 @@ export default function TrackOrderPage() {
                   {formatDate(order.createdAt)}
                 </p>
               </div>
+
               <div>
                 <p className="text-sm text-gray-500">Payment Method</p>
                 <p className="mt-1 font-medium">
                   {order.paymentMethod || "Not available"}
                 </p>
               </div>
+
               <div>
                 <p className="text-sm text-gray-500">Payment Status</p>
                 <p className="mt-1 font-medium">
                   {formatStatus(order.paymentStatus || "pending")}
                 </p>
               </div>
+
               <div>
                 <p className="text-sm text-gray-500">Order Total</p>
                 <p className="mt-1 font-bold">
@@ -318,6 +342,7 @@ export default function TrackOrderPage() {
                       >
                         {completed ? "✓" : index + 1}
                       </span>
+
                       <div>
                         <p
                           className={`font-medium ${
@@ -351,14 +376,18 @@ export default function TrackOrderPage() {
                   {order.courierName || order.courier || "Not assigned yet"}
                 </span>
               </p>
+
               <p>
-                <span className="text-gray-500">Tracking / AWB number: </span>
+                <span className="text-gray-500">
+                  Tracking / AWB number:{" "}
+                </span>
                 <span className="break-all font-medium">
                   {order.trackingNumber ||
                     order.awbNumber ||
                     "Not available yet"}
                 </span>
               </p>
+
               <p>
                 <span className="text-gray-500">Estimated delivery: </span>
                 <span className="font-medium">
@@ -384,8 +413,9 @@ export default function TrackOrderPage() {
             <h2 className="text-xl font-bold text-gray-900">
               Items in This Order
             </h2>
+
             <div className="mt-4 divide-y">
-              {order.items.map((item, index) => (
+              {(order.items || []).map((item, index) => (
                 <div
                   key={`${item.productId}-${index}`}
                   className="flex items-start justify-between gap-4 py-4"
@@ -394,6 +424,7 @@ export default function TrackOrderPage() {
                     <p className="break-words font-medium text-gray-900">
                       {item.name}
                     </p>
+
                     <p className="mt-1 text-sm text-gray-500">
                       Qty: {item.quantity} ·{" "}
                       {item.pricingType === "wholesale"
@@ -401,6 +432,7 @@ export default function TrackOrderPage() {
                         : "Retail"}
                     </p>
                   </div>
+
                   <p className="shrink-0 font-semibold">
                     ₹{Number(item.subtotal || 0).toLocaleString("en-IN")}
                   </p>
@@ -413,15 +445,28 @@ export default function TrackOrderPage() {
             <h2 className="text-xl font-bold text-gray-900">
               Shipping Address
             </h2>
-            <p className="mt-3 font-medium">{order.shippingAddress.fullName}</p>
-            <p className="mt-1 text-sm text-gray-600">
-              {order.shippingAddress.addressLine1}
-              {order.shippingAddress.addressLine2
-                ? `, ${order.shippingAddress.addressLine2}`
-                : ""}
-              , {order.shippingAddress.city}, {order.shippingAddress.state} -{" "}
-              {order.shippingAddress.pincode}
-            </p>
+
+            {order.shippingAddress ? (
+              <>
+                <p className="mt-3 font-medium">
+                  {order.shippingAddress.fullName}
+                </p>
+
+                <p className="mt-1 text-sm text-gray-600">
+                  {order.shippingAddress.addressLine1}
+                  {order.shippingAddress.addressLine2
+                    ? `, ${order.shippingAddress.addressLine2}`
+                    : ""}
+                  , {order.shippingAddress.city},{" "}
+                  {order.shippingAddress.state} -{" "}
+                  {order.shippingAddress.pincode}
+                </p>
+              </>
+            ) : (
+              <p className="mt-3 text-sm text-gray-500">
+                Shipping address not available.
+              </p>
+            )}
           </div>
         </section>
       )}
