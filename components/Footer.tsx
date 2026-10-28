@@ -19,14 +19,17 @@ const customerLinks = [
   ["Contact Support", "/contact"],
 ];
 
+
 const businessLinks = [
   ["Become a Seller", "/seller/register"],
   ["Seller Login", "/seller/login"],
+  ["Delivery Staff Login", "/delivery-partner"],
   ["Wholesale Account", "/wholesale/register"],
   ["Sell on ANJIVO", "/seller"],
   ["Seller Benefits", "/seller/benefits"],
   ["Seller Support", "/seller/support"],
 ];
+
 
 export default function Footer() {
   return (
