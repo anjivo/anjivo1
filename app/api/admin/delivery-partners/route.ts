@@ -90,14 +90,12 @@ function serializePartner(id: string, data: DocumentData) {
   };
 }
 
-// GET: List delivery partners
+// GET: List delivery staff.
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAdmin(request);
 
-    if ("error" in auth) {
-      return auth.error;
-    }
+    if ("error" in auth) return auth.error;
 
     const snapshot = await adminDb
       .collection("deliveryPartners")
@@ -116,25 +114,23 @@ export async function GET(request: NextRequest) {
       count: partners.length,
     });
   } catch (error) {
-    console.error("List delivery partners error:", error);
+    console.error("List delivery staff error:", error);
 
     return NextResponse.json(
-      { success: false, error: "Unable to load delivery partners." },
+      { success: false, error: "Unable to load delivery staff." },
       { status: 500 }
     );
   }
 }
 
-// POST: Create a delivery partner profile and Firebase login
+// POST: Create a staff profile and Firebase login.
 export async function POST(request: NextRequest) {
   let createdAuthUid: string | null = null;
 
   try {
     const auth = await requireAdmin(request);
 
-    if ("error" in auth) {
-      return auth.error;
-    }
+    if ("error" in auth) return auth.error;
 
     let body: Record<string, unknown>;
 
@@ -189,15 +185,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (
-      !email ||
-      !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-    ) {
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "A valid email is required for the delivery partner login.",
-        },
+        { success: false, error: "A valid email is required for staff login." },
         { status: 400 }
       );
     }
@@ -207,10 +197,7 @@ export async function POST(request: NextRequest) {
       temporaryPassword.length > 128
     ) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "Temporary password must be 8–128 characters.",
-        },
+        { success: false, error: "Temporary password must be 8–128 characters." },
         { status: 400 }
       );
     }
@@ -246,15 +233,11 @@ export async function POST(request: NextRequest) {
 
     if (!existing.empty) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "This phone number is already registered.",
-        },
+        { success: false, error: "This phone number is already registered." },
         { status: 409 }
       );
     }
 
-    // Create a disabled Firebase account first.
     let firebaseUser;
 
     try {
@@ -277,11 +260,7 @@ export async function POST(request: NextRequest) {
 
       if (code === "auth/email-already-exists") {
         return NextResponse.json(
-          {
-            success: false,
-            error:
-              "This email is already registered in Firebase Authentication.",
-          },
+          { success: false, error: "This email is already registered." },
           { status: 409 }
         );
       }
@@ -291,10 +270,7 @@ export async function POST(request: NextRequest) {
         code === "auth/weak-password"
       ) {
         return NextResponse.json(
-          {
-            success: false,
-            error: "Firebase rejected this password. Use a stronger password.",
-          },
+          { success: false, error: "Use a stronger password." },
           { status: 400 }
         );
       }
@@ -319,15 +295,11 @@ export async function POST(request: NextRequest) {
         updatedAt: FieldValue.serverTimestamp(),
       });
     } catch (error) {
-      // Best-effort cleanup if saving the Firestore profile fails.
       try {
         await adminAuth.deleteUser(firebaseUser.uid);
         createdAuthUid = null;
       } catch (cleanupError) {
-        console.error(
-          "Unable to clean up delivery partner Auth account:",
-          cleanupError
-        );
+        console.error("Staff Auth cleanup error:", cleanupError);
       }
 
       throw error;
@@ -343,43 +315,34 @@ export async function POST(request: NextRequest) {
         partner: serializePartner(saved.id, saved.data() ?? {}),
         loginCreated: true,
         loginEmail: email,
-        message:
-          "Delivery partner created. Login remains disabled until admin activation.",
+        message: "Staff created. Login remains disabled until admin activation.",
       },
       { status: 201 }
     );
   } catch (error) {
-    console.error("Create delivery partner error:", error);
+    console.error("Create delivery staff error:", error);
 
     if (createdAuthUid) {
       try {
         await adminAuth.deleteUser(createdAuthUid);
       } catch (cleanupError) {
-        console.error(
-          "Delivery partner Auth cleanup error:",
-          cleanupError
-        );
+        console.error("Staff Auth cleanup error:", cleanupError);
       }
     }
 
     return NextResponse.json(
-      {
-        success: false,
-        error: "Unable to create delivery partner. Check server logs.",
-      },
+      { success: false, error: "Unable to create staff. Check server logs." },
       { status: 500 }
     );
   }
 }
 
-// PATCH: Activate or deactivate a partner and their Firebase login
+// PATCH: Activate or deactivate staff login.
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAdmin(request);
 
-    if ("error" in auth) {
-      return auth.error;
-    }
+    if ("error" in auth) return auth.error;
 
     let body: Record<string, unknown>;
 
@@ -404,23 +367,17 @@ export async function PATCH(request: NextRequest) {
       (status !== "active" && status !== "inactive")
     ) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "Valid partnerId and status are required.",
-        },
+        { success: false, error: "Valid partnerId and status are required." },
         { status: 400 }
       );
     }
 
-    const ref = adminDb
-      .collection("deliveryPartners")
-      .doc(partnerId);
-
+    const ref = adminDb.collection("deliveryPartners").doc(partnerId);
     const snapshot = await ref.get();
 
     if (!snapshot.exists) {
       return NextResponse.json(
-        { success: false, error: "Delivery partner not found." },
+        { success: false, error: "Delivery staff not found." },
         { status: 404 }
       );
     }
@@ -431,21 +388,16 @@ export async function PATCH(request: NextRequest) {
         ? currentData.authUid
         : null;
 
-    // Synchronize Firebase account access with partner status.
     if (authUid) {
       try {
         await adminAuth.updateUser(authUid, {
           disabled: status !== "active",
         });
       } catch (error) {
-        console.error("Update delivery partner Auth status error:", error);
+        console.error("Update staff Auth status error:", error);
 
         return NextResponse.json(
-          {
-            success: false,
-            error:
-              "Unable to update the partner's login. The partner status was not changed.",
-          },
+          { success: false, error: "Unable to update staff login status." },
           { status: 500 }
         );
       }
@@ -458,17 +410,13 @@ export async function PATCH(request: NextRequest) {
         updatedBy: auth.uid,
       });
     } catch (error) {
-      // Restore the previous Auth disabled state if Firestore update fails.
       if (authUid) {
         try {
           await adminAuth.updateUser(authUid, {
             disabled: currentData.status !== "active",
           });
         } catch (rollbackError) {
-          console.error(
-            "Unable to restore delivery partner Auth status:",
-            rollbackError
-          );
+          console.error("Staff Auth rollback error:", rollbackError);
         }
       }
 
@@ -479,16 +427,13 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      partner: serializePartner(
-        updated.id,
-        updated.data() ?? {}
-      ),
+      partner: serializePartner(updated.id, updated.data() ?? {}),
     });
   } catch (error) {
-    console.error("Update delivery partner error:", error);
+    console.error("Update delivery staff error:", error);
 
     return NextResponse.json(
-      { success: false, error: "Unable to update delivery partner." },
+      { success: false, error: "Unable to update delivery staff." },
       { status: 500 }
     );
   }
