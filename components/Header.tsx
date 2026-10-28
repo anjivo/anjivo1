@@ -8,7 +8,7 @@ import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { getCategories } from "@/lib/categories";
 import type { Category } from "@/types/category";
-
+import LocationSelector from "@/components/LocationSelector";
 export default function Header() {
   const [search, setSearch] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
@@ -125,18 +125,7 @@ export default function Header() {
           </Link>
 
           {/* ================= LOCATION ================= */}
-          <button
-            type="button"
-            className="hidden shrink-0 rounded-xl border border-gray-200 px-3 py-2 text-left transition hover:border-gray-400 lg:block"
-          >
-            <div className="text-[9px] font-medium uppercase tracking-wider text-gray-400">
-              Deliver to
-            </div>
-
-            <div className="mt-0.5 text-xs font-bold text-gray-800">
-              📍 Select Location
-            </div>
-          </button>
+          <LocationSelector />
 
           {/* ================= DESKTOP SEARCH ================= */}
           <div className="relative hidden min-w-0 flex-1 md:block">
