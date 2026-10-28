@@ -1,8 +1,8 @@
 
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState, type FormEvent } from "react";
+import { useRouter } from "next/navigation";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "@/lib/firebase";
 import { getOrderById, type Order } from "@/lib/orders";
@@ -14,6 +14,12 @@ type ReturnRequest = {
   returnStatus: string;
   refundStatus: string;
   createdAt: string | null;
+};
+
+type ReturnForm = {
+  reason: string;
+  quantity: number;
+  description: string;
 };
 
 const REASONS = [
@@ -33,38 +39,55 @@ function labelStatus(value: string) {
 }
 
 function isDelivered(order: Order) {
-  const status = [
+  const statuses = [
     order.status,
     order.fulfillmentStatus,
-  ].map((value) => String(value || "").toLowerCase().replace(/[ -]+/g, "_"));
+  ].map((value) =>
+    String(value || "")
+      .toLowerCase()
+      .replace(/[ -]+/g, "_")
+  );
 
-  return status.some((value) =>
+  return statuses.some((value) =>
     ["delivered", "complete", "completed"].includes(value)
   );
 }
 
 export default function ReturnsPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [userId, setUserId] = useState("");
   const [authLoading, setAuthLoading] = useState(true);
-  const [orderId, setOrderId] = useState(searchParams.get("orderId") || "");
+  const [orderId, setOrderId] = useState("");
   const [order, setOrder] = useState<Order | null>(null);
   const [requests, setRequests] = useState<ReturnRequest[]>([]);
   const [selectedProducts, setSelectedProducts] = useState<
-    Record<string, { reason: string; quantity: number; description: string }>
+    Record<string, ReturnForm>
   >({});
   const [loadingOrder, setLoadingOrder] = useState(false);
   const [submittingProduct, setSubmittingProduct] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
+  // Read orderId from the URL without useSearchParams().
+  // This avoids the Next.js Suspense build error.
   useEffect(() => {
-    return onAuthStateChanged(auth, (user) => {
+    const params = new URLSearchParams(window.location.search);
+    const queryOrderId = params.get("orderId");
+
+    if (queryOrderId?.trim()) {
+      setOrderId(queryOrderId.trim());
+    }
+  }, []);
+
+  // Firebase authentication listener.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUserId(user?.uid || "");
       setAuthLoading(false);
     });
+
+    return unsubscribe;
   }, []);
 
   async function loadOrder(event?: FormEvent<HTMLFormElement>) {
@@ -94,16 +117,21 @@ export default function ReturnsPage() {
       const foundOrder = await getOrderById(cleanOrderId, user.uid);
 
       if (!foundOrder) {
-        throw new Error("Order nahi mila ya yeh aapke account ka nahi hai.");
+        throw new Error(
+          "Order nahi mila ya yeh aapke account ka nahi hai."
+        );
       }
 
       setOrder(foundOrder);
 
       const token = await user.getIdToken();
+
       const response = await fetch(
         `/api/returns?orderId=${encodeURIComponent(cleanOrderId)}`,
         {
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
           cache: "no-store",
         }
       );
@@ -114,14 +142,15 @@ export default function ReturnsPage() {
         throw new Error(result.error || "Return history load nahi hui.");
       }
 
-      setRequests(Array.isArray(result.returns) ? result.returns : []);
+      setRequests(
+        Array.isArray(result.returns) ? result.returns : []
+      );
 
-      const initial: Record<
-        string,
-        { reason: string; quantity: number; description: string }
-      > = {};
+      const initial: Record<string, ReturnForm> = {};
 
-      for (const item of foundOrder.items) {
+      for (const item of foundOrder.items || []) {
+        if (!item.productId) continue;
+
         initial[item.productId] = {
           reason: "other",
           quantity: 1,
@@ -132,6 +161,8 @@ export default function ReturnsPage() {
       setSelectedProducts(initial);
     } catch (err) {
       setOrder(null);
+      setRequests([]);
+
       setError(
         err instanceof Error
           ? err.message
@@ -165,6 +196,27 @@ export default function ReturnsPage() {
       return;
     }
 
+    const item = order.items.find(
+      (orderItem) => orderItem.productId === productId
+    );
+
+    if (!item || form.quantity > item.quantity) {
+      setError("Return quantity purchased quantity se zyada nahi ho sakti.");
+      return;
+    }
+
+    if (!isDelivered(order)) {
+      setError("Return request sirf delivered order ke liye submit ho sakti hai.");
+      return;
+    }
+
+    if (
+      requests.some((request) => request.productId === productId)
+    ) {
+      setError("Is product ke liye return request pehle se maujood hai.");
+      return;
+    }
+
     setSubmittingProduct(productId);
     setError("");
     setNotice("");
@@ -190,11 +242,14 @@ export default function ReturnsPage() {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error || "Return request submit nahi hui.");
+        throw new Error(
+          result.error || "Return request submit nahi hui."
+        );
       }
 
       setNotice("Return request successfully submit ho gayi.");
 
+      // Reload order and return history after successful submission.
       await loadOrder();
     } catch (err) {
       setError(
@@ -209,14 +264,14 @@ export default function ReturnsPage() {
 
   function updateProductForm(
     productId: string,
-    field: "reason" | "quantity" | "description",
+    field: keyof ReturnForm,
     value: string | number
   ) {
     setSelectedProducts((current) => ({
       ...current,
       [productId]: {
         reason: current[productId]?.reason || "other",
-        quantity: current[productId]?.quantity || 1,
+        quantity: current[productId]?.quantity ?? 1,
         description: current[productId]?.description || "",
         [field]: value,
       },
@@ -226,7 +281,9 @@ export default function ReturnsPage() {
   if (authLoading) {
     return (
       <main className="mx-auto max-w-4xl px-4 py-12">
-        <p className="text-center text-gray-600">Loading account...</p>
+        <p className="text-center text-gray-600">
+          Loading account...
+        </p>
       </main>
     );
   }
@@ -235,16 +292,16 @@ export default function ReturnsPage() {
     return (
       <main className="mx-auto max-w-3xl px-4 py-16">
         <section className="rounded-2xl border bg-white p-6 text-center">
-          <h1 className="text-2xl font-bold">Returns & Refunds</h1>
+          <h1 className="text-2xl font-bold">Returns &amp; Refunds</h1>
+
           <p className="mt-3 text-gray-600">
             Return request ke liye pehle login karein.
           </p>
+
           <button
             type="button"
-            onClick={() =>
-              router.push("/login?redirect=/returns")
-            }
-            className="mt-5 rounded-lg bg-black px-5 py-3 font-semibold text-white"
+            onClick={() => router.push("/login?redirect=/returns")}
+            className="mt-5 rounded-lg bg-black px-5 py-3 font-semibold text-white hover:bg-gray-800"
           >
             Login to Continue
           </button>
@@ -258,8 +315,9 @@ export default function ReturnsPage() {
       <div className="mx-auto max-w-4xl">
         <header className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">
-            Returns & Refunds
+            Returns &amp; Refunds
           </h1>
+
           <p className="mt-2 text-gray-600">
             Delivered order select karein aur eligible product ke liye
             return request submit karein.
@@ -273,18 +331,21 @@ export default function ReturnsPage() {
           <label htmlFor="orderId" className="sr-only">
             Order ID
           </label>
+
           <input
             id="orderId"
             value={orderId}
             onChange={(event) => setOrderId(event.target.value)}
             placeholder="Enter your Order ID"
+            autoComplete="off"
             required
             className="min-w-0 flex-1 rounded-lg border px-4 py-3 outline-none focus:border-black"
           />
+
           <button
             type="submit"
             disabled={loadingOrder}
-            className="rounded-lg bg-black px-5 py-3 font-semibold text-white disabled:opacity-60"
+            className="rounded-lg bg-black px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {loadingOrder ? "Loading..." : "Find Order"}
           </button>
@@ -313,9 +374,12 @@ export default function ReturnsPage() {
             <div className="rounded-2xl border bg-white p-5">
               <p className="text-sm text-gray-500">Order ID</p>
               <p className="mt-1 break-all font-semibold">{order.id}</p>
+
               <p className="mt-3 text-sm text-gray-500">Order status</p>
               <p className="mt-1 font-semibold">
-                {labelStatus(order.fulfillmentStatus || order.status)}
+                {labelStatus(
+                  order.fulfillmentStatus || order.status
+                )}
               </p>
 
               {!isDelivered(order) && (
@@ -328,7 +392,7 @@ export default function ReturnsPage() {
 
             <h2 className="text-xl font-bold">Order Items</h2>
 
-            {order.items.map((item, index) => {
+            {(order.items || []).map((item, index) => {
               const existingRequest = requests.find(
                 (request) => request.productId === item.productId
               );
@@ -354,10 +418,12 @@ export default function ReturnsPage() {
                       <h3 className="font-semibold text-gray-900">
                         {item.name}
                       </h3>
+
                       <p className="mt-1 text-sm text-gray-500">
                         Purchased quantity: {item.quantity}
                       </p>
                     </div>
+
                     <p className="font-semibold">
                       ₹{Number(item.subtotal || 0).toLocaleString("en-IN")}
                     </p>
@@ -366,11 +432,15 @@ export default function ReturnsPage() {
                   {existingRequest ? (
                     <div className="mt-4 rounded-lg bg-gray-50 p-4">
                       <p className="font-semibold">
-                        Return request: {labelStatus(existingRequest.returnStatus)}
+                        Return request:{" "}
+                        {labelStatus(existingRequest.returnStatus)}
                       </p>
+
                       <p className="mt-1 text-sm text-gray-600">
-                        Refund status: {labelStatus(existingRequest.refundStatus)}
+                        Refund status:{" "}
+                        {labelStatus(existingRequest.refundStatus)}
                       </p>
+
                       <p className="mt-1 break-all text-xs text-gray-500">
                         Request ID: {existingRequest.id}
                       </p>
@@ -384,6 +454,7 @@ export default function ReturnsPage() {
                         >
                           Return reason
                         </label>
+
                         <select
                           id={`reason-${index}`}
                           value={form.reason}
@@ -397,7 +468,10 @@ export default function ReturnsPage() {
                           className="w-full rounded-lg border px-3 py-3"
                         >
                           {REASONS.map((reason) => (
-                            <option key={reason.value} value={reason.value}>
+                            <option
+                              key={reason.value}
+                              value={reason.value}
+                            >
                               {reason.label}
                             </option>
                           ))}
@@ -411,6 +485,7 @@ export default function ReturnsPage() {
                         >
                           Return quantity
                         </label>
+
                         <input
                           id={`quantity-${index}`}
                           type="number"
@@ -422,7 +497,9 @@ export default function ReturnsPage() {
                             updateProductForm(
                               item.productId,
                               "quantity",
-                              Number(event.target.value)
+                              event.target.value === ""
+                                ? 0
+                                : Number(event.target.value)
                             )
                           }
                           className="w-full rounded-lg border px-3 py-3"
@@ -436,6 +513,7 @@ export default function ReturnsPage() {
                         >
                           Additional details (optional)
                         </label>
+
                         <textarea
                           id={`description-${index}`}
                           maxLength={1000}
@@ -455,7 +533,11 @@ export default function ReturnsPage() {
 
                       <button
                         type="button"
-                        disabled={!canSubmit || submittingProduct !== ""}
+                        disabled={
+                          !canSubmit ||
+                          submittingProduct !== "" ||
+                          loadingOrder
+                        }
                         onClick={() => void submitReturn(item.productId)}
                         className="w-full rounded-lg bg-black px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                       >
