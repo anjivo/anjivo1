@@ -1,3 +1,6 @@
+"use client";
+
+import { useState, type FormEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 
@@ -31,7 +34,46 @@ const businessLinks = [
 ];
 
 
+const socialLinks = [
+  { label: "Instagram", href: process.env.NEXT_PUBLIC_INSTAGRAM_URL, icon: "◎" },
+  { label: "Facebook", href: process.env.NEXT_PUBLIC_FACEBOOK_URL, icon: "f" },
+  { label: "YouTube", href: process.env.NEXT_PUBLIC_YOUTUBE_URL, icon: "▶" },
+  { label: "WhatsApp", href: process.env.NEXT_PUBLIC_WHATSAPP_URL, icon: "☎" },
+].filter((item): item is { label: string; href: string; icon: string } =>
+  Boolean(item.href && /^https:\/\//i.test(item.href))
+);
+
 export default function Footer() {
+  const [newsletterEmail, setNewsletterEmail] = useState("");
+  const [newsletterStatus, setNewsletterStatus] = useState("");
+  const [newsletterLoading, setNewsletterLoading] = useState(false);
+
+  async function handleNewsletterSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setNewsletterStatus("");
+    const email = newsletterEmail.trim().toLowerCase();
+    if (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) {
+      setNewsletterStatus("Please enter a valid email address.");
+      return;
+    }
+    setNewsletterLoading(true);
+    try {
+      const response = await fetch("/api/newsletter/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.message || "Subscription failed. Please try again.");
+      setNewsletterEmail("");
+      setNewsletterStatus(result.message || "Thanks! Your email has been subscribed.");
+    } catch (error) {
+      setNewsletterStatus(error instanceof Error ? error.message : "Subscription failed. Please try again.");
+    } finally {
+      setNewsletterLoading(false);
+    }
+  }
+
   return (
     <footer className="mt-12 bg-[#111111] text-white">
 
@@ -88,44 +130,22 @@ export default function Footer() {
             </div>
 
             {/* ================= SOCIAL ================= */}
-            <div className="mt-6 flex gap-3">
-
-              <a
-                href="#"
-                aria-label="Instagram"
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-700 text-sm transition hover:border-white hover:bg-white hover:text-black"
-              >
-                ◎
-              </a>
-
-              <a
-                href="#"
-                aria-label="Facebook"
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-700 text-sm transition hover:border-white hover:bg-white hover:text-black"
-              >
-                f
-              </a>
-
-              <a
-                href="#"
-                aria-label="YouTube"
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-700 text-sm transition hover:border-white hover:bg-white hover:text-black"
-              >
-                ▶
-              </a>
-
-              <a
-                href="#"
-                aria-label="WhatsApp"
-                className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-700 text-sm transition hover:border-white hover:bg-white hover:text-black"
-              >
-                ☎
-              </a>
-
+            <div className="mt-6 flex flex-wrap gap-3">
+              {socialLinks.map((item) => (
+                <a key={item.label} href={item.href} target="_blank" rel="noopener noreferrer"
+                  aria-label={item.label} title={item.label}
+                  className="flex h-10 w-10 items-center justify-center rounded-full border border-gray-700 text-sm transition hover:border-white hover:bg-white hover:text-black">
+                  {item.icon}
+                </a>
+              ))}
+              {socialLinks.length === 0 && (
+                <p className="text-xs text-gray-500">Official ANJIVO social links will appear here once configured.</p>
+              )}
             </div>
+
           </div>
 
-          {/* ================= SHOP ================= */}
+                    {/* ================= SHOP ================= */}
           <FooterColumn
             title="Shop"
             links={shopLinks}
@@ -194,27 +214,25 @@ export default function Footer() {
               </p>
             </div>
 
-            <div className="flex w-full max-w-md gap-2">
-
-              <input
-                type="email"
-                placeholder="Enter your email"
-                className="min-w-0 flex-1 rounded-xl border border-gray-700 bg-[#111111] px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-white"
-              />
-
-              <button
-                type="button"
-                className="shrink-0 rounded-xl bg-white px-4 py-3 text-xs font-bold text-black transition hover:bg-gray-200 sm:px-5 sm:text-sm"
-              >
-                Subscribe
-              </button>
-
-            </div>
+            <form onSubmit={handleNewsletterSubmit} className="w-full max-w-md">
+              <div className="flex w-full gap-2">
+                <label htmlFor="anjivo-newsletter-email" className="sr-only">Email address</label>
+                <input id="anjivo-newsletter-email" type="email" autoComplete="email" required maxLength={254}
+                  value={newsletterEmail} onChange={(event) => setNewsletterEmail(event.target.value)}
+                  placeholder="Enter your email"
+                  className="min-w-0 flex-1 rounded-xl border border-gray-700 bg-[#111111] px-4 py-3 text-sm text-white outline-none placeholder:text-gray-600 focus:border-white" />
+                <button type="submit" disabled={newsletterLoading}
+                  className="shrink-0 rounded-xl bg-white px-4 py-3 text-xs font-bold text-black transition hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-60 sm:px-5 sm:text-sm">
+                  {newsletterLoading ? "Subscribing..." : "Subscribe"}
+                </button>
+              </div>
+              <p role="status" aria-live="polite" className="mt-2 min-h-5 text-xs text-gray-300">{newsletterStatus}</p>
+            </form>
 
           </div>
         </div>
 
-        {/* ================= PAYMENT / SECURITY ================= */}
+                {/* ================= PAYMENT / SECURITY ================= */}
         <div className="mt-8 flex flex-col gap-4 border-b border-gray-800 pb-8 sm:flex-row sm:items-center sm:justify-between">
 
           <div>
