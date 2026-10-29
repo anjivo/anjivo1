@@ -165,24 +165,46 @@ export default function MyOrdersPage() {
             return;
           }
 
-          // Firebase Auth is authoritative for email and linked phone verification.
-          // Do not trust Firestore boolean flags alone.
-          if (!currentUser.emailVerified || !currentUser.phoneNumber) {
+          // ANJIVO registration currently uses phone OTP.
+          // Email verification is NOT required to view orders.
+          // Firebase phone-auth users should have a verified phone number.
+          if (!currentUser.phoneNumber) {
             router.replace("/verify");
             return;
           }
 
           const result = await getUserOrders(currentUser.uid);
-          setOrders(result);
+          setOrders(Array.isArray(result) ? result : []);
         } catch (err) {
           console.error(
             "Orders loading error:",
             err
           );
 
-          setError(
-            "Unable to load your orders."
-          );
+          const errorCode =
+            typeof err === "object" && err !== null && "code" in err
+              ? String((err as { code?: unknown }).code ?? "")
+              : "";
+
+          if (
+            errorCode === "permission-denied" ||
+            errorCode === "firestore/permission-denied"
+          ) {
+            setError(
+              "We couldn't access your orders right now. Please try again, or contact support if the issue continues."
+            );
+          } else if (
+            errorCode === "unavailable" ||
+            errorCode === "firestore/unavailable"
+          ) {
+            setError(
+              "Orders are temporarily unavailable. Please check your internet connection and try again."
+            );
+          } else {
+            setError(
+              "Unable to load your orders. Please refresh the page and try again."
+            );
+          }
         } finally {
           setLoading(false);
         }
