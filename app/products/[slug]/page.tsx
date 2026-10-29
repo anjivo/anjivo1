@@ -16,6 +16,7 @@ import {
 
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
+import AddToWishlistButton from "@/components/AddToWishlistButton";
 
 import { getProductBySlug } from "@/lib/products";
 import { auth } from "@/lib/firebase";
@@ -988,6 +989,23 @@ export default function ProductDetailsPage({
               <h1 className="mt-3 text-2xl font-black leading-tight tracking-tight sm:text-3xl">
                 {product.name}
               </h1>
+
+              {/* WISHLIST */}
+              <div className="mt-4">
+                <AddToWishlistButton
+                  product={{
+                    id: product.id,
+                    name: product.name,
+                    slug: product.slug,
+                    image: product.images?.[0] || "",
+                    images: product.images,
+                    retailPrice: selectedRetailPrice,
+                    mrp: selectedMrp,
+                  }}
+                  showLabel
+                  className="px-4 py-3"
+                />
+              </div>
 
               {product.rating !==
                 undefined && (
