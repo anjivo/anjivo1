@@ -61,6 +61,52 @@ export default async function Home() {
 
       <Hero />
 
+      {/* ================= SAME DAY DELIVERY - GHAZIPUR ================= */}
+      <section
+        aria-labelledby="ghazipur-delivery-heading"
+        className="relative isolate overflow-hidden bg-gradient-to-r from-green-950 via-green-900 to-emerald-800 px-4 py-10 text-center text-white sm:py-14 lg:py-16"
+      >
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-20"
+          style={{
+            backgroundImage:
+              "radial-gradient(circle at 1px 1px, rgba(255,255,255,0.35) 1px, transparent 0)",
+            backgroundSize: "22px 22px",
+          }}
+        />
+
+        <div className="relative mx-auto max-w-6xl">
+          <p className="mb-3 inline-flex items-center gap-2 rounded-full border border-lime-200/30 bg-white/10 px-4 py-2 text-[10px] font-extrabold uppercase tracking-[0.18em] text-lime-200 sm:text-xs sm:tracking-[0.24em]">
+            <span aria-hidden="true" className="text-base">🚚</span>
+            ANJIVO · GHAZIPUR CUSTOMERS
+          </p>
+
+          <h2
+            id="ghazipur-delivery-heading"
+            className="text-3xl font-black uppercase leading-[1.08] tracking-tight sm:text-5xl md:text-6xl lg:text-7xl"
+          >
+            Same Day Delivery
+            <span className="mt-2 block text-lime-300">In Ghazipur</span>
+          </h2>
+
+          <p className="mx-auto mt-4 max-w-2xl text-sm font-medium leading-6 text-white/90 sm:mt-5 sm:text-lg sm:leading-7">
+            Order Today. Get It Today!
+          </p>
+
+          <p className="mx-auto mt-2 max-w-xl text-xs leading-5 text-white/70 sm:text-sm">
+            Available in eligible delivery areas of Ghazipur. Delivery timing depends on product availability and order confirmation.
+          </p>
+
+          <Link
+            href="/products"
+            className="mt-6 inline-flex min-h-12 items-center justify-center rounded-xl bg-lime-300 px-6 py-3 text-sm font-black text-green-950 shadow-lg shadow-black/10 transition hover:-translate-y-0.5 hover:bg-lime-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-green-900"
+          >
+            Shop Products <span aria-hidden="true" className="ml-2">→</span>
+          </Link>
+        </div>
+      </section>
+
       {/* ================= CATEGORIES ================= */}
 
       <Categories />
