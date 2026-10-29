@@ -195,9 +195,10 @@ async function requireVerifiedCustomer(userId: string): Promise<void> {
   const currentUser = auth.currentUser;
 
   if (!currentUser || currentUser.uid !== userId) {
-    throw new Error("Please sign in to view this order.");
+    throw new Error("Please sign in to view your orders.");
   }
 
+  // Refresh Firebase Auth state before checking the linked phone number.
   await currentUser.reload();
 
   const refreshedUser = auth.currentUser;
@@ -206,8 +207,10 @@ async function requireVerifiedCustomer(userId: string): Promise<void> {
     throw new Error("Your session has changed. Please sign in again.");
   }
 
-  if (!refreshedUser.emailVerified || !refreshedUser.phoneNumber) {
-    throw new Error("Please verify both your email and phone number first.");
+  // ANJIVO registration uses phone OTP. Email verification is not required
+  // to view orders because the email field is optional/not the verification flow.
+  if (!refreshedUser.phoneNumber) {
+    throw new Error("Please verify your mobile number first.");
   }
 }
 
