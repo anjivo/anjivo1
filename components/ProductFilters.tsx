@@ -1,8 +1,9 @@
+
 "use client";
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 type ProductFiltersProps = {
   currentPricing: string;
@@ -17,18 +18,12 @@ export default function ProductFilters({
 }: ProductFiltersProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
 
-  const [mobileOpen, setMobileOpen] =
-    useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-  function updateParam(
-    key: string,
-    value?: string
-  ) {
-    const params = new URLSearchParams(
-      searchParams.toString()
-    );
+  function updateParam(key: string, value?: string) {
+    // Read the latest URL parameters without useSearchParams().
+    const params = new URLSearchParams(window.location.search);
 
     if (value) {
       params.set(key, value);
@@ -36,9 +31,9 @@ export default function ProductFilters({
       params.delete(key);
     }
 
-    router.push(
-      `${pathname}?${params.toString()}`
-    );
+    const query = params.toString();
+    router.push(query ? `${pathname}?${query}` : pathname);
+    setMobileOpen(false);
   }
 
   function clearFilters() {
@@ -49,16 +44,10 @@ export default function ProductFilters({
   return (
     <>
       {/* DESKTOP FILTER SIDEBAR */}
-
       <aside className="hidden lg:block">
-
         <div className="sticky top-24 rounded-2xl border border-gray-200 bg-white p-5">
-
           <div className="flex items-center justify-between">
-
-            <h2 className="text-sm font-black">
-              Filters
-            </h2>
+            <h2 className="text-sm font-black">Filters</h2>
 
             <button
               type="button"
@@ -67,24 +56,18 @@ export default function ProductFilters({
             >
               Clear
             </button>
-
           </div>
 
           {/* BUYING TYPE */}
-
           <div className="mt-6">
-
             <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
               Buying Type
             </p>
 
             <div className="mt-3 space-y-2">
-
               <button
                 type="button"
-                onClick={() =>
-                  updateParam("pricing", "retail")
-                }
+                onClick={() => updateParam("pricing", "retail")}
                 className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs ${
                   currentPricing === "retail"
                     ? "bg-black text-white"
@@ -92,20 +75,12 @@ export default function ProductFilters({
                 }`}
               >
                 <span>🛍️ Retail</span>
-
-                {currentPricing === "retail" && (
-                  <span>✓</span>
-                )}
+                {currentPricing === "retail" && <span>✓</span>}
               </button>
 
               <button
                 type="button"
-                onClick={() =>
-                  updateParam(
-                    "pricing",
-                    "wholesale"
-                  )
-                }
+                onClick={() => updateParam("pricing", "wholesale")}
                 className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs ${
                   currentPricing === "wholesale"
                     ? "bg-black text-white"
@@ -113,19 +88,13 @@ export default function ProductFilters({
                 }`}
               >
                 <span>📦 Wholesale</span>
-
-                {currentPricing === "wholesale" && (
-                  <span>✓</span>
-                )}
+                {currentPricing === "wholesale" && <span>✓</span>}
               </button>
-
             </div>
           </div>
 
           {/* PRICE */}
-
           <div className="mt-6">
-
             <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
               Price Range
             </p>
@@ -135,7 +104,6 @@ export default function ProductFilters({
               method="GET"
               className="mt-3 space-y-2"
             >
-
               <input
                 type="number"
                 name="minPrice"
@@ -166,71 +134,44 @@ export default function ProductFilters({
               >
                 Apply Price
               </button>
-
             </form>
-
           </div>
 
           {/* RATING */}
-
           <div className="mt-6">
-
             <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
               Customer Rating
             </p>
 
             <div className="mt-3 space-y-2">
-
-              {[4, 3, 2].map(
-                (rating) => (
-                  <button
-                    key={rating}
-                    type="button"
-                    onClick={() =>
-                      updateParam(
-                        "rating",
-                        String(rating)
-                      )
-                    }
-                    className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs ${
-                      currentRating === rating
-                        ? "bg-black text-white"
-                        : "bg-gray-50 text-gray-600 hover:bg-gray-100"
-                    }`}
-                  >
-
-                    <span>
-                      {"★".repeat(rating)}
-                    </span>
-
-                    <span>& above</span>
-
-                  </button>
-                )
-              )}
-
+              {[4, 3, 2].map((rating) => (
+                <button
+                  key={rating}
+                  type="button"
+                  onClick={() => updateParam("rating", String(rating))}
+                  className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs ${
+                    currentRating === rating
+                      ? "bg-black text-white"
+                      : "bg-gray-50 text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  <span>{"★".repeat(rating)}</span>
+                  <span>&amp; above</span>
+                </button>
+              ))}
             </div>
-
           </div>
 
           {/* SORT */}
-
           <div className="mt-6">
-
             <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
               Sort By
             </p>
 
             <div className="mt-3 space-y-2">
-
               <button
                 type="button"
-                onClick={() =>
-                  updateParam(
-                    "sort",
-                    "newest"
-                  )
-                }
+                onClick={() => updateParam("sort", "newest")}
                 className={`w-full rounded-lg px-3 py-2 text-left text-xs ${
                   currentSort === "newest"
                     ? "bg-black text-white"
@@ -242,12 +183,7 @@ export default function ProductFilters({
 
               <button
                 type="button"
-                onClick={() =>
-                  updateParam(
-                    "sort",
-                    "price_low"
-                  )
-                }
+                onClick={() => updateParam("sort", "price_low")}
                 className={`w-full rounded-lg px-3 py-2 text-left text-xs ${
                   currentSort === "price_low"
                     ? "bg-black text-white"
@@ -259,12 +195,7 @@ export default function ProductFilters({
 
               <button
                 type="button"
-                onClick={() =>
-                  updateParam(
-                    "sort",
-                    "price_high"
-                  )
-                }
+                onClick={() => updateParam("sort", "price_high")}
                 className={`w-full rounded-lg px-3 py-2 text-left text-xs ${
                   currentSort === "price_high"
                     ? "bg-black text-white"
@@ -276,12 +207,7 @@ export default function ProductFilters({
 
               <button
                 type="button"
-                onClick={() =>
-                  updateParam(
-                    "sort",
-                    "rating_high"
-                  )
-                }
+                onClick={() => updateParam("sort", "rating_high")}
                 className={`w-full rounded-lg px-3 py-2 text-left text-xs ${
                   currentSort === "rating_high"
                     ? "bg-black text-white"
@@ -293,12 +219,7 @@ export default function ProductFilters({
 
               <button
                 type="button"
-                onClick={() =>
-                  updateParam(
-                    "sort",
-                    "name_az"
-                  )
-                }
+                onClick={() => updateParam("sort", "name_az")}
                 className={`w-full rounded-lg px-3 py-2 text-left text-xs ${
                   currentSort === "name_az"
                     ? "bg-black text-white"
@@ -307,99 +228,63 @@ export default function ProductFilters({
               >
                 A–Z
               </button>
-
             </div>
-
           </div>
-
         </div>
-
       </aside>
 
       {/* MOBILE FILTER BUTTON */}
-
       <div className="mb-5 lg:hidden">
-
         <button
           type="button"
-          onClick={() =>
-            setMobileOpen(true)
-          }
+          onClick={() => setMobileOpen(true)}
           className="flex w-full items-center justify-between rounded-xl border border-gray-200 bg-white px-4 py-3 text-xs font-bold"
         >
-          <span>⚙️ Filters & Sort</span>
-
-          <span className="text-gray-400">
-            Open →
-          </span>
+          <span>⚙️ Filters &amp; Sort</span>
+          <span className="text-gray-400">Open →</span>
         </button>
-
       </div>
 
       {/* MOBILE DRAWER */}
-
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
-
-          {/* BACKDROP */}
-
           <button
             type="button"
             aria-label="Close filters"
-            onClick={() =>
-              setMobileOpen(false)
-            }
+            onClick={() => setMobileOpen(false)}
             className="absolute inset-0 bg-black/50"
           />
 
-          {/* DRAWER */}
-
           <div className="absolute right-0 top-0 h-full w-[88%] max-w-sm overflow-y-auto bg-white shadow-2xl">
-
             <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
-
               <div>
                 <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
                   ANJIVO
                 </p>
-
-                <h2 className="mt-1 text-lg font-black">
-                  Filters
-                </h2>
+                <h2 className="mt-1 text-lg font-black">Filters</h2>
               </div>
 
               <button
                 type="button"
-                onClick={() =>
-                  setMobileOpen(false)
-                }
+                aria-label="Close filter drawer"
+                onClick={() => setMobileOpen(false)}
                 className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-sm"
               >
                 ✕
               </button>
-
             </div>
 
             <div className="space-y-7 p-5">
-
               {/* BUYING TYPE */}
-
               <div>
-
                 <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
                   Buying Type
                 </p>
 
                 <div className="mt-3 grid grid-cols-2 gap-2">
-
                   <button
                     type="button"
-                    onClick={() =>
-                      updateParam(
-                        "pricing",
-                        "retail"
-                      )
-                    }
+                    onClick={() => updateParam("pricing", "retail")}
                     className={`rounded-xl border p-3 text-left text-xs font-bold ${
                       currentPricing === "retail"
                         ? "border-black bg-black text-white"
@@ -411,12 +296,7 @@ export default function ProductFilters({
 
                   <button
                     type="button"
-                    onClick={() =>
-                      updateParam(
-                        "pricing",
-                        "wholesale"
-                      )
-                    }
+                    onClick={() => updateParam("pricing", "wholesale")}
                     className={`rounded-xl border p-3 text-left text-xs font-bold ${
                       currentPricing === "wholesale"
                         ? "border-black bg-black text-white"
@@ -425,104 +305,65 @@ export default function ProductFilters({
                   >
                     📦 Wholesale
                   </button>
-
                 </div>
-
               </div>
 
               {/* SORT */}
-
               <div>
-
                 <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
                   Sort Products
                 </p>
 
                 <div className="mt-3 space-y-2">
-
                   {[
                     ["newest", "✨ Newest"],
-                    [
-                      "price_low",
-                      "₹ Price: Low to High",
-                    ],
-                    [
-                      "price_high",
-                      "₹ Price: High to Low",
-                    ],
-                    [
-                      "rating_high",
-                      "⭐ Top Rated",
-                    ],
+                    ["price_low", "₹ Price: Low to High"],
+                    ["price_high", "₹ Price: High to Low"],
+                    ["rating_high", "⭐ Top Rated"],
                     ["name_az", "A–Z"],
-                  ].map(
-                    ([value, label]) => (
-                      <button
-                        key={value}
-                        type="button"
-                        onClick={() =>
-                          updateParam(
-                            "sort",
-                            value
-                          )
-                        }
-                        className={`w-full rounded-xl px-4 py-3 text-left text-xs font-semibold ${
-                          currentSort === value
-                            ? "bg-black text-white"
-                            : "bg-gray-50 text-gray-600"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    )
-                  )}
-
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => updateParam("sort", value)}
+                      className={`w-full rounded-xl px-4 py-3 text-left text-xs font-semibold ${
+                        currentSort === value
+                          ? "bg-black text-white"
+                          : "bg-gray-50 text-gray-600"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
-
               </div>
 
               {/* RATING */}
-
               <div>
-
                 <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
                   Rating
                 </p>
 
                 <div className="mt-3 space-y-2">
-
-                  {[4, 3, 2].map(
-                    (rating) => (
-                      <button
-                        key={rating}
-                        type="button"
-                        onClick={() =>
-                          updateParam(
-                            "rating",
-                            String(rating)
-                          )
-                        }
-                        className={`w-full rounded-xl px-4 py-3 text-left text-xs font-semibold ${
-                          currentRating === rating
-                            ? "bg-black text-white"
-                            : "bg-gray-50 text-gray-600"
-                        }`}
-                      >
-                        {"★".repeat(rating)}
-                        {" "}
-                        & above
-                      </button>
-                    )
-                  )}
-
+                  {[4, 3, 2].map((rating) => (
+                    <button
+                      key={rating}
+                      type="button"
+                      onClick={() => updateParam("rating", String(rating))}
+                      className={`w-full rounded-xl px-4 py-3 text-left text-xs font-semibold ${
+                        currentRating === rating
+                          ? "bg-black text-white"
+                          : "bg-gray-50 text-gray-600"
+                      }`}
+                    >
+                      {"★".repeat(rating)} &amp; above
+                    </button>
+                  ))}
                 </div>
-
               </div>
 
               {/* PRICE */}
-
               <div>
-
                 <p className="text-[10px] font-black uppercase tracking-wider text-gray-400">
                   Price Range
                 </p>
@@ -532,7 +373,6 @@ export default function ProductFilters({
                   method="GET"
                   className="mt-3 space-y-2"
                 >
-
                   <input
                     type="number"
                     name="minPrice"
@@ -563,13 +403,10 @@ export default function ProductFilters({
                   >
                     Apply Price
                   </button>
-
                 </form>
-
               </div>
 
               {/* CLEAR */}
-
               <button
                 type="button"
                 onClick={clearFilters}
@@ -577,11 +414,8 @@ export default function ProductFilters({
               >
                 Clear All Filters
               </button>
-
             </div>
-
           </div>
-
         </div>
       )}
     </>
