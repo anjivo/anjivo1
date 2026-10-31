@@ -371,13 +371,49 @@ function getWholesaleConfiguration(
 ): WholesaleConfiguration | null {
   if (
     !product.wholesaleConfiguration ||
-    product.wholesaleConfiguration
-      .enabled === false
+    product.wholesaleConfiguration.enabled === false
   ) {
     return null;
   }
 
   return product.wholesaleConfiguration;
+}
+
+/**
+ * Resolves PIECE wholesale settings from the canonical configuration.
+ * Older products may only have product-level wholesaleTiers/wholesalePrice;
+ * support those for PIECE pricing without treating SET products as PIECE.
+ */
+function getPieceWholesaleConfiguration(
+  product: ProductRecord
+): WholesaleConfiguration | null {
+  const configured = getWholesaleConfiguration(product);
+
+  if (configured?.saleUnit === "SET") {
+    return null;
+  }
+
+  const configuredTiers = normalizeTiers(
+    configured?.tiers?.length
+      ? configured.tiers
+      : product.wholesaleTiers
+  );
+
+  const legacyWholesalePrice = normalizeNumber(
+    product.wholesalePrice,
+    0
+  );
+
+  if (!configured && configuredTiers.length === 0 && legacyWholesalePrice <= 0) {
+    return null;
+  }
+
+  return {
+    ...(configured || {}),
+    enabled: true,
+    saleUnit: "PIECE",
+    tiers: configuredTiers,
+  };
 }
 
 function validateSetConfiguration(
@@ -893,29 +929,35 @@ export async function POST(
 
     for (const item of normalizedItems) {
       const product = products.get(item.productId);
-      const config = product
-        ? getWholesaleConfiguration(product)
-        : null;
+      if (!product) continue;
 
-      if (config?.saleUnit === "PIECE") {
-        pieceQuantityByProduct.set(
-          item.productId,
-          (pieceQuantityByProduct.get(item.productId) || 0) + item.quantity
-        );
-      }
+      const configured = getWholesaleConfiguration(product);
+      const isSetLine =
+        item.wholesaleUnit === "SET" ||
+        configured?.saleUnit === "SET";
+
+      if (isSetLine) continue;
+
+      pieceQuantityByProduct.set(
+        item.productId,
+        (pieceQuantityByProduct.get(item.productId) || 0) + item.quantity
+      );
     }
 
-    // Convert qualifying retail PIECE lines to wholesale pricing before
-    // validation so every variant line uses the same combined-quantity tier.
+    // Match cart pricing: only apply automatic PIECE wholesale when
+    // product-level wholesale tiers exist and the combined quantity
+    // across all size/colour variants reaches max(10, product MOQ).
     for (const item of normalizedItems) {
       if (item.pricingType !== "retail") continue;
 
       const product = products.get(item.productId);
-      const config = product
-        ? getWholesaleConfiguration(product)
-        : null;
+      if (!product) continue;
 
-      if (!product || config?.saleUnit !== "PIECE") continue;
+      const pieceConfig = getPieceWholesaleConfiguration(product);
+      if (!pieceConfig) continue;
+
+      const tiers = normalizeTiers(pieceConfig.tiers);
+      if (tiers.length === 0) continue;
 
       const combinedQuantity =
         pieceQuantityByProduct.get(item.productId) || 0;
@@ -1126,9 +1168,9 @@ export async function POST(
        * -------------------------------------------------------
        */
       const config =
-        getWholesaleConfiguration(
-          product
-        );
+        item.wholesaleUnit === "PIECE"
+          ? getPieceWholesaleConfiguration(product)
+          : getWholesaleConfiguration(product);
 
       if (!config) {
         return badRequest(
@@ -1180,11 +1222,14 @@ export async function POST(
               : product.wholesaleTiers
           );
 
-        if (
-          tiers.length === 0
-        ) {
+        const fallbackWholesalePrice = normalizeNumber(
+          product.wholesalePrice,
+          0
+        );
+
+        if (tiers.length === 0 && fallbackWholesalePrice <= 0) {
           return badRequest(
-            `Wholesale pricing tiers are not configured for ${product.name || item.productId}.`
+            `Wholesale pricing is not configured for ${product.name || item.productId}.`
           );
         }
 
@@ -1218,9 +1263,11 @@ export async function POST(
             combinedQuantity
           );
 
-        if (!tier) {
+        const unitPrice = tier?.price || fallbackWholesalePrice;
+
+        if (!Number.isFinite(unitPrice) || unitPrice <= 0) {
           return badRequest(
-            `No wholesale price tier is available for ${product.name || item.productId} at ${combinedQuantity} combined pieces.`
+            `No valid wholesale price is available for ${product.name || item.productId} at ${combinedQuantity} combined pieces.`
           );
         }
 
@@ -1249,11 +1296,10 @@ export async function POST(
           pricingType:
             "wholesale",
 
-          unitPrice:
-            tier.price,
+          unitPrice,
 
           lineTotal:
-            tier.price *
+            unitPrice *
             item.quantity,
 
           retailPrice:
@@ -1287,8 +1333,7 @@ export async function POST(
           priceUnit:
             "PIECE",
 
-          wholesaleTier:
-            tier,
+          ...(tier ? { wholesaleTier: tier } : {}),
         });
 
         continue;
