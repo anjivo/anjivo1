@@ -718,16 +718,31 @@ export async function POST(request: Request) {
           selectedVariantValue: stringValue(item.selectedVariantValue),
         });
 
-        const requestedSnapshot = requestedItems
-          .map((item) => normalizeIntentItem(item as unknown as Record<string, unknown>))
-          .sort((a, b) => a.productId.localeCompare(b.productId));
+        // Sort by the complete normalized item snapshot, not only productId.
+        // A cart can contain several size/colour variants of the same product.
+        // Sorting only by productId leaves their order ambiguous and can reject
+        // a valid Cashfree payment when the two arrays use different line order.
+        const sortIntentItems = <
+          T extends ReturnType<typeof normalizeIntentItem>
+        >(items: T[]) =>
+          items.sort((a, b) =>
+            JSON.stringify(a).localeCompare(JSON.stringify(b))
+          );
 
-        const paidSnapshot = (paymentIntentData.items as unknown[])
-          .filter((item): item is Record<string, unknown> =>
-            !!item && typeof item === "object"
+        const requestedSnapshot = sortIntentItems(
+          requestedItems.map((item) =>
+            normalizeIntentItem(item as unknown as Record<string, unknown>)
           )
-          .map(normalizeIntentItem)
-          .sort((a, b) => a.productId.localeCompare(b.productId));
+        );
+
+        const paidSnapshot = sortIntentItems(
+          (paymentIntentData.items as unknown[])
+            .filter(
+              (item): item is Record<string, unknown> =>
+                !!item && typeof item === "object"
+            )
+            .map(normalizeIntentItem)
+        );
 
         if (
           requestedSnapshot.length !== paidSnapshot.length ||
