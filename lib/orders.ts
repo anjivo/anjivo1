@@ -38,6 +38,14 @@ export type OrderItem = {
   slug: string;
   image?: string;
 
+  // Product variant snapshot captured when the order was placed.
+  sku?: string;
+  size?: string;
+  color?: string;
+  variant?: string;
+  variantId?: string;
+  variantType?: string;
+
   quantity: number;
 
   mrp: number;
@@ -288,7 +296,7 @@ function mapOrder(
         ? data.items.map(
             (item: any) => ({
               productId:
-                item.productId || "",
+                item.productId || item.id || "",
 
               sellerId:
                 item.sellerId || "",
@@ -305,6 +313,24 @@ function mapOrder(
 
               image:
                 item.image || "",
+
+              sku:
+                typeof item.sku === "string" ? item.sku : "",
+
+              size:
+                typeof item.size === "string" ? item.size : "",
+
+              color:
+                typeof item.color === "string" ? item.color : "",
+
+              variant:
+                typeof item.variant === "string" ? item.variant : "",
+
+              variantId:
+                typeof item.variantId === "string" ? item.variantId : "",
+
+              variantType:
+                typeof item.variantType === "string" ? item.variantType : "",
 
               quantity:
                 Number(
