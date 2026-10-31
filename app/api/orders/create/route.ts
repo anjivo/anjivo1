@@ -322,6 +322,52 @@ function getWholesaleConfig(
   return config;
 }
 
+/**
+ * Resolve PIECE wholesale pricing from the canonical configuration first,
+ * then from legacy product-level tiers/wholesalePrice.
+ *
+ * SET-only products must never be treated as PIECE products.
+ */
+function getPieceWholesaleConfiguration(
+  product: ProductData
+): WholesaleConfiguration | null {
+  const rawConfig = product.wholesaleConfiguration;
+
+  // An explicitly disabled wholesale configuration must stay disabled.
+  if (rawConfig?.enabled === false) return null;
+
+  const configured = getWholesaleConfig(product);
+
+  if (configured?.saleUnit === "SET" || product.sellingMode === "SET") {
+    return null;
+  }
+
+  if (
+    configured?.saleUnit &&
+    configured.saleUnit !== "PIECE"
+  ) {
+    return null;
+  }
+
+  const configuredTiers = normalizeTiers(configured?.tiers);
+  const legacyTiers = normalizeTiers(product.wholesaleTiers);
+  const tiers =
+    configuredTiers.length > 0 ? configuredTiers : legacyTiers;
+
+  // Do not manufacture a PIECE wholesale configuration without any
+  // usable wholesale price source.
+  if (tiers.length === 0 && product.wholesalePrice <= 0) {
+    return null;
+  }
+
+  return {
+    ...(configured || {}),
+    enabled: true,
+    saleUnit: "PIECE",
+    tiers,
+  };
+}
+
 function validateSetProduct(product: ProductData) {
   const config = getWholesaleConfig(product);
 
@@ -778,8 +824,13 @@ export async function POST(request: Request) {
       const pieceQuantityByProduct = new Map<string, number>();
       for (const item of requestedItems) {
         const product = products.get(item.productId);
-        const config = product ? getWholesaleConfig(product) : null;
-        if (config?.saleUnit === "PIECE") {
+        const pieceConfig = product
+          ? getPieceWholesaleConfiguration(product)
+          : null;
+
+        // Explicit SET lines and SET-only products are excluded. PIECE
+        // quantities are combined across all sizes/colours of this product.
+        if (pieceConfig && item.wholesaleUnit !== "SET") {
           pieceQuantityByProduct.set(
             item.productId,
             (pieceQuantityByProduct.get(item.productId) || 0) + item.quantity
@@ -823,9 +874,12 @@ export async function POST(request: Request) {
         }
 
         const wholesaleConfigForLine = getWholesaleConfig(product);
+        const pieceWholesaleConfigForLine =
+          getPieceWholesaleConfiguration(product);
         const combinedPieceQuantity = pieceQuantityByProduct.get(product.id) || 0;
         const automaticPieceWholesale =
-          wholesaleConfigForLine?.saleUnit === "PIECE" &&
+          !!pieceWholesaleConfigForLine &&
+          item.wholesaleUnit !== "SET" &&
           combinedPieceQuantity >= Math.max(10, product.moq);
         const effectivePricingType: PricingType =
           wholesaleConfigForLine?.saleUnit === "SET"
@@ -929,7 +983,11 @@ export async function POST(request: Request) {
          * ========================================================
          */
         else {
-          const config = getWholesaleConfig(product);
+          const config =
+            item.wholesaleUnit === "SET"
+              ? getWholesaleConfig(product)
+              : getPieceWholesaleConfiguration(product) ||
+                getWholesaleConfig(product);
 
           if (!config) {
             throw new Error(
@@ -977,14 +1035,18 @@ export async function POST(request: Request) {
               tiers,
               combinedPieceQuantity
             );
+            const fallbackWholesalePrice = numberValue(
+              product.wholesalePrice,
+              0
+            );
 
-            if (!tier) {
+            if (!tier && fallbackWholesalePrice <= 0) {
               throw new Error(
-                `${product.name}: no wholesale price tier is available for ${combinedPieceQuantity} combined pieces.`
+                `${product.name}: no wholesale price is configured for ${combinedPieceQuantity} combined pieces.`
               );
             }
 
-            unitPrice = tier.price;
+            unitPrice = tier?.price ?? fallbackWholesalePrice;
             lineSnapshot.wholesaleUnit = "PIECE";
           }
 
