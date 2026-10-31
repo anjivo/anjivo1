@@ -11,7 +11,7 @@ import Footer from "@/components/Footer";
 import { auth } from "@/lib/firebase";
 
 import {
-  getUserOrders,
+  subscribeToUserOrders,
   type Order,
 } from "@/lib/orders";
 
@@ -137,82 +137,97 @@ export default function MyOrdersPage() {
   const [error, setError] = useState("");
 
   /* =======================================================
-     AUTH + ORDERS
+     AUTH + LIVE ORDERS
   ======================================================= */
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      async (user) => {
-        if (!user) {
-          router.replace(
-            "/login?redirect=/account/orders"
-          );
+    let disposed = false;
+    let unsubscribeOrders: (() => void) | null = null;
 
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      unsubscribeOrders?.();
+      unsubscribeOrders = null;
+
+      if (!user) {
+        router.replace("/login?redirect=/account/orders");
+        return;
+      }
+
+      try {
+        setLoading(true);
+        setError("");
+
+        await user.reload();
+        if (disposed) return;
+
+        const currentUser = auth.currentUser as User | null;
+
+        if (!currentUser) {
+          router.replace("/login?redirect=/account/orders");
           return;
         }
 
-        try {
-          setLoading(true);
-          setError("");
-
-          // Refresh Firebase Auth claims before checking verification.
-          await user.reload();
-          const currentUser = auth.currentUser as User | null;
-
-          if (!currentUser) {
-            router.replace("/login?redirect=/account/orders");
-            return;
-          }
-
-          // ANJIVO registration currently uses phone OTP.
-          // Email verification is NOT required to view orders.
-          // Firebase phone-auth users should have a verified phone number.
-          if (!currentUser.phoneNumber) {
-            router.replace("/verify");
-            return;
-          }
-
-          const result = await getUserOrders(currentUser.uid);
-          setOrders(Array.isArray(result) ? result : []);
-        } catch (err) {
-          console.error(
-            "Orders loading error:",
-            err
-          );
-
-          const errorCode =
-            typeof err === "object" && err !== null && "code" in err
-              ? String((err as { code?: unknown }).code ?? "")
-              : "";
-
-          if (
-            errorCode === "permission-denied" ||
-            errorCode === "firestore/permission-denied"
-          ) {
-            setError(
-              "We couldn't access your orders right now. Please try again, or contact support if the issue continues."
-            );
-          } else if (
-            errorCode === "unavailable" ||
-            errorCode === "firestore/unavailable"
-          ) {
-            setError(
-              "Orders are temporarily unavailable. Please check your internet connection and try again."
-            );
-          } else {
-            setError(
-              "Unable to load your orders. Please refresh the page and try again."
-            );
-          }
-        } finally {
-          setLoading(false);
+        // Phone OTP is the required verification; email verification is not required.
+        if (!currentUser.phoneNumber) {
+          router.replace("/verify");
+          return;
         }
+
+        // Firestore listener keeps the order list and admin-updated statuses live.
+        unsubscribeOrders = subscribeToUserOrders(
+          currentUser.uid,
+          (result) => {
+            if (disposed) return;
+            setOrders(Array.isArray(result) ? result : []);
+            setError("");
+            setLoading(false);
+          },
+          (err) => {
+            if (disposed) return;
+
+            console.error("Live orders listener error:", err);
+            const errorCode =
+              typeof err === "object" && err !== null && "code" in err
+                ? String((err as { code?: unknown }).code ?? "")
+                : "";
+
+            if (
+              errorCode === "permission-denied" ||
+              errorCode === "firestore/permission-denied"
+            ) {
+              setError(
+                "We couldn't access your orders right now. Please try again, or contact support if the issue continues."
+              );
+            } else if (
+              errorCode === "unavailable" ||
+              errorCode === "firestore/unavailable"
+            ) {
+              setError(
+                "Orders are temporarily unavailable. Please check your internet connection and try again."
+              );
+            } else {
+              setError(
+                "Unable to load your orders. Please refresh the page and try again."
+              );
+            }
+
+            setLoading(false);
+          }
+        );
+      } catch (err) {
+        if (disposed) return;
+        console.error("Orders authentication error:", err);
+        setError(
+          "Unable to load your orders. Please refresh the page and try again."
+        );
+        setLoading(false);
       }
-    );
+    });
 
     return () => {
-      unsubscribe();
+      disposed = true;
+      unsubscribeAuth();
+      unsubscribeOrders?.();
     };
   }, [router]);
 
