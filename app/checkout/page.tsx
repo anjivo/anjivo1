@@ -5,7 +5,13 @@ import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
-import { getCart, groupCartBySeller, getCartItemPieceQuantity, getCartItemTotal } from "@/lib/cart";
+import {
+  getCart,
+  groupCartBySeller,
+  getCartItemPieceQuantity,
+  getCartItemTotal,
+  getEffectiveCartItemPrice,
+} from "@/lib/cart";
 import type { ShippingAddress } from "@/lib/orders";
 import type { Cart } from "@/lib/cart";
 
@@ -139,7 +145,15 @@ export default function CheckoutPage() {
     );
   }, [cart]);
 
-  const subtotal = cart?.subtotal ?? 0;
+  // Always calculate checkout totals from the current cart lines.
+  // This keeps combined size/colour wholesale tiers consistent with /cart.
+  const subtotal = cart
+    ? cart.items.reduce(
+        (sum, item) =>
+          sum + getCartItemTotal(item, cart.items),
+        0
+      )
+    : 0;
   const shippingCharge = 0;
   // Online payment is not active yet; COD has no prepaid discount.
   const discount = 0;
@@ -386,7 +400,7 @@ export default function CheckoutPage() {
         selectedVariantValue: item.selectedVariantValue,
       }));
 
-      // Revalidate every item, price, wholesale rule and stock on the server.
+      // Revalidate every item, combined-variant wholesale price, MOQ and stock on the server.
       const validationResponse = await fetch("/api/checkout/validate", {
         method: "POST",
         headers: authHeaders,
@@ -922,14 +936,14 @@ export default function CheckoutPage() {
                             <div className="text-right">
                               <p className="font-bold text-slate-900">
                                 ₹
-                                {getCartItemTotal(item).toLocaleString(
+                                {getCartItemTotal(item, cart.items).toLocaleString(
                                   "en-IN"
                                 )}
                               </p>
 
                               <p className="text-xs text-slate-500">
                                 ₹
-                                {item.selectedPrice.toLocaleString(
+                                {getEffectiveCartItemPrice(cart.items, item).toLocaleString(
                                   "en-IN"
                                 )}{" "}
                                 {item.isSet ? "per set" : "each"}
