@@ -139,6 +139,41 @@ function actualPieces(item: Order["items"][number]): number {
   return item.quantity;
 }
 
+function safeNumber(value: unknown, fallback = 0): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function formatCurrency(value: unknown): string {
+  return safeNumber(value).toLocaleString("en-IN", {
+    maximumFractionDigits: 2,
+  });
+}
+
+function getItemLineTotal(item: Order["items"][number]): number {
+  const explicitSubtotal = safeNumber(item.subtotal, Number.NaN);
+  if (Number.isFinite(explicitSubtotal)) return explicitSubtotal;
+
+  return safeNumber(item.selectedPrice) * safeNumber(item.quantity);
+}
+
+function getOrderTotal(order: Order): number {
+  const explicitTotal = safeNumber(order.totalAmount, Number.NaN);
+  if (Number.isFinite(explicitTotal) && explicitTotal > 0) {
+    return explicitTotal;
+  }
+
+  const subtotal = safeNumber(order.subtotal);
+  const shipping = safeNumber(order.shippingCharge);
+  const discount = safeNumber(order.discount);
+  const itemsTotal = order.items.reduce(
+    (sum, item) => sum + getItemLineTotal(item),
+    0
+  );
+
+  return Math.max(0, (subtotal || itemsTotal) + shipping - discount);
+}
+
 function statusClass(
   status: Order["status"]
 ): string {
@@ -457,6 +492,18 @@ export default function OrderDetailsPage() {
   const address =
     order.shippingAddress;
 
+  const orderTotal = getOrderTotal(order);
+  const orderSubtotal = safeNumber(
+    order.subtotal,
+    order.items.reduce((sum, item) => sum + getItemLineTotal(item), 0)
+  );
+  const shippingCharge = safeNumber(order.shippingCharge);
+  const discount = safeNumber(order.discount);
+  const totalItemQuantity = order.items.reduce(
+    (sum, item) => sum + safeNumber(item.quantity),
+    0
+  );
+
   // Read optional shipment fields if they are present in the saved order document.
   // These are displayed only when your order data actually contains them.
   const orderData = order as Order & {
@@ -577,10 +624,10 @@ export default function OrderDetailsPage() {
 
         <div className="mt-4 flex flex-wrap gap-2 text-xs text-gray-500">
           <span className="rounded-full bg-white px-3 py-2 font-semibold shadow-sm ring-1 ring-gray-200">
-            {order.items.length} item{order.items.length !== 1 ? "s" : ""}
+            {order.items.length} line item{order.items.length !== 1 ? "s" : ""} · {totalItemQuantity} units
           </span>
           <span className="rounded-full bg-white px-3 py-2 font-semibold shadow-sm ring-1 ring-gray-200">
-            {order.sellerIds.length} seller{order.sellerIds.length !== 1 ? "s" : ""}
+            {(order.sellerIds?.length ?? 0)} seller{(order.sellerIds?.length ?? 0) !== 1 ? "s" : ""}
           </span>
           <span className="rounded-full bg-white px-3 py-2 font-semibold shadow-sm ring-1 ring-gray-200">
             {order.paymentMethod || "COD"}
@@ -685,13 +732,13 @@ export default function OrderDetailsPage() {
 
                         <span className="font-black text-gray-900">
                           ₹
-                          {item.subtotal.toLocaleString("en-IN")}
+                          {formatCurrency(getItemLineTotal(item))}
                         </span>
                       </div>
 
                       <p className="mt-1 text-[10px] text-gray-400">
                         ₹
-                        {item.selectedPrice.toLocaleString("en-IN")}{" "}
+                        {formatCurrency(item.selectedPrice)}{" "}
                         / {unitLabel(item).toLowerCase()}
                       </p>
 
@@ -1111,9 +1158,7 @@ export default function OrderDetailsPage() {
 
                   <span className="font-semibold">
                     ₹
-                    {order.subtotal.toLocaleString(
-                      "en-IN"
-                    )}
+                    {formatCurrency(orderSubtotal)}
                   </span>
                 </div>
 
@@ -1125,12 +1170,9 @@ export default function OrderDetailsPage() {
                   </span>
 
                   <span className="font-bold">
-                    {order.shippingCharge ===
-                    0
+                    {shippingCharge === 0
                       ? "FREE"
-                      : `₹${order.shippingCharge.toLocaleString(
-                          "en-IN"
-                        )}`}
+                      : `₹${formatCurrency(shippingCharge)}`}
                   </span>
                 </div>
 
@@ -1143,9 +1185,7 @@ export default function OrderDetailsPage() {
 
                   <span className="font-semibold">
                     -₹
-                    {order.discount.toLocaleString(
-                      "en-IN"
-                    )}
+                    {formatCurrency(discount)}
                   </span>
                 </div>
 
@@ -1159,9 +1199,7 @@ export default function OrderDetailsPage() {
 
                     <span className="text-xl font-black">
                       ₹
-                      {order.totalAmount.toLocaleString(
-                        "en-IN"
-                      )}
+                      {formatCurrency(orderTotal)}
                     </span>
                   </div>
                 </div>
