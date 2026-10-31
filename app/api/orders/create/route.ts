@@ -519,6 +519,11 @@ export async function POST(request: Request) {
         piecesPerSet || 0,
         setName || "",
         variantId || "NO_VARIANT",
+        variantSku || "",
+        variantName || "",
+        selectedSize || "",
+        selectedColor || "",
+        selectedVariantValue || "",
       ].join("|");
 
       if (seenKeys.has(key)) {
