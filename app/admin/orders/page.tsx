@@ -8,6 +8,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  onSnapshot,
   serverTimestamp,
   updateDoc,
 } from "firebase/firestore";
@@ -38,6 +39,10 @@ type OrderItem = {
   name?: string;
   productName?: string;
   image?: string;
+  sku?: string;
+  size?: string;
+  color?: string;
+  variant?: string;
   mrp?: number;
   unitPrice?: number;
   sellerId?: string;
@@ -237,6 +242,10 @@ function mapOrder(
       productName:
         stringValue(item.productName ?? item.name) || "Product",
       image: stringValue(item.image) || undefined,
+      sku: stringValue(item.sku) || undefined,
+      size: stringValue(item.size) || undefined,
+      color: stringValue(item.color) || undefined,
+      variant: stringValue(item.variant) || undefined,
       mrp: numberValue(item.mrp),
       sellerId: stringValue(item.sellerId) || undefined,
       sellerName: stringValue(item.sellerName) || undefined,
@@ -338,64 +347,73 @@ export default function AdminOrdersPage() {
     useState<Order | null>(null);
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            window.location.href =
-              "/login?redirect=/admin/orders";
+    let unsubscribeOrders: (() => void) | undefined;
 
+    const unsubscribeAuth = onAuthStateChanged(
+      auth,
+      async (user) => {
+        if (!user) {
+          window.location.href = "/login?redirect=/admin/orders";
+          return;
+        }
+
+        try {
+          const userSnapshot = await getDoc(
+            doc(db, "users", user.uid)
+          );
+
+          if (!userSnapshot.exists()) {
+            window.location.href = "/";
             return;
           }
 
-          try {
-            const userSnapshot =
-              await getDoc(
-                doc(
-                  db,
-                  "users",
-                  user.uid
-                )
+          const role = stringValue(userSnapshot.data().role)
+            .trim()
+            .toUpperCase();
+
+          if (!["ADMIN", "SUPERADMIN"].includes(role)) {
+            window.location.href = "/account";
+            return;
+          }
+
+          setAuthorized(true);
+
+          // Keep the admin order list synchronized with customer-side updates.
+          unsubscribeOrders = onSnapshot(
+            collection(db, "orders"),
+            (snapshot) => {
+              const list = snapshot.docs.map((item) =>
+                mapOrder(item.id, item.data())
               );
 
-            if (
-              !userSnapshot.exists()
-            ) {
-              window.location.href =
-                "/";
+              list.sort(
+                (a, b) =>
+                  timestampValue(b.createdAt) -
+                  timestampValue(a.createdAt)
+              );
 
-              return;
+              setOrders(list);
+              setError("");
+              setLoading(false);
+            },
+            (err) => {
+              console.error("Realtime orders listener error:", err);
+              setError("Orders realtime load nahi ho paaye.");
+              setLoading(false);
             }
-
-            if (
-              !["ADMIN", "SUPERADMIN"].includes(
-                stringValue(userSnapshot.data().role).trim().toUpperCase()
-              )
-            ) {
-              window.location.href =
-                "/account";
-
-              return;
-            }
-
-            setAuthorized(true);
-
-            await loadOrders();
-          } catch (err) {
-            console.error(err);
-
-            setError(
-              "Admin access verify nahi ho saka."
-            );
-          } finally {
-            setLoading(false);
-          }
+          );
+        } catch (err) {
+          console.error("Admin authorization error:", err);
+          setError("Admin access verify nahi ho saka.");
+          setLoading(false);
         }
-      );
+      }
+    );
 
-    return () =>
-      unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      unsubscribeOrders?.();
+    };
   }, []);
 
   async function loadOrders() {
@@ -1575,6 +1593,21 @@ function OrderModal({
                             {item.quantity ||
                               0}
                           </span>
+
+                          {(item.size || item.color || item.variant) && (
+                            <span className="text-[10px] text-gray-500">
+                              Variant:{" "}
+                              {[item.size, item.color, item.variant]
+                                .filter(Boolean)
+                                .join(" / ")}
+                            </span>
+                          )}
+
+                          {item.sku && (
+                            <span className="text-[10px] text-gray-500">
+                              SKU: {item.sku}
+                            </span>
+                          )}
 
                           <span className="text-[10px] text-gray-500">
                             Seller:{" "}
