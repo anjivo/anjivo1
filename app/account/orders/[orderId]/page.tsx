@@ -29,6 +29,9 @@ function statusLabel(
     case "processing":
       return "Processing";
 
+    case "packed":
+      return "Packed";
+
     case "shipped":
       return "Shipped";
 
@@ -156,6 +159,7 @@ function statusClass(
 
     case "confirmed":
     case "processing":
+    case "packed":
       return "bg-yellow-100 text-yellow-700";
 
     default:
@@ -238,7 +242,9 @@ export default function OrderDetailsPage() {
         return;
       }
 
-      if (!currentUser.emailVerified || !currentUser.phoneNumber) {
+      // ANJIVO customer verification is based on phone OTP.
+      // Email verification is not required for order access.
+      if (!currentUser.phoneNumber) {
         router.replace("/verify");
         return;
       }
