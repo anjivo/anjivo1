@@ -682,6 +682,76 @@ export async function getUserOrders(
   return orders;
 }
 
+
+/* ----------------------------------------
+   Subscribe to All Customer Orders (Live)
+---------------------------------------- */
+
+export function subscribeToUserOrders(
+  userId: string,
+  onOrders: (orders: Order[]) => void,
+  onError?: (error: Error) => void
+): () => void {
+  if (!userId) {
+    onOrders([]);
+    return () => {};
+  }
+
+  let cancelled = false;
+  let unsubscribeSnapshot: (() => void) | undefined;
+
+  // Verify the signed-in customer before opening the live orders listener.
+  void requireVerifiedCustomer(userId)
+    .then(() => {
+      if (cancelled) return;
+
+      const ordersRef = collection(db, "orders");
+      const ordersQuery = query(
+        ordersRef,
+        where("userId", "==", userId)
+      );
+
+      unsubscribeSnapshot = onSnapshot(
+        ordersQuery,
+        (snapshot) => {
+          if (cancelled) return;
+
+          const orders = snapshot.docs.map((orderDoc) =>
+            mapOrder(orderDoc.id, orderDoc.data())
+          );
+
+          // Keep the newest order at the top without requiring a composite index.
+          orders.sort(
+            (a, b) =>
+              getTimestampValue(b.createdAt) -
+              getTimestampValue(a.createdAt)
+          );
+
+          onOrders(orders);
+        },
+        (error) => {
+          if (cancelled) return;
+          onError?.(error);
+        }
+      );
+    })
+    .catch((error: unknown) => {
+      if (cancelled) return;
+
+      onOrders([]);
+      onError?.(
+        error instanceof Error
+          ? error
+          : new Error("Unable to verify your account before loading orders.")
+      );
+    });
+
+  return () => {
+    cancelled = true;
+    unsubscribeSnapshot?.();
+  };
+}
+
 /* ----------------------------------------
    Timestamp Helper
 ---------------------------------------- */
