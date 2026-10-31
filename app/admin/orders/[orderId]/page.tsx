@@ -106,25 +106,69 @@ const paymentStatuses: PaymentStatus[] = [
   "refunded",
 ];
 
+function toSafeNumber(value: unknown, fallback = 0): number {
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) ? Math.max(0, number) : fallback;
+}
+
+function getItemLineTotal(item: OrderItem): number {
+  if (typeof item.subtotal === "number" && Number.isFinite(item.subtotal)) {
+    return Math.max(0, item.subtotal);
+  }
+  return toSafeNumber(item.selectedPrice) * toSafeNumber(item.quantity);
+}
+
 function mapOrderDocument(id: string, data: Record<string, unknown>): Order {
   const rawItems = Array.isArray(data.items) ? data.items : [];
   const items: OrderItem[] = rawItems.map((raw) => {
     const item = raw as Record<string, unknown>;
+    const quantity = toSafeNumber(item.quantity);
+    const selectedPrice = toSafeNumber(
+      item.unitPrice ?? item.selectedPrice ?? item.price ?? item.sellingPrice
+    );
+    const rawSubtotal =
+      item.subtotal ?? item.totalPrice ?? item.lineTotal ?? item.amount;
+    const parsedSubtotal =
+      rawSubtotal === undefined || rawSubtotal === null || rawSubtotal === ""
+        ? undefined
+        : toSafeNumber(rawSubtotal);
+
     return {
-      productId: String(item.productId ?? ""),
-      name: String(item.productName ?? item.name ?? "Product"),
-      quantity: Math.max(0, Number(item.quantity ?? 0) || 0),
-      selectedPrice: Math.max(0, Number(item.unitPrice ?? item.selectedPrice ?? item.price ?? 0) || 0),
-      subtotal: Number.isFinite(Number(item.subtotal)) ? Number(item.subtotal) : undefined,
-      mrp: Number.isFinite(Number(item.mrp)) ? Number(item.mrp) : undefined,
-      pricingType: item.pricingType === "wholesale" ? "wholesale" : "retail",
+      productId: String(item.productId ?? item.id ?? ""),
+      name: String(item.productName ?? item.name ?? item.title ?? "Product"),
+      quantity,
+      selectedPrice,
+      subtotal: parsedSubtotal,
+      mrp: item.mrp == null ? undefined : toSafeNumber(item.mrp),
+      pricingType:
+        String(item.pricingType ?? item.priceType ?? "").toLowerCase() === "wholesale"
+          ? "wholesale"
+          : "retail",
       sellerId: String(item.sellerId ?? ""),
       sellerName: item.sellerName != null ? String(item.sellerName) : undefined,
-      image: item.image != null ? String(item.image) : undefined,
-      sku: item.sku != null ? String(item.sku) : undefined,
-      size: item.size != null ? String(item.size) : undefined,
-      color: item.color != null ? String(item.color) : undefined,
-      variant: item.variant != null ? String(item.variant) : undefined,
+      image: item.image != null ? String(item.image) : item.imageUrl != null ? String(item.imageUrl) : undefined,
+      sku: item.variantSku != null
+        ? String(item.variantSku)
+        : item.sku != null
+          ? String(item.sku)
+          : undefined,
+      size: item.selectedSize != null
+        ? String(item.selectedSize)
+        : item.size != null
+          ? String(item.size)
+          : undefined,
+      color: item.selectedColor != null
+        ? String(item.selectedColor)
+        : item.color != null
+          ? String(item.color)
+          : undefined,
+      variant: item.variantName != null
+        ? String(item.variantName)
+        : item.variant != null
+          ? String(item.variant)
+          : item.selectedVariantValue != null
+            ? String(item.selectedVariantValue)
+            : undefined,
     };
   });
 
@@ -151,8 +195,17 @@ function mapOrderDocument(id: string, data: Record<string, unknown>): Order {
   };
   const normalizedStatus = statusAliases[rawStatus] ?? rawStatus;
   const status: OrderStatus = statuses.includes(normalizedStatus as OrderStatus)
-    ? normalizedStatus as OrderStatus
+    ? (normalizedStatus as OrderStatus)
     : "pending";
+
+  const itemsSubtotal = items.reduce((sum, item) => sum + getItemLineTotal(item), 0);
+  const subtotal = toSafeNumber(data.subtotal ?? data.itemsSubtotal, itemsSubtotal);
+  const shippingCharge = toSafeNumber(data.shippingCharge ?? data.shipping);
+  const discount = toSafeNumber(data.discount);
+  const totalAmount = toSafeNumber(
+    data.totalAmount ?? data.total ?? data.grandTotal,
+    Math.max(0, subtotal + shippingCharge - discount)
+  );
 
   return {
     id,
@@ -160,12 +213,12 @@ function mapOrderDocument(id: string, data: Record<string, unknown>): Order {
     sellerIds: Array.isArray(data.sellerIds) ? data.sellerIds.map(String) : [],
     items,
     shippingAddress,
-    paymentMethod: data.paymentMethod === "ONLINE" ? "ONLINE" : "COD",
+    paymentMethod: String(data.paymentMethod ?? "").toUpperCase() === "ONLINE" ? "ONLINE" : "COD",
     paymentStatus,
-    subtotal: Math.max(0, Number(data.subtotal ?? 0) || 0),
-    shippingCharge: Math.max(0, Number(data.shippingCharge ?? data.shipping ?? 0) || 0),
-    discount: Math.max(0, Number(data.discount ?? 0) || 0),
-    totalAmount: Math.max(0, Number(data.totalAmount ?? data.total ?? data.grandTotal ?? 0) || 0),
+    subtotal,
+    shippingCharge,
+    discount,
+    totalAmount,
     status,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
@@ -460,10 +513,7 @@ export default function AdminOrderDetailsPage() {
         const existing =
           groups.get(sellerId);
 
-        const itemTotal =
-          Number.isFinite(item.subtotal) && (item.subtotal ?? 0) > 0
-            ? item.subtotal!
-            : item.selectedPrice * item.quantity;
+        const itemTotal = getItemLineTotal(item);
 
         if (existing) {
           existing.items.push(item);
@@ -596,6 +646,7 @@ export default function AdminOrderDetailsPage() {
                 <tr key={`${item.productId}-${index}`} className="border-b border-gray-300">
                   <td className="py-2 pr-2">
                     <div>{item.name}</div>
+                    <div className="mt-1 text-xs font-semibold text-gray-600">{item.pricingType === "wholesale" ? "Wholesale price" : "Retail price"}</div>
                     {(item.size || item.color || item.variant || item.sku) && (
                       <div className="mt-1 text-xs text-gray-600">
                         {[item.size ? `Size: ${item.size}` : "", item.color ? `Color: ${item.color}` : "", item.variant, item.sku ? `SKU: ${item.sku}` : ""].filter(Boolean).join(" · ")}
@@ -604,7 +655,7 @@ export default function AdminOrderDetailsPage() {
                   </td>
                   <td className="py-2 px-2">{item.quantity}</td>
                   <td className="py-2 px-2 text-right">₹{item.selectedPrice.toLocaleString("en-IN")}</td>
-                  <td className="py-2 pl-2 text-right">₹{(item.subtotal || item.selectedPrice * item.quantity).toLocaleString("en-IN")}</td>
+                  <td className="py-2 pl-2 text-right">₹{getItemLineTotal(item).toLocaleString("en-IN")}</td>
                 </tr>
               ))}
             </tbody>
@@ -955,10 +1006,7 @@ export default function AdminOrderDetailsPage() {
 
                 {order.items.map(
                   (item, index) => {
-                    const lineTotal =
-                      Number.isFinite(item.subtotal) && (item.subtotal ?? 0) > 0
-                        ? item.subtotal!
-                        : item.selectedPrice * item.quantity;
+                    const lineTotal = getItemLineTotal(item);
 
                     return (
                       <div
