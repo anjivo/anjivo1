@@ -65,6 +65,11 @@ type ShippingAddress = {
 type Order = {
   id: string;
   userId: string;
+  customerType: "registered" | "guest";
+  customerName?: string;
+  customerEmail?: string;
+  orderSource?: string;
+  createdBy?: string;
   sellerIds: string[];
   items: OrderItem[];
   shippingAddress: ShippingAddress;
@@ -207,9 +212,19 @@ function mapOrderDocument(id: string, data: Record<string, unknown>): Order {
     Math.max(0, subtotal + shippingCharge - discount)
   );
 
+  const userId = String(data.userId ?? data.customerId ?? "").trim();
+  const rawCustomerType = String(data.customerType ?? "").toLowerCase();
+  const customerType: "registered" | "guest" =
+    rawCustomerType === "guest" || !userId ? "guest" : "registered";
+
   return {
     id,
-    userId: String(data.userId ?? data.customerId ?? ""),
+    userId,
+    customerType,
+    customerName: typeof data.customerName === "string" ? data.customerName : undefined,
+    customerEmail: typeof data.customerEmail === "string" ? data.customerEmail : undefined,
+    orderSource: typeof data.orderSource === "string" ? data.orderSource : undefined,
+    createdBy: typeof data.createdBy === "string" ? data.createdBy : undefined,
     sellerIds: Array.isArray(data.sellerIds) ? data.sellerIds.map(String) : [],
     items,
     shippingAddress,
@@ -620,7 +635,7 @@ export default function AdminOrderDetailsPage() {
           <div className="grid grid-cols-2 gap-8 py-5">
             <div>
               <h2 className="font-bold">Ship To</h2>
-              <p className="mt-2 text-sm">{order.shippingAddress.fullName || customer?.name || "Customer"}</p>
+              <p className="mt-2 text-sm">{order.shippingAddress.fullName || order.customerName || customer?.name || "Customer"}</p>
               <p className="text-sm">{order.shippingAddress.phone || customer?.phone || "—"}</p>
               <p className="text-sm">{order.shippingAddress.addressLine1 || ""}{order.shippingAddress.addressLine2 ? `, ${order.shippingAddress.addressLine2}` : ""}</p>
               <p className="text-sm">{[order.shippingAddress.city, order.shippingAddress.state, order.shippingAddress.pincode].filter(Boolean).join(", ")}</p>
@@ -775,7 +790,9 @@ export default function AdminOrderDetailsPage() {
                   </h2>
 
                   <p className="mt-1 text-xs text-gray-500">
-                    Buyer information
+                    {order.customerType === "guest"
+                      ? "Guest buyer details entered by admin; no customer account is linked."
+                      : "Registered buyer information"}
                   </p>
                 </div>
 
@@ -796,8 +813,8 @@ export default function AdminOrderDetailsPage() {
                   label="Name"
                   value={
                     customer?.name ||
-                    order.shippingAddress
-                      .fullName ||
+                    order.customerName ||
+                    order.shippingAddress.fullName ||
                     "Not available"
                   }
                 />
@@ -806,7 +823,8 @@ export default function AdminOrderDetailsPage() {
                   label="Email"
                   value={
                     customer?.email ||
-                    "Not available"
+                    order.customerEmail ||
+                    "Not provided"
                   }
                 />
 
@@ -814,20 +832,30 @@ export default function AdminOrderDetailsPage() {
                   label="Phone"
                   value={
                     customer?.phone ||
-                    order.shippingAddress
-                      .phone ||
-                    "Not available"
+                    order.shippingAddress.phone ||
+                    "Not provided"
                   }
                 />
 
                 <InfoBox
                   label="Customer Type"
                   value={
-                    customer?.role ===
-                    "WHOLESALE_CUSTOMER"
-                      ? "Wholesale Customer"
-                      : "Retail Customer"
+                    order.customerType === "guest"
+                      ? "Guest Customer (Admin-created)"
+                      : customer?.role === "WHOLESALE_CUSTOMER"
+                        ? "Wholesale Customer"
+                        : "Registered Customer"
                   }
+                />
+
+                <InfoBox
+                  label="Order Source"
+                  value={order.orderSource || "website"}
+                />
+
+                <InfoBox
+                  label="Created By"
+                  value={order.createdBy || (order.customerType === "guest" ? "admin" : "customer")}
                 />
 
               </div>
