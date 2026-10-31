@@ -142,9 +142,12 @@ export default function MyOrdersPage() {
 
   useEffect(() => {
     let disposed = false;
+    let authRun = 0;
     let unsubscribeOrders: (() => void) | null = null;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      const currentRun = ++authRun;
+
       unsubscribeOrders?.();
       unsubscribeOrders = null;
 
@@ -158,7 +161,7 @@ export default function MyOrdersPage() {
         setError("");
 
         await user.reload();
-        if (disposed) return;
+        if (disposed || currentRun !== authRun) return;
 
         const currentUser = auth.currentUser as User | null;
 
@@ -177,13 +180,13 @@ export default function MyOrdersPage() {
         unsubscribeOrders = subscribeToUserOrders(
           currentUser.uid,
           (result) => {
-            if (disposed) return;
+            if (disposed || currentRun !== authRun) return;
             setOrders(Array.isArray(result) ? result : []);
             setError("");
             setLoading(false);
           },
           (err) => {
-            if (disposed) return;
+            if (disposed || currentRun !== authRun) return;
 
             console.error("Live orders listener error:", err);
             const errorCode =
@@ -215,7 +218,7 @@ export default function MyOrdersPage() {
           }
         );
       } catch (err) {
-        if (disposed) return;
+        if (disposed || currentRun !== authRun) return;
         console.error("Orders authentication error:", err);
         setError(
           "Unable to load your orders. Please refresh the page and try again."
@@ -226,6 +229,7 @@ export default function MyOrdersPage() {
 
     return () => {
       disposed = true;
+      authRun += 1;
       unsubscribeAuth();
       unsubscribeOrders?.();
     };
@@ -299,7 +303,7 @@ export default function MyOrdersPage() {
             EMPTY ORDERS
         ================================================= */}
 
-        {orders.length === 0 ? (
+        {orders.length === 0 && !error ? (
           <div className="rounded-3xl border border-gray-200 bg-white p-12 text-center">
 
             <div className="text-5xl">
