@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
-import { getCart, groupCartBySeller, getCartItemPieceQuantity, getCartItemTotal } from "@/lib/cart";
+import { clearCart, getCart, groupCartBySeller, getCartItemPieceQuantity, getCartItemTotal } from "@/lib/cart";
 import type { ShippingAddress } from "@/lib/orders";
 import type { Cart } from "@/lib/cart";
 
@@ -556,6 +556,16 @@ export default function CheckoutPage() {
         throw new Error("Order was created but order ID was not returned.");
       }
 
+      // Clear the saved cart only after the server confirms that the order exists.
+      try {
+        await clearCart(userId);
+      } catch (cartError) {
+        // The order is already created; do not prevent the success redirect.
+        console.error("Order placed, but cart cleanup failed:", cartError);
+      }
+
+      // Clear the in-memory checkout cart before navigating to the success page.
+      setCart(null);
       window.location.href = `/order-success/${orderResult.orderId}`;
     } catch (err) {
       console.error("Checkout error:", err);
