@@ -215,8 +215,11 @@ export default function OrderDetailsPage() {
 
     let unsubscribeOrder: (() => void) | undefined;
     let isActive = true;
+    let authGeneration = 0;
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      const thisGeneration = ++authGeneration;
+
       // Stop any previous user's order listener if auth changes.
       unsubscribeOrder?.();
       unsubscribeOrder = undefined;
@@ -229,12 +232,16 @@ export default function OrderDetailsPage() {
       // Require authoritative Firebase Auth verification before loading order data.
       try {
         await user.reload();
+        if (!isActive || thisGeneration !== authGeneration) return;
       } catch (authError) {
+        if (!isActive || thisGeneration !== authGeneration) return;
         console.error("Could not refresh Firebase user:", authError);
         setError("Unable to confirm your account status. Please sign in again.");
         setLoading(false);
         return;
       }
+
+      if (!isActive || thisGeneration !== authGeneration) return;
 
       const currentUser = auth.currentUser;
       if (!currentUser) {
@@ -256,7 +263,7 @@ export default function OrderDetailsPage() {
         orderId,
         user.uid,
         (result) => {
-          if (!isActive) return;
+          if (!isActive || thisGeneration !== authGeneration) return;
 
           if (!result) {
             setOrder(null);
@@ -275,7 +282,7 @@ export default function OrderDetailsPage() {
           setLoading(false);
         },
         (err) => {
-          if (!isActive) return;
+          if (!isActive || thisGeneration !== authGeneration) return;
           console.error("Live order subscription error:", err);
           setError("Unable to load order. Please check your connection and try again.");
           setLoading(false);
@@ -629,6 +636,29 @@ export default function OrderDetailsPage() {
                       <p className="text-sm font-black text-gray-900">
                         {item.name}
                       </p>
+
+                      {(() => {
+                        const variantItem = item as typeof item & {
+                          sku?: string;
+                          size?: string;
+                          color?: string;
+                          variant?: string;
+                          variantId?: string;
+                          variantType?: string;
+                        };
+                        const variantParts = [
+                          variantItem.size ? `Size: ${variantItem.size}` : "",
+                          variantItem.color ? `Colour: ${variantItem.color}` : "",
+                          variantItem.variant ? `Variant: ${variantItem.variant}` : "",
+                          variantItem.sku ? `SKU: ${variantItem.sku}` : "",
+                        ].filter(Boolean);
+
+                        return variantParts.length > 0 ? (
+                          <p className="mt-1 text-xs text-gray-500">
+                            {variantParts.join(" · ")}
+                          </p>
+                        ) : null;
+                      })()}
 
                       <div className="mt-1 flex flex-wrap gap-2">
                         <span className="rounded-full bg-gray-100 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-gray-600">
