@@ -190,6 +190,11 @@ function clean(value: unknown): string {
     : "";
 }
 
+function toNumber(value: unknown, fallback = 0): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 /* ----------------------------------------
    Customer verification guard
 ---------------------------------------- */
@@ -340,20 +345,16 @@ function mapOrder(
                 clean(item.variantType),
 
               quantity:
-                Number(
-                  item.quantity || 0
-                ),
+                toNumber(item.quantity, 0),
 
               mrp:
-                Number(
-                  item.mrp || 0
-                ),
+                toNumber(item.mrp ?? item.originalPrice, 0),
 
               selectedPrice:
-                Number(
+                toNumber(
                   item.selectedPrice ??
                   item.unitPrice ??
-                  item.price ??
+                  item.price,
                   0
                 ),
 
@@ -369,12 +370,16 @@ function mapOrder(
                 ),
 
               subtotal:
-                Number(
+                toNumber(
                   item.subtotal ??
-                  (
-                    Number(item.selectedPrice ?? item.unitPrice ?? item.price ?? 0) *
-                    Number(item.quantity ?? 0)
-                  )
+                  item.total ??
+                  item.totalPrice,
+                  toNumber(
+                    item.selectedPrice ??
+                    item.unitPrice ??
+                    item.price,
+                    0
+                  ) * toNumber(item.quantity, 0)
                 ),
 
               wholesaleUnit:
@@ -450,23 +455,35 @@ function mapOrder(
       "pending",
 
     subtotal:
-      Number(
-        data.subtotal || 0
+      toNumber(
+        data.subtotal ?? data.subTotal,
+        Array.isArray(data.items)
+          ? data.items.reduce((sum: number, item: any) => {
+              const quantity = toNumber(item?.quantity, 0);
+              const unitPrice = toNumber(
+                item?.selectedPrice ?? item?.unitPrice ?? item?.price,
+                0
+              );
+              return sum + toNumber(
+                item?.subtotal ?? item?.total ?? item?.totalPrice,
+                unitPrice * quantity
+              );
+            }, 0)
+          : 0
       ),
 
     shippingCharge:
-      Number(
-        data.shippingCharge || 0
-      ),
+      toNumber(data.shippingCharge ?? data.deliveryCharge, 0),
 
     discount:
-      Number(
-        data.discount || 0
-      ),
+      toNumber(data.discount ?? data.discountAmount, 0),
 
     totalAmount:
-      Number(
-        data.totalAmount || 0
+      toNumber(
+        data.totalAmount ?? data.total,
+        toNumber(data.subtotal ?? data.subTotal, 0) +
+          toNumber(data.shippingCharge ?? data.deliveryCharge, 0) -
+          toNumber(data.discount ?? data.discountAmount, 0)
       ),
 
     // Prefer fulfillmentStatus because seller/admin shipment actions update it.
