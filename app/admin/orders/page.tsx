@@ -7,7 +7,6 @@ import {
   collection,
   doc,
   getDoc,
-  getDocs,
   onSnapshot,
   serverTimestamp,
   updateDoc,
@@ -347,118 +346,99 @@ export default function AdminOrdersPage() {
     useState<Order | null>(null);
 
   useEffect(() => {
+    let authGeneration = 0;
     let unsubscribeOrders: (() => void) | undefined;
 
-    const unsubscribeAuth = onAuthStateChanged(
-      auth,
-      async (user) => {
-        if (!user) {
-          window.location.href = "/login?redirect=/admin/orders";
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      const currentGeneration = ++authGeneration;
+
+      // Detach any previous account's listener before checking the new user.
+      unsubscribeOrders?.();
+      unsubscribeOrders = undefined;
+
+      setAuthorized(false);
+      setOrders([]);
+      setSelectedOrder(null);
+      setLoading(true);
+      setError("");
+
+      if (!user) {
+        window.location.href = "/login?redirect=/admin/orders";
+        return;
+      }
+
+      try {
+        const userSnapshot = await getDoc(doc(db, "users", user.uid));
+
+        // Ignore an authorization result if the signed-in account changed meanwhile.
+        if (currentGeneration !== authGeneration) return;
+
+        if (!userSnapshot.exists()) {
+          window.location.href = "/";
           return;
         }
 
-        try {
-          const userSnapshot = await getDoc(
-            doc(db, "users", user.uid)
-          );
+        const role = stringValue(userSnapshot.data().role)
+          .trim()
+          .toUpperCase();
 
-          if (!userSnapshot.exists()) {
-            window.location.href = "/";
-            return;
-          }
-
-          const role = stringValue(userSnapshot.data().role)
-            .trim()
-            .toUpperCase();
-
-          if (!["ADMIN", "SUPERADMIN"].includes(role)) {
-            window.location.href = "/account";
-            return;
-          }
-
-          setAuthorized(true);
-
-          // Keep the admin order list synchronized with customer-side updates.
-          unsubscribeOrders = onSnapshot(
-            collection(db, "orders"),
-            (snapshot) => {
-              const list = snapshot.docs.map((item) =>
-                mapOrder(item.id, item.data())
-              );
-
-              list.sort(
-                (a, b) =>
-                  timestampValue(b.createdAt) -
-                  timestampValue(a.createdAt)
-              );
-
-              setOrders(list);
-              setError("");
-              setLoading(false);
-            },
-            (err) => {
-              console.error("Realtime orders listener error:", err);
-              setError("Orders realtime load nahi ho paaye.");
-              setLoading(false);
-            }
-          );
-        } catch (err) {
-          console.error("Admin authorization error:", err);
-          setError("Admin access verify nahi ho saka.");
-          setLoading(false);
+        if (!["ADMIN", "SUPERADMIN"].includes(role)) {
+          window.location.href = "/account";
+          return;
         }
+
+        setAuthorized(true);
+
+        unsubscribeOrders = onSnapshot(
+          collection(db, "orders"),
+          (snapshot) => {
+            if (currentGeneration !== authGeneration) return;
+
+            const list = snapshot.docs.map((item) =>
+              mapOrder(item.id, item.data())
+            );
+
+            list.sort(
+              (a, b) =>
+                timestampValue(b.createdAt) -
+                timestampValue(a.createdAt)
+            );
+
+            setOrders(list);
+            setError("");
+            setLoading(false);
+          },
+          (err) => {
+            if (currentGeneration !== authGeneration) return;
+
+            console.error("Realtime orders listener error:", err);
+            setError("Orders realtime load nahi ho paaye.");
+            setLoading(false);
+          }
+        );
+      } catch (err) {
+        if (currentGeneration !== authGeneration) return;
+
+        console.error("Admin authorization error:", err);
+        setError("Admin access verify nahi ho saka.");
+        setLoading(false);
       }
-    );
+    });
 
     return () => {
+      authGeneration += 1;
       unsubscribeAuth();
       unsubscribeOrders?.();
     };
   }, []);
 
-  async function loadOrders() {
-    try {
-      setError("");
-
-      const snapshot =
-        await getDocs(
-          collection(
-            db,
-            "orders"
-          )
-        );
-
-      const list =
-        snapshot.docs.map(
-          (item) =>
-            mapOrder(
-              item.id,
-              item.data()
-            )
-        );
-
-      list.sort(
-        (a, b) =>
-          timestampValue(
-            b.createdAt
-          ) -
-          timestampValue(
-            a.createdAt
-          )
-      );
-
-      setOrders(list);
-    } catch (err) {
-      console.error(
-        "Load orders error:",
-        err
-      );
-
-      setError(
-        "Orders load nahi ho paaye."
-      );
-    }
-  }
+  // Keep an already-open details modal synchronized with realtime order updates.
+  useEffect(() => {
+    setSelectedOrder((current) => {
+      if (!current) return current;
+      return orders.find((order) => order.id === current.id) ?? current;
+    });
+  }, [orders]);
 
   async function updateOrderStatus(
     order: Order,
@@ -830,15 +810,9 @@ export default function AdminOrdersPage() {
               Customers
             </Link>
 
-            <button
-              type="button"
-              onClick={() =>
-                loadOrders()
-              }
-              className="rounded-xl bg-black px-4 py-2.5 text-xs font-bold text-white"
-            >
-              ↻ Refresh
-            </button>
+            <span className="rounded-xl border border-green-200 bg-green-50 px-4 py-2.5 text-xs font-bold text-green-700">
+              ● Live order sync
+            </span>
 
           </div>
         </div>
