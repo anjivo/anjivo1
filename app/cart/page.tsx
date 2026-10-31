@@ -19,8 +19,9 @@ import {
   updateCartQuantity,
   removeFromCart,
   groupCartBySeller,
-  getWholesalePrice,
   getCartItemPieceQuantity,
+  getCombinedPieceQuantity,
+  getEffectiveCartItemPrice,
   type Cart,
   type CartItem,
 } from "@/lib/cart";
@@ -76,49 +77,35 @@ function getUnitLabelPlural(item: CartItem) {
 
 function isSetItem(item: CartItem) {
   return (
-    item.pricingType === "wholesale" &&
-    item.wholesaleUnit === "SET" &&
-    Boolean(item.isSet)
+    Boolean(item.isSet) ||
+    item.wholesaleUnit === "SET"
   );
 }
 
 /**
- * PIECE pricing is calculated across all size/colour variants of
- * the same product. This is a cart display calculation only;
- * checkout validation and order creation must apply the same
- * server-side rule before accepting payment.
+ * The shared cart library is the single source of truth for
+ * combined variant quantity and effective pricing.
  */
-function getCombinedPieceQuantity(items: CartItem[], productId: string) {
-  return items.reduce((total, item) => {
-    if (item.id !== productId || isSetItem(item)) return total;
-    return total + item.quantity;
-  }, 0);
-}
-
-function getEffectiveItemPrice(items: CartItem[], item: CartItem) {
-  if (isSetItem(item)) return item.selectedPrice;
+function isCombinedWholesale(items: CartItem[], item: CartItem) {
+  if (isSetItem(item)) return false;
 
   const hasPieceWholesale =
     Array.isArray(item.wholesaleTiers) &&
-    item.wholesaleTiers.length > 0;
+    item.wholesaleTiers.some(
+      (tier) =>
+        Number(tier.minQuantity) > 0 &&
+        Number(tier.price) > 0
+    );
 
-  if (!hasPieceWholesale) return item.selectedPrice;
+  const combinedQuantity = getCombinedPieceQuantity(
+    items,
+    item.id,
+    item.sellerId
+  );
 
-  const combinedQuantity = getCombinedPieceQuantity(items, item.id);
   const minimum = Math.max(10, Number(item.moq) || 1);
 
-  if (combinedQuantity < minimum) {
-    return item.retailPrice;
-  }
-
-  return getWholesalePrice(item, combinedQuantity);
-}
-
-function isCombinedWholesale(items: CartItem[], item: CartItem) {
-  return !isSetItem(item) &&
-    Array.isArray(item.wholesaleTiers) &&
-    item.wholesaleTiers.length > 0 &&
-    getCombinedPieceQuantity(items, item.id) >= Math.max(10, Number(item.moq) || 1);
+  return hasPieceWholesale && combinedQuantity >= minimum;
 }
 
 export default function CartPage() {
@@ -219,7 +206,7 @@ export default function CartPage() {
 
     return cart.items.reduce(
       (total, item) =>
-        total + getEffectiveItemPrice(cart.items, item) * item.quantity,
+        total + getEffectiveCartItemPrice(cart.items, item) * item.quantity,
       0
     );
   }, [cart]);
@@ -551,13 +538,17 @@ export default function CartPage() {
                           );
 
                         const effectivePrice =
-                          getEffectiveItemPrice(cart.items, item);
+                          getEffectiveCartItemPrice(cart.items, item);
 
                         const combinedWholesale =
                           isCombinedWholesale(cart.items, item);
 
                         const combinedQuantity =
-                          getCombinedPieceQuantity(cart.items, item.id);
+                          getCombinedPieceQuantity(
+                            cart.items,
+                            item.id,
+                            item.sellerId
+                          );
 
                         const itemTotal =
                           effectivePrice * item.quantity;
