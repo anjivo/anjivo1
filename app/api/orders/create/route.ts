@@ -376,17 +376,16 @@ export async function POST(request: Request) {
     );
     const userId = decodedToken.uid;
 
-    // Do not trust Firestore verification flags for authentication.
-    // Firebase Auth is authoritative: emailVerified must be true and
-    // phoneNumber must be present (a linked Firebase phone is verified).
+    // ANJIVO customer verification is phone-OTP based.
+    // Email is optional and must not block checkout.
     const authUser = await adminAuth.getUser(userId);
 
-    if (!authUser.emailVerified || !authUser.phoneNumber) {
+    if (!authUser.phoneNumber) {
       return NextResponse.json(
         {
           success: false,
-          code: "VERIFICATION_REQUIRED",
-          message: "Verify both your email and phone number before placing an order.",
+          code: "PHONE_VERIFICATION_REQUIRED",
+          message: "Please verify your mobile number before placing an order.",
           redirectTo: "/verify",
         },
         { status: 403 }
@@ -561,6 +560,9 @@ export async function POST(request: Request) {
     const result = await adminDb.runTransaction(async (transaction) => {
       const products = new Map<string, ProductData>();
       const productRefs = new Map<string, DocumentReference>();
+      const cartRef = adminDb.collection("carts").doc(userId);
+      // Read the cart before any transaction writes; clear it atomically with the order.
+      await transaction.get(cartRef);
 
       for (const item of requestedItems) {
         if (products.has(item.productId)) continue;
@@ -643,6 +645,16 @@ export async function POST(request: Request) {
 
         // Prevent the same paid intent from creating a second order.
         if (paymentIntentData?.placedOrderId) {
+          transaction.set(
+            cartRef,
+            {
+              userId,
+              items: [],
+              subtotal: 0,
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
           return {
             orderId: String(paymentIntentData.placedOrderId),
             subtotal: numberValue(paymentIntentData.subtotal),
@@ -741,14 +753,18 @@ export async function POST(request: Request) {
         userData.role === "WHOLESALE_CUSTOMER" ||
         userData.customerType === "WHOLESALE_CUSTOMER";
 
-      const containsWholesale = requestedItems.some(
-        (item) => item.pricingType === "wholesale"
-      );
-
-      if (containsWholesale && !isWholesaleCustomer) {
-        throw new Error(
-          "Wholesale pricing is available only to approved wholesale customers."
-        );
+      // Count PIECE quantities across all size/colour variants of each product.
+      // This is the server-side source of truth for mixed-variant wholesale pricing.
+      const pieceQuantityByProduct = new Map<string, number>();
+      for (const item of requestedItems) {
+        const product = products.get(item.productId);
+        const config = product ? getWholesaleConfig(product) : null;
+        if (config?.saleUnit === "PIECE") {
+          pieceQuantityByProduct.set(
+            item.productId,
+            (pieceQuantityByProduct.get(item.productId) || 0) + item.quantity
+          );
+        }
       }
 
       /*
@@ -784,6 +800,26 @@ export async function POST(request: Request) {
           throw new Error(
             `${product.name} is currently unavailable.`
           );
+        }
+
+        const wholesaleConfigForLine = getWholesaleConfig(product);
+        const combinedPieceQuantity = pieceQuantityByProduct.get(product.id) || 0;
+        const automaticPieceWholesale =
+          wholesaleConfigForLine?.saleUnit === "PIECE" &&
+          combinedPieceQuantity >= Math.max(10, product.moq);
+        const effectivePricingType: PricingType =
+          wholesaleConfigForLine?.saleUnit === "SET"
+            ? (item.pricingType === "wholesale" && isWholesaleCustomer ? "wholesale" : "retail")
+            : (automaticPieceWholesale || (item.pricingType === "wholesale" && isWholesaleCustomer)
+                ? "wholesale"
+                : "retail");
+
+        if (
+          wholesaleConfigForLine?.saleUnit === "SET" &&
+          item.pricingType === "wholesale" &&
+          !isWholesaleCustomer
+        ) {
+          throw new Error("Wholesale set pricing is available only to approved wholesale customers.");
         }
 
         const variantConfiguration = product.variantConfiguration;
@@ -844,7 +880,7 @@ export async function POST(request: Request) {
          * RETAIL
          * ========================================================
          */
-        if (item.pricingType === "retail") {
+        if (effectivePricingType === "retail") {
           if (product.sellingMode === "SET") {
             throw new Error(
               `${product.name}: retail piece purchase is not available.`
@@ -902,11 +938,12 @@ export async function POST(request: Request) {
               );
             }
 
-            moq = Math.max(1, product.moq);
+            moq = Math.max(10, product.moq);
 
-            if (item.quantity < moq) {
+            if (combinedPieceQuantity < moq) {
+              // A normal retail order remains retail until the combined threshold is met.
               throw new Error(
-                `${product.name}: minimum wholesale quantity is ${moq} pieces.`
+                `${product.name}: add at least ${moq} pieces across sizes/colours for wholesale pricing.`
               );
             }
 
@@ -918,12 +955,12 @@ export async function POST(request: Request) {
 
             const tier = getTierForQuantity(
               tiers,
-              item.quantity
+              combinedPieceQuantity
             );
 
             if (!tier) {
               throw new Error(
-                `${product.name}: no wholesale price tier is available for ${item.quantity} pieces.`
+                `${product.name}: no wholesale price tier is available for ${combinedPieceQuantity} combined pieces.`
               );
             }
 
@@ -1076,7 +1113,7 @@ export async function POST(request: Request) {
               ? selectedVariant.images.find((image) => typeof image === "string")
               : undefined) || product.images[0] || "",
           quantity: item.quantity,
-          pricingType: item.pricingType,
+          pricingType: effectivePricingType,
           mrp: product.mrp,
           unitPrice,
           subtotal: lineSubtotal,
@@ -1412,6 +1449,18 @@ export async function POST(request: Request) {
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
+
+      // Clear the persisted cart in the same atomic transaction as order creation.
+      transaction.set(
+        cartRef,
+        {
+          userId,
+          items: [],
+          subtotal: 0,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
 
       return {
         orderId,
