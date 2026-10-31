@@ -4,12 +4,9 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
-  collection,
   doc,
   getDoc,
-  getDocs,
-  query,
-  where,
+  onSnapshot,
   updateDoc,
   serverTimestamp,
 } from "firebase/firestore";
@@ -49,6 +46,10 @@ type OrderItem = {
   sellerId: string;
   sellerName?: string;
   image?: string;
+  sku?: string;
+  size?: string;
+  color?: string;
+  variant?: string;
 };
 
 type ShippingAddress = {
@@ -105,6 +106,72 @@ const paymentStatuses: PaymentStatus[] = [
   "refunded",
 ];
 
+function mapOrderDocument(id: string, data: Record<string, unknown>): Order {
+  const rawItems = Array.isArray(data.items) ? data.items : [];
+  const items: OrderItem[] = rawItems.map((raw) => {
+    const item = raw as Record<string, unknown>;
+    return {
+      productId: String(item.productId ?? ""),
+      name: String(item.productName ?? item.name ?? "Product"),
+      quantity: Math.max(0, Number(item.quantity ?? 0) || 0),
+      selectedPrice: Math.max(0, Number(item.unitPrice ?? item.selectedPrice ?? item.price ?? 0) || 0),
+      subtotal: Number.isFinite(Number(item.subtotal)) ? Number(item.subtotal) : undefined,
+      mrp: Number.isFinite(Number(item.mrp)) ? Number(item.mrp) : undefined,
+      pricingType: item.pricingType === "wholesale" ? "wholesale" : "retail",
+      sellerId: String(item.sellerId ?? ""),
+      sellerName: item.sellerName != null ? String(item.sellerName) : undefined,
+      image: item.image != null ? String(item.image) : undefined,
+      sku: item.sku != null ? String(item.sku) : undefined,
+      size: item.size != null ? String(item.size) : undefined,
+      color: item.color != null ? String(item.color) : undefined,
+      variant: item.variant != null ? String(item.variant) : undefined,
+    };
+  });
+
+  const shippingAddress =
+    typeof data.shippingAddress === "object" && data.shippingAddress !== null
+      ? (data.shippingAddress as ShippingAddress)
+      : {};
+  const rawPaymentStatus = String(data.paymentStatus ?? "pending").toLowerCase();
+  const paymentStatus: PaymentStatus = paymentStatuses.includes(rawPaymentStatus as PaymentStatus)
+    ? (rawPaymentStatus as PaymentStatus)
+    : "pending";
+
+  const rawStatus = String(
+    data.fulfillmentStatus ?? data.orderStatus ?? data.status ?? "pending"
+  ).toLowerCase().replace(/[ -]+/g, "_");
+  const statusAliases: Record<string, OrderStatus> = {
+    placed: "pending",
+    order_placed: "pending",
+    ready_to_ship: "packed",
+    dispatched: "shipped",
+    in_transit: "shipped",
+    out_for_delivery: "out_for_delivery",
+    outfordelivery: "out_for_delivery",
+  };
+  const normalizedStatus = statusAliases[rawStatus] ?? rawStatus;
+  const status: OrderStatus = statuses.includes(normalizedStatus as OrderStatus)
+    ? normalizedStatus as OrderStatus
+    : "pending";
+
+  return {
+    id,
+    userId: String(data.userId ?? data.customerId ?? ""),
+    sellerIds: Array.isArray(data.sellerIds) ? data.sellerIds.map(String) : [],
+    items,
+    shippingAddress,
+    paymentMethod: data.paymentMethod === "ONLINE" ? "ONLINE" : "COD",
+    paymentStatus,
+    subtotal: Math.max(0, Number(data.subtotal ?? 0) || 0),
+    shippingCharge: Math.max(0, Number(data.shippingCharge ?? data.shipping ?? 0) || 0),
+    discount: Math.max(0, Number(data.discount ?? 0) || 0),
+    totalAmount: Math.max(0, Number(data.totalAmount ?? data.total ?? data.grandTotal ?? 0) || 0),
+    status,
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+  };
+}
+
 export default function AdminOrderDetailsPage() {
   const router = useRouter();
   const params = useParams();
@@ -133,237 +200,115 @@ export default function AdminOrderDetailsPage() {
     useState("");
 
   useEffect(() => {
-    const unsubscribe =
-      onAuthStateChanged(
-        auth,
-        async (user) => {
-          if (!user) {
-            router.replace(
-              `/login?redirect=/admin/orders/${orderId}`
-            );
-            return;
-          }
+    let authGeneration = 0;
+    let unsubscribeOrder: (() => void) | null = null;
 
-          try {
-            const userRef = doc(
-              db,
-              "users",
-              user.uid
-            );
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      const generation = ++authGeneration;
+      unsubscribeOrder?.();
+      unsubscribeOrder = null;
+      setAuthorized(false);
+      setOrder(null);
+      setCustomer(null);
+      setError("");
+      setLoading(true);
 
-            const userSnapshot =
-              await getDoc(userRef);
+      if (!user) {
+        setLoading(false);
+        router.replace(`/login?redirect=/admin/orders/${orderId}`);
+        return;
+      }
 
-            if (
-              !userSnapshot.exists() ||
-              !["ADMIN", "SUPERADMIN"].includes(
-                String(userSnapshot.data().role ?? "").toUpperCase()
-              )
-            ) {
-              setError(
-                "Admin access required."
-              );
-              setLoading(false);
-              return;
-            }
+      try {
+        const userSnapshot = await getDoc(doc(db, "users", user.uid));
+        if (generation !== authGeneration) return;
 
-            setAuthorized(true);
-
-            if (!orderId) {
-              setError(
-                "Order ID is missing."
-              );
-              setLoading(false);
-              return;
-            }
-
-            await loadOrder(orderId);
-          } catch (err) {
-            console.error(
-              "Admin order details error:",
-              err
-            );
-
-            setError(
-              "Unable to load order."
-            );
-          } finally {
-            setLoading(false);
-          }
+        if (
+          !userSnapshot.exists() ||
+          !["ADMIN", "SUPERADMIN"].includes(
+            String(userSnapshot.data().role ?? "").toUpperCase()
+          )
+        ) {
+          setError("Admin access required.");
+          setLoading(false);
+          return;
         }
-      );
 
-    return () => unsubscribe();
+        setAuthorized(true);
+
+        if (!orderId) {
+          setError("Order ID is missing.");
+          setLoading(false);
+          return;
+        }
+
+        unsubscribeOrder = subscribeToOrder(orderId, generation, () => authGeneration);
+      } catch (err) {
+        if (generation !== authGeneration) return;
+        console.error("Admin order details error:", err);
+        setError("Unable to load order.");
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      authGeneration += 1;
+      unsubscribeAuth();
+      unsubscribeOrder?.();
+    };
   }, [router, orderId]);
 
-  async function loadOrder(
-    id: string
+  function subscribeToOrder(
+    id: string,
+    generation: number,
+    getCurrentGeneration: () => number
   ) {
-    const orderRef = doc(
-      db,
-      "orders",
-      id
+    return onSnapshot(
+      doc(db, "orders", id),
+      async (snapshot) => {
+        if (generation !== getCurrentGeneration()) return;
+
+        if (!snapshot.exists()) {
+          setOrder(null);
+          setCustomer(null);
+          setError("Order not found.");
+          setLoading(false);
+          return;
+        }
+
+        try {
+          const loadedOrder = mapOrderDocument(snapshot.id, snapshot.data());
+          if (generation !== getCurrentGeneration()) return;
+          setOrder(loadedOrder);
+          setError("");
+          setLoading(false);
+
+          if (loadedOrder.userId) {
+            await loadCustomer(loadedOrder.userId, generation, getCurrentGeneration);
+          } else {
+            setCustomer(null);
+          }
+        } catch (err) {
+          if (generation !== getCurrentGeneration()) return;
+          console.error("Order mapping error:", err);
+          setError("Unable to load order.");
+          setLoading(false);
+        }
+      },
+      (err) => {
+        if (generation !== getCurrentGeneration()) return;
+        console.error("Order subscription error:", err);
+        setError("Unable to load live order details. Please check your admin access.");
+        setLoading(false);
+      }
     );
-
-    const snapshot =
-      await getDoc(orderRef);
-
-    if (!snapshot.exists()) {
-      setError("Order not found.");
-      return;
-    }
-
-    const data = snapshot.data();
-
-    const rawItems = Array.isArray(
-      data.items
-    )
-      ? data.items
-      : [];
-
-    const items: OrderItem[] =
-      rawItems.map((raw) => {
-        const item =
-          raw as Record<
-            string,
-            unknown
-          >;
-
-        return {
-          productId: String(
-            item.productId ?? ""
-          ),
-
-          name: String(
-            item.productName ?? item.name ?? "Product"
-          ),
-
-          quantity: Number(
-            item.quantity ?? 0
-          ),
-
-          selectedPrice: Number(
-            item.unitPrice ?? item.selectedPrice ?? item.price ?? 0
-          ),
-          subtotal: Number(item.subtotal ?? 0),
-          mrp: Number(item.mrp ?? 0),
-
-          pricingType:
-            item.pricingType ===
-            "wholesale"
-              ? "wholesale"
-              : "retail",
-
-          sellerId: String(
-            item.sellerId ?? ""
-          ),
-
-          sellerName:
-            item.sellerName !==
-            undefined
-              ? String(
-                  item.sellerName
-                )
-              : undefined,
-
-          image:
-            item.image !== undefined
-              ? String(item.image)
-              : undefined,
-        };
-      });
-
-    const shippingAddress =
-      typeof data.shippingAddress ===
-        "object" &&
-      data.shippingAddress !== null
-        ? (data.shippingAddress as ShippingAddress)
-        : {};
-
-    const paymentMethod =
-      data.paymentMethod === "ONLINE"
-        ? "ONLINE"
-        : "COD";
-
-    const rawPaymentStatus = String(data.paymentStatus ?? "pending").toLowerCase();
-    const paymentStatus: PaymentStatus =
-      paymentStatuses.includes(rawPaymentStatus as PaymentStatus)
-        ? (rawPaymentStatus as PaymentStatus)
-        : "pending";
-
-    const rawStatus = String(
-      data.fulfillmentStatus ?? data.orderStatus ?? data.status ?? "pending"
-    ).toLowerCase().replace(/[ -]+/g, "_");
-    const statusAliases: Record<string, OrderStatus> = {
-      placed: "pending",
-      order_placed: "pending",
-      ready_to_ship: "packed",
-      dispatched: "shipped",
-      in_transit: "shipped",
-      out_for_delivery: "out_for_delivery",
-      outfordelivery: "out_for_delivery",
-    };
-    const normalizedStatus = statusAliases[rawStatus] ?? rawStatus;
-    const status: OrderStatus = statuses.includes(normalizedStatus as OrderStatus)
-      ? (normalizedStatus as OrderStatus)
-      : "pending";
-
-    const loadedOrder: Order = {
-      id: snapshot.id,
-
-      userId: String(
-        data.userId ?? data.customerId ?? ""
-      ),
-
-      sellerIds:
-        Array.isArray(data.sellerIds)
-          ? data.sellerIds.map(String)
-          : [],
-
-      items,
-
-      shippingAddress,
-
-      paymentMethod,
-
-      paymentStatus,
-
-      subtotal: Number(
-        data.subtotal ?? 0
-      ),
-
-      shippingCharge: Number(
-        data.shippingCharge ?? data.shipping ?? 0
-      ),
-
-      discount: Number(
-        data.discount ?? 0
-      ),
-
-      totalAmount: Number(
-        data.totalAmount ?? data.total ?? data.grandTotal ?? 0
-      ),
-
-      status,
-
-      createdAt:
-        data.createdAt,
-
-      updatedAt:
-        data.updatedAt,
-    };
-
-    setOrder(loadedOrder);
-
-    if (loadedOrder.userId) {
-      await loadCustomer(
-        loadedOrder.userId
-      );
-    }
   }
 
+
   async function loadCustomer(
-    userId: string
+    userId: string,
+    generation: number,
+    getCurrentGeneration: () => number
   ) {
     try {
       const customerRef = doc(
@@ -374,6 +319,8 @@ export default function AdminOrderDetailsPage() {
 
       const snapshot =
         await getDoc(customerRef);
+
+      if (generation !== getCurrentGeneration()) return;
 
       if (!snapshot.exists()) {
         setCustomer(null);
@@ -514,8 +461,9 @@ export default function AdminOrderDetailsPage() {
           groups.get(sellerId);
 
         const itemTotal =
-          item.selectedPrice *
-          item.quantity;
+          Number.isFinite(item.subtotal) && (item.subtotal ?? 0) > 0
+            ? item.subtotal!
+            : item.selectedPrice * item.quantity;
 
         if (existing) {
           existing.items.push(item);
@@ -646,7 +594,14 @@ export default function AdminOrderDetailsPage() {
             <tbody>
               {order.items.map((item, index) => (
                 <tr key={`${item.productId}-${index}`} className="border-b border-gray-300">
-                  <td className="py-2 pr-2">{item.name}</td>
+                  <td className="py-2 pr-2">
+                    <div>{item.name}</div>
+                    {(item.size || item.color || item.variant || item.sku) && (
+                      <div className="mt-1 text-xs text-gray-600">
+                        {[item.size ? `Size: ${item.size}` : "", item.color ? `Color: ${item.color}` : "", item.variant, item.sku ? `SKU: ${item.sku}` : ""].filter(Boolean).join(" · ")}
+                      </div>
+                    )}
+                  </td>
                   <td className="py-2 px-2">{item.quantity}</td>
                   <td className="py-2 px-2 text-right">₹{item.selectedPrice.toLocaleString("en-IN")}</td>
                   <td className="py-2 pl-2 text-right">₹{(item.subtotal || item.selectedPrice * item.quantity).toLocaleString("en-IN")}</td>
@@ -939,6 +894,11 @@ export default function AdminOrderDetailsPage() {
                                       item.quantity
                                     }
                                   </p>
+                                  {(item.size || item.color || item.variant || item.sku) && (
+                                    <p className="mt-1 text-[10px] text-gray-500">
+                                      {[item.size ? `Size: ${item.size}` : "", item.color ? `Color: ${item.color}` : "", item.variant, item.sku ? `SKU: ${item.sku}` : ""].filter(Boolean).join(" · ")}
+                                    </p>
+                                  )}
 
                                 </div>
 
@@ -996,8 +956,9 @@ export default function AdminOrderDetailsPage() {
                 {order.items.map(
                   (item, index) => {
                     const lineTotal =
-                      item.selectedPrice *
-                      item.quantity;
+                      Number.isFinite(item.subtotal) && (item.subtotal ?? 0) > 0
+                        ? item.subtotal!
+                        : item.selectedPrice * item.quantity;
 
                     return (
                       <div
@@ -1037,6 +998,12 @@ export default function AdminOrderDetailsPage() {
                               item.productId
                             }
                           </p>
+
+                          {(item.size || item.color || item.variant || item.sku) && (
+                            <p className="mt-1 text-xs text-gray-500">
+                              {[item.size ? `Size: ${item.size}` : "", item.color ? `Color: ${item.color}` : "", item.variant, item.sku ? `SKU: ${item.sku}` : ""].filter(Boolean).join(" · ")}
+                            </p>
+                          )}
 
                           <p className="mt-2 text-xs text-gray-500">
                             Seller:{" "}
