@@ -19,7 +19,7 @@ import {
   updateCartQuantity,
   removeFromCart,
   groupCartBySeller,
-  getCartSubtotal,
+  getWholesalePrice,
   getCartItemPieceQuantity,
   type Cart,
   type CartItem,
@@ -80,6 +80,45 @@ function isSetItem(item: CartItem) {
     item.wholesaleUnit === "SET" &&
     Boolean(item.isSet)
   );
+}
+
+/**
+ * PIECE pricing is calculated across all size/colour variants of
+ * the same product. This is a cart display calculation only;
+ * checkout validation and order creation must apply the same
+ * server-side rule before accepting payment.
+ */
+function getCombinedPieceQuantity(items: CartItem[], productId: string) {
+  return items.reduce((total, item) => {
+    if (item.id !== productId || isSetItem(item)) return total;
+    return total + item.quantity;
+  }, 0);
+}
+
+function getEffectiveItemPrice(items: CartItem[], item: CartItem) {
+  if (isSetItem(item)) return item.selectedPrice;
+
+  const hasPieceWholesale =
+    Array.isArray(item.wholesaleTiers) &&
+    item.wholesaleTiers.length > 0;
+
+  if (!hasPieceWholesale) return item.selectedPrice;
+
+  const combinedQuantity = getCombinedPieceQuantity(items, item.id);
+  const minimum = Math.max(10, Number(item.moq) || 1);
+
+  if (combinedQuantity < minimum) {
+    return item.retailPrice;
+  }
+
+  return getWholesalePrice(item, combinedQuantity);
+}
+
+function isCombinedWholesale(items: CartItem[], item: CartItem) {
+  return !isSetItem(item) &&
+    Array.isArray(item.wholesaleTiers) &&
+    item.wholesaleTiers.length > 0 &&
+    getCombinedPieceQuantity(items, item.id) >= Math.max(10, Number(item.moq) || 1);
 }
 
 export default function CartPage() {
@@ -178,7 +217,11 @@ export default function CartPage() {
       return 0;
     }
 
-    return getCartSubtotal(cart);
+    return cart.items.reduce(
+      (total, item) =>
+        total + getEffectiveItemPrice(cart.items, item) * item.quantity,
+      0
+    );
   }, [cart]);
 
   /* =======================================================
@@ -507,9 +550,17 @@ export default function CartPage() {
                             item
                           );
 
+                        const effectivePrice =
+                          getEffectiveItemPrice(cart.items, item);
+
+                        const combinedWholesale =
+                          isCombinedWholesale(cart.items, item);
+
+                        const combinedQuantity =
+                          getCombinedPieceQuantity(cart.items, item.id);
+
                         const itemTotal =
-                          item.selectedPrice *
-                          item.quantity;
+                          effectivePrice * item.quantity;
 
                         const actualPieces =
                           getCartItemPieceQuantity(
@@ -603,8 +654,7 @@ export default function CartPage() {
                                 <div className="mt-1 flex flex-wrap items-center gap-2">
 
                                   <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[9px] font-black uppercase tracking-wide text-gray-600">
-                                    {item.pricingType ===
-                                    "wholesale"
+                                    {combinedWholesale || item.pricingType === "wholesale"
                                       ? "Wholesale"
                                       : "Retail"}
                                   </span>
@@ -630,6 +680,12 @@ export default function CartPage() {
                                     </span>
                                   )}
                                 </div>
+
+                                {!itemIsSet && combinedWholesale && (
+                                  <p className="mt-2 text-[10px] font-semibold text-green-700">
+                                    Wholesale price applied: {combinedQuantity} pieces combined across this product's variants
+                                  </p>
+                                )}
 
                                 {/* SET INFO */}
 
@@ -712,7 +768,7 @@ export default function CartPage() {
                                   <div>
                                     <p className="text-base font-black">
                                       {money(
-                                        item.selectedPrice
+                                        effectivePrice
                                       )}
                                     </p>
 
@@ -725,7 +781,7 @@ export default function CartPage() {
                                   </div>
 
                                   {item.mrp >
-                                    item.selectedPrice && (
+                                    effectivePrice && (
                                     <p className="text-xs text-gray-400 line-through">
                                       {money(
                                         item.mrp
