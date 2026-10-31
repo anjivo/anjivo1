@@ -187,6 +187,88 @@ export function getSelectedPrice(
 }
 
 /* =========================================================
+   COMBINED PRODUCT QUANTITY / EFFECTIVE PRICE
+========================================================= */
+
+/**
+ * Counts PIECE quantities for the same product and seller,
+ * including different sizes, colours and variants.
+ *
+ * SET lines are deliberately excluded because their quantity
+ * is measured in sets, not individual pieces.
+ */
+export function getCombinedPieceQuantity(
+  items: CartItem[],
+  productId: string,
+  sellerId?: string
+): number {
+  return items.reduce((total, item) => {
+    const isPieceLine =
+      !item.isSet &&
+      item.wholesaleUnit !== "SET";
+
+    if (
+      item.id !== productId ||
+      (sellerId && item.sellerId !== sellerId) ||
+      !isPieceLine
+    ) {
+      return total;
+    }
+
+    return total + getCartItemPieceQuantity(item);
+  }, 0);
+}
+
+/**
+ * Returns the price that should apply to one cart line.
+ *
+ * When the combined PIECE quantity of the same product reaches
+ * its wholesale threshold, all its PIECE variants use the
+ * matching wholesale tier. SET lines retain their own pricing.
+ */
+export function getEffectiveCartItemPrice(
+  items: CartItem[],
+  item: CartItem
+): number {
+  const isSetLine =
+    Boolean(item.isSet) ||
+    item.wholesaleUnit === "SET";
+
+  if (isSetLine) {
+    return getSelectedPrice(item);
+  }
+
+  const combinedQuantity = getCombinedPieceQuantity(
+    items,
+    item.id,
+    item.sellerId
+  );
+
+  const hasWholesaleTiers =
+    Array.isArray(item.wholesaleTiers) &&
+    item.wholesaleTiers.some(
+      (tier) =>
+        Number(tier.minQuantity) > 0 &&
+        Number(tier.price) > 0
+    );
+
+  const wholesaleThreshold = Math.max(
+    10,
+    Number(item.moq) || 1
+  );
+
+  if (
+    hasWholesaleTiers &&
+    combinedQuantity >= wholesaleThreshold
+  ) {
+    return getWholesalePrice(item, combinedQuantity);
+  }
+
+  // Preserve explicitly selected wholesale pricing and MOQ behavior.
+  return getSelectedPrice(item);
+}
+
+/* =========================================================
    PIECES IN CART
 ========================================================= */
 
@@ -221,12 +303,14 @@ export function getCartItemPieceQuantity(
 ========================================================= */
 
 export function getCartItemTotal(
-  item: CartItem
+  item: CartItem,
+  cartItems?: CartItem[]
 ): number {
-  return (
-    getSelectedPrice(item) *
-    item.quantity
-  );
+  const unitPrice = cartItems
+    ? getEffectiveCartItemPrice(cartItems, item)
+    : getSelectedPrice(item);
+
+  return unitPrice * item.quantity;
 }
 
 /* =========================================================
@@ -238,7 +322,7 @@ export function getCartSubtotal(
 ): number {
   return cart.items.reduce(
     (total, item) =>
-      total + getCartItemTotal(item),
+      total + getCartItemTotal(item, cart.items),
     0
   );
 }
@@ -252,7 +336,7 @@ export function getSellerSubtotal(
 ): number {
   return items.reduce(
     (total, item) =>
-      total + getCartItemTotal(item),
+      total + getCartItemTotal(item, items),
     0
   );
 }
@@ -577,6 +661,12 @@ export async function getCart(
         )
       : [];
 
+  // Recalculate prices using the combined quantity across variants.
+  for (const item of items) {
+    item.selectedPrice =
+      getEffectiveCartItemPrice(items, item);
+  }
+
   const cart: Cart = {
     userId,
 
@@ -666,17 +756,27 @@ export async function saveCart(
       return normalized;
     });
 
+  // Apply combined-variant wholesale pricing after all quantities
+  // have been normalized and stock/MOQ constraints have been applied.
+  const pricedItems = normalizedItems.map((item) => ({
+    ...item,
+    selectedPrice: getEffectiveCartItemPrice(
+      normalizedItems,
+      item
+    ),
+  }));
+
   // Final safeguard: remove undefined fields at every nesting level
   // (for example wholesaleTiers[].maxQuantity and SET metadata).
   const firestoreSafeItems =
-    removeUndefinedDeep(normalizedItems);
+    removeUndefinedDeep(pricedItems);
 
   const subtotal =
     firestoreSafeItems.reduce(
       (total, item) =>
         total +
-        item.selectedPrice *
-          item.quantity,
+        Number(item.selectedPrice || 0) *
+          Number(item.quantity || 0),
       0
     );
 
