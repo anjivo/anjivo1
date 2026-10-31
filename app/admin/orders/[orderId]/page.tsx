@@ -841,7 +841,7 @@ export default function AdminOrderDetailsPage() {
                   label="Customer Type"
                   value={
                     order.customerType === "guest"
-                      ? "Guest Customer (Admin-created)"
+                      ? "Guest Customer"
                       : customer?.role === "WHOLESALE_CUSTOMER"
                         ? "Wholesale Customer"
                         : "Registered Customer"
