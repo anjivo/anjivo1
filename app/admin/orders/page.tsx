@@ -39,9 +39,13 @@ type OrderItem = {
   productName?: string;
   image?: string;
   sku?: string;
+  variantSku?: string;
   size?: string;
+  selectedSize?: string;
   color?: string;
+  selectedColor?: string;
   variant?: string;
+  variantName?: string;
   mrp?: number;
   unitPrice?: number;
   sellerId?: string;
@@ -226,25 +230,47 @@ function mapOrder(
 
     const quantity = numberValue(item.quantity);
     const unitPrice = numberValue(
-      item.unitPrice ?? item.selectedPrice ?? item.price
+      item.unitPrice ??
+        item.selectedPrice ??
+        item.selectedUnitPrice ??
+        item.price
     );
     const itemSubtotal = numberValue(
-      item.subtotal,
+      item.subtotal ?? item.totalPrice ?? item.lineTotal,
       unitPrice * quantity
     );
+    const selectedSize = stringValue(
+      item.selectedSize ?? item.size
+    );
+    const selectedColor = stringValue(
+      item.selectedColor ?? item.color
+    );
+    const variantName = stringValue(
+      item.variantName ?? item.variant
+    );
+    const variantSku = stringValue(
+      item.variantSku ?? item.sku
+    );
+    const pricingTypeValue = stringValue(
+      item.pricingType ?? item.priceType
+    ).trim().toLowerCase();
 
     return {
       productId: stringValue(item.productId) || undefined,
       id: stringValue(item.id ?? item.productId) || undefined,
       name:
-        stringValue(item.name ?? item.productName) || "Product",
+        stringValue(item.productName ?? item.name) || "Product",
       productName:
         stringValue(item.productName ?? item.name) || "Product",
-      image: stringValue(item.image) || undefined,
-      sku: stringValue(item.sku) || undefined,
-      size: stringValue(item.size) || undefined,
-      color: stringValue(item.color) || undefined,
-      variant: stringValue(item.variant) || undefined,
+      image: stringValue(item.image ?? item.imageUrl) || undefined,
+      sku: variantSku || undefined,
+      variantSku: variantSku || undefined,
+      size: selectedSize || undefined,
+      selectedSize: selectedSize || undefined,
+      color: selectedColor || undefined,
+      selectedColor: selectedColor || undefined,
+      variant: variantName || undefined,
+      variantName: variantName || undefined,
       mrp: numberValue(item.mrp),
       sellerId: stringValue(item.sellerId) || undefined,
       sellerName: stringValue(item.sellerName) || undefined,
@@ -253,7 +279,7 @@ function mapOrder(
       selectedPrice: unitPrice,
       unitPrice,
       pricingType:
-        item.pricingType === "wholesale" ? "wholesale" : "retail",
+        pricingTypeValue === "wholesale" ? "wholesale" : "retail",
       subtotal: itemSubtotal,
     };
   });
@@ -282,6 +308,23 @@ function mapOrder(
       ? (data.shippingAddress as Record<string, unknown>)
       : {};
 
+  const itemsSubtotal = items.reduce(
+    (sum, item) => sum + numberValue(item.subtotal),
+    0
+  );
+  const rawSubtotal = Number(data.subtotal);
+  const subtotal = Number.isFinite(rawSubtotal)
+    ? rawSubtotal
+    : itemsSubtotal;
+  const shipping = numberValue(data.shippingCharge ?? data.shipping);
+  const discount = numberValue(data.discount);
+  const rawTotal = Number(
+    data.total ?? data.totalAmount ?? data.grandTotal
+  );
+  const total = Number.isFinite(rawTotal)
+    ? rawTotal
+    : Math.max(0, subtotal + shipping - discount);
+
   return {
     id,
     userId: stringValue(data.userId ?? data.customerId),
@@ -294,12 +337,10 @@ function mapOrder(
       stringValue(data.customerPhone ?? data.phone) ||
       stringValue(addressObject.phone),
     items,
-    subtotal: numberValue(data.subtotal),
-    shipping: numberValue(data.shippingCharge ?? data.shipping),
-    discount: numberValue(data.discount),
-    total: numberValue(
-      data.total ?? data.totalAmount ?? data.grandTotal
-    ),
+    subtotal,
+    shipping,
+    discount,
+    total,
     status: normalizeStatus(
       data.fulfillmentStatus ?? data.orderStatus ?? data.status
     ),
@@ -1568,18 +1609,24 @@ function OrderModal({
                               0}
                           </span>
 
-                          {(item.size || item.color || item.variant) && (
+                          {(item.selectedSize ||
+                            item.selectedColor ||
+                            item.variantName) && (
                             <span className="text-[10px] text-gray-500">
                               Variant:{" "}
-                              {[item.size, item.color, item.variant]
+                              {[
+                                item.selectedSize,
+                                item.selectedColor,
+                                item.variantName,
+                              ]
                                 .filter(Boolean)
                                 .join(" / ")}
                             </span>
                           )}
 
-                          {item.sku && (
+                          {(item.variantSku || item.sku) && (
                             <span className="text-[10px] text-gray-500">
-                              SKU: {item.sku}
+                              SKU: {item.variantSku || item.sku}
                             </span>
                           )}
 
@@ -1604,14 +1651,11 @@ function OrderModal({
                       <p className="text-sm font-black">
                         ₹
                         {(
-                          item.subtotal ||
-                          (
-                            item.selectedPrice ||
-                            item.price ||
-                            0
-                          ) *
-                            (item.quantity ||
-                              0)
+                          numberValue(
+                            item.subtotal,
+                            numberValue(item.unitPrice ?? item.selectedPrice ?? item.price) *
+                              numberValue(item.quantity)
+                          )
                         ).toLocaleString(
                           "en-IN"
                         )}
