@@ -305,32 +305,39 @@ function mapOrder(
                 item.sellerName || "",
 
               name:
-                item.name ||
+                clean(item.name) ||
+                clean(item.productName) ||
                 "Product",
 
               slug:
-                item.slug || "",
+                clean(item.slug) ||
+                clean(item.productSlug),
 
               image:
-                item.image || "",
+                clean(item.image),
 
               sku:
-                typeof item.sku === "string" ? item.sku : "",
+                clean(item.sku) ||
+                clean(item.variantSku),
 
               size:
-                typeof item.size === "string" ? item.size : "",
+                clean(item.size) ||
+                clean(item.selectedSize),
 
               color:
-                typeof item.color === "string" ? item.color : "",
+                clean(item.color) ||
+                clean(item.selectedColor),
 
               variant:
-                typeof item.variant === "string" ? item.variant : "",
+                clean(item.variant) ||
+                clean(item.variantName) ||
+                clean(item.selectedVariantValue),
 
               variantId:
-                typeof item.variantId === "string" ? item.variantId : "",
+                clean(item.variantId),
 
               variantType:
-                typeof item.variantType === "string" ? item.variantType : "",
+                clean(item.variantType),
 
               quantity:
                 Number(
@@ -344,7 +351,10 @@ function mapOrder(
 
               selectedPrice:
                 Number(
-                  item.selectedPrice || 0
+                  item.selectedPrice ??
+                  item.unitPrice ??
+                  item.price ??
+                  0
                 ),
 
               pricingType:
@@ -360,7 +370,11 @@ function mapOrder(
 
               subtotal:
                 Number(
-                  item.subtotal || 0
+                  item.subtotal ??
+                  (
+                    Number(item.selectedPrice ?? item.unitPrice ?? item.price ?? 0) *
+                    Number(item.quantity ?? 0)
+                  )
                 ),
 
               wholesaleUnit:
