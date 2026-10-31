@@ -800,6 +800,11 @@ export async function POST(
           "",
         item.variantId ||
           "NO_VARIANT",
+        item.variantSku || "",
+        item.variantName || "",
+        item.selectedSize || "",
+        item.selectedColor || "",
+        item.selectedVariantValue || "",
       ].join("|");
 
       if (
@@ -873,21 +878,69 @@ export async function POST(
 
     /*
      * ---------------------------------------------------------
-     * 8. WHOLESALE CUSTOMER CHECK
+     * 8. COMBINE PIECE QUANTITY ACROSS VARIANTS
      * ---------------------------------------------------------
+     *
+     * Retail customers qualify for the wholesale PIECE tier when
+     * the combined quantity of the same product reaches 10 pieces.
+     * Different sizes/colours/variants count together.
      */
-    const containsWholesale =
-      normalizedItems.some(
-        (item) =>
-          item.pricingType ===
-          "wholesale"
+    const requestedWholesale = normalizedItems.some(
+      (item) => item.pricingType === "wholesale"
+    );
+
+    const pieceQuantityByProduct = new Map<string, number>();
+
+    for (const item of normalizedItems) {
+      const product = products.get(item.productId);
+      const config = product
+        ? getWholesaleConfiguration(product)
+        : null;
+
+      if (config?.saleUnit === "PIECE") {
+        pieceQuantityByProduct.set(
+          item.productId,
+          (pieceQuantityByProduct.get(item.productId) || 0) + item.quantity
+        );
+      }
+    }
+
+    // Convert qualifying retail PIECE lines to wholesale pricing before
+    // validation so every variant line uses the same combined-quantity tier.
+    for (const item of normalizedItems) {
+      if (item.pricingType !== "retail") continue;
+
+      const product = products.get(item.productId);
+      const config = product
+        ? getWholesaleConfiguration(product)
+        : null;
+
+      if (!product || config?.saleUnit !== "PIECE") continue;
+
+      const combinedQuantity =
+        pieceQuantityByProduct.get(item.productId) || 0;
+      const minimumWholesaleQuantity = Math.max(
+        10,
+        Math.floor(normalizeNumber(product.moq, 1))
       );
 
+      if (combinedQuantity >= minimumWholesaleQuantity) {
+        item.pricingType = "wholesale";
+        item.wholesaleUnit = "PIECE";
+      }
+    }
+
+    /*
+     * ---------------------------------------------------------
+     * 9. WHOLESALE CUSTOMER CHECK
+     * ---------------------------------------------------------
+     * Only an explicitly requested wholesale checkout requires
+     * an approved wholesale account. Retail customers can qualify
+     * automatically through the combined 10-piece threshold above.
+     */
     if (
-      containsWholesale &&
-      !isWholesaleCustomer(
-        userData
-      )
+      requestedWholesale &&
+      !isWholesaleCustomer(userData)
     ) {
       return badRequest(
         "Wholesale pricing is available only for approved wholesale customers."
@@ -1137,7 +1190,7 @@ export async function POST(
 
         const moq =
           Math.max(
-            1,
+            10,
             Math.floor(
               normalizeNumber(
                 product.moq,
@@ -1146,24 +1199,28 @@ export async function POST(
             )
           );
 
+        const combinedQuantity =
+          pieceQuantityByProduct.get(product.id) ||
+          item.quantity;
+
         if (
-          item.quantity <
+          combinedQuantity <
           moq
         ) {
           return badRequest(
-            `Minimum wholesale quantity for ${product.name || item.productId} is ${moq} pieces.`
+            `Minimum wholesale quantity for ${product.name || item.productId} is ${moq} pieces across all variants.`
           );
         }
 
         const tier =
           getTierForQuantity(
             tiers,
-            item.quantity
+            combinedQuantity
           );
 
         if (!tier) {
           return badRequest(
-            `No wholesale price tier is available for ${product.name || item.productId} at ${item.quantity} pieces.`
+            `No wholesale price tier is available for ${product.name || item.productId} at ${combinedQuantity} combined pieces.`
           );
         }
 
