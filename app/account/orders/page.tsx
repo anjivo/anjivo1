@@ -303,7 +303,7 @@ export default function MyOrdersPage() {
             EMPTY ORDERS
         ================================================= */}
 
-        {orders.length === 0 && !error ? (
+        {orders.length === 0 ? (
           <div className="rounded-3xl border border-gray-200 bg-white p-12 text-center">
 
             <div className="text-5xl">
@@ -311,19 +311,31 @@ export default function MyOrdersPage() {
             </div>
 
             <h2 className="mt-4 text-xl font-black">
-              No orders yet
+              {error ? "Orders could not be loaded" : "No orders yet"}
             </h2>
 
             <p className="mt-2 text-sm text-gray-500">
-              Your orders will appear here after you place an order.
+              {error
+                ? "Please check your connection and try again."
+                : "Your orders will appear here after you place an order."}
             </p>
 
+            {error ? (
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="mt-6 inline-flex rounded-xl bg-black px-6 py-3 text-sm font-bold text-white transition hover:bg-gray-800"
+              >
+                Try Again
+              </button>
+            ) : (
             <Link
               href="/products"
               className="mt-6 inline-flex rounded-xl bg-black px-6 py-3 text-sm font-bold text-white transition hover:bg-gray-800"
             >
               Start Shopping
             </Link>
+            )}
 
           </div>
         ) : (
@@ -458,46 +470,61 @@ export default function MyOrdersPage() {
 
                     <div className="min-w-0 flex-1">
 
-                      <h2 className="truncate text-sm font-black text-gray-900">
-                        {firstItem?.name ||
-                          "Order Items"}
+                      <h2 className="text-sm font-black text-gray-900">
+                        {firstItem?.name || "Order Items"}
                       </h2>
 
-                      {/* MORE ITEMS */}
-
-                      {order.items.length > 1 && (
-                        <p className="mt-1 text-xs text-gray-400">
-                          +{" "}
-                          {order.items.length - 1}{" "}
-                          more item
-                          {order.items.length - 1 >
-                          1
-                            ? "s"
-                            : ""}
-                        </p>
-                      )}
-
-                      {/* QUANTITY + DATE */}
-
                       <p className="mt-2 text-xs text-gray-500">
-                        {totalQuantity}{" "}
-                        unit
-                        {totalQuantity > 1
-                          ? "s"
-                          : ""}{" "}
-                        •{" "}
-                        {formatDate(
-                          order.createdAt
-                        )}
+                        {totalQuantity} unit{totalQuantity === 1 ? "" : "s"}
+                        {" • "}
+                        {formatDate(order.createdAt)}
                       </p>
 
-                      {/* TOTAL */}
+                      {/* Item-wise snapshot: variant, quantity and price */}
+                      <div className="mt-3 space-y-2">
+                        {(order.items ?? []).map((item, index) => {
+                          const unitPrice = Number(item.selectedPrice ?? 0);
+                          const lineTotal = Number(
+                            item.subtotal ?? unitPrice * Number(item.quantity ?? 0)
+                          );
+                          const variantDetails = [
+                            item.size ? `Size: ${item.size}` : "",
+                            item.color ? `Colour: ${item.color}` : "",
+                            item.variant && !item.size && !item.color
+                              ? item.variant
+                              : "",
+                            item.wholesaleUnit === "SET" ? "Set" : "",
+                          ].filter(Boolean);
 
-                      <p className="mt-2 text-base font-black text-gray-900">
-                        ₹
-                        {order.totalAmount.toLocaleString(
-                          "en-IN"
-                        )}
+                          return (
+                            <div
+                              key={`${item.productId || item.slug || "item"}-${index}`}
+                              className="rounded-xl bg-gray-50 px-3 py-2"
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <p className="min-w-0 flex-1 text-xs font-semibold text-gray-800">
+                                  {item.name || "Product"}
+                                </p>
+                                <p className="text-xs font-bold text-gray-900">
+                                  ₹{lineTotal.toLocaleString("en-IN")}
+                                </p>
+                              </div>
+                              {variantDetails.length > 0 && (
+                                <p className="mt-1 text-[11px] text-gray-500">
+                                  {variantDetails.join(" • ")}
+                                </p>
+                              )}
+                              <p className="mt-1 text-[11px] text-gray-500">
+                                {item.quantity} × ₹{unitPrice.toLocaleString("en-IN")}
+                                {item.pricingType === "wholesale" ? " • Wholesale" : ""}
+                              </p>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <p className="mt-3 text-base font-black text-gray-900">
+                        Order Total: ₹{Number(order.totalAmount ?? 0).toLocaleString("en-IN")}
                       </p>
 
                     </div>
