@@ -57,6 +57,15 @@ type OrderItem = {
   subtotal?: number;
 };
 
+type ShippingAddressData = {
+  fullName?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+};
+
 type Order = {
   id: string;
   userId: string;
@@ -82,6 +91,7 @@ type Order = {
   sellerCount: number;
 
   shippingAddress: string;
+  shippingAddressData: ShippingAddressData;
 
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -206,7 +216,6 @@ function formatShippingAddress(value: unknown): string {
   const address = value as Record<string, unknown>;
   return [
     address.fullName,
-    address.phone,
     address.addressLine1,
     address.addressLine2,
     address.city,
@@ -308,7 +317,29 @@ function mapOrder(
     data.shippingAddress &&
     typeof data.shippingAddress === "object"
       ? (data.shippingAddress as Record<string, unknown>)
-      : {};
+      : data.address && typeof data.address === "object"
+        ? (data.address as Record<string, unknown>)
+        : {};
+
+  const shippingAddressData: ShippingAddressData = {
+    fullName: stringValue(addressObject.fullName ?? data.customerName ?? data.name),
+    addressLine1: stringValue(addressObject.addressLine1),
+    addressLine2: stringValue(addressObject.addressLine2),
+    city: stringValue(addressObject.city),
+    state: stringValue(addressObject.state),
+    pincode: stringValue(addressObject.pincode),
+  };
+
+  // If the database stores a plain address string, keep it as address line 1.
+  if (typeof (data.shippingAddress ?? data.address) === "string") {
+    const plainAddress = stringValue(data.shippingAddress ?? data.address)
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "")
+      .replace(/(?:\+?91[\s-]?)?[6-9]\d{9}/g, "")
+      .replace(/\s*,\s*,/g, ",")
+      .replace(/^\s*,|,\s*$/g, "")
+      .trim();
+    shippingAddressData.addressLine1 = plainAddress;
+  }
 
   const itemsSubtotal = items.reduce(
     (sum, item) => sum + numberValue(item.subtotal),
@@ -357,9 +388,94 @@ function mapOrder(
         ? Number(data.sellerCount)
         : sellerIds.length,
     shippingAddress,
+    shippingAddressData,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   };
+}
+
+
+function escapePrintHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildBulkShippingLabel(order: Order, index: number): string {
+  const address = order.shippingAddressData ?? {};
+  const isCod =
+    ["COD", "CASH ON DELIVERY", "CASH_ON_DELIVERY"].includes(
+      order.paymentMethod.trim().toUpperCase()
+    ) || order.paymentStatus === "cod";
+
+  const addressLines = [
+    address.addressLine1,
+    address.addressLine2,
+    [address.city, address.state].filter(Boolean).join(", "),
+    address.pincode ? `PIN: ${address.pincode}` : "",
+  ]
+    .filter(Boolean)
+    .map((line) => `<div>${escapePrintHtml(line)}</div>`)
+    .join("");
+
+  const rows = (order.items ?? [])
+    .map((item) => {
+      const name = escapePrintHtml(item.name || item.productName || "Product");
+      const variant = [
+        item.selectedSize || item.size,
+        item.selectedColor || item.color,
+        item.variantName || item.variant,
+      ]
+        .filter(Boolean)
+        .join(" / ");
+
+      const quantity = Math.max(0, numberValue(item.quantity));
+
+      return `
+        <tr>
+          <td class="product">
+            <strong>${name}</strong>
+            ${variant ? `<small>${escapePrintHtml(variant)}</small>` : ""}
+          </td>
+          <td class="qty">${quantity}</td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  return `
+    <article class="label ${index > 0 ? "next-page" : ""}">
+      <header class="header">
+        <div class="brand-block">
+          <img src="/logo/anjivo-logo.png" alt="ANJIVO" class="logo">
+          <div class="website">anjivo.online</div>
+        </div>
+        <div class="order-type">${isCod ? "COD" : "PREPAID"}</div>
+      </header>
+
+      <section class="section">
+        <div class="heading">Ship To</div>
+        <div class="customer-name">${escapePrintHtml(address.fullName || order.customerName || "Customer")}</div>
+        <div class="address">
+          ${addressLines || "<div>Address not available</div>"}
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="heading">Package Contents</div>
+        <table>
+          <tbody>
+            ${rows || '<tr><td colspan="2">Product details not available</td></tr>'}
+          </tbody>
+        </table>
+      </section>
+
+      <footer class="footer">anjivo.online</footer>
+    </article>
+  `;
 }
 
 export default function AdminOrdersPage() {
@@ -390,6 +506,9 @@ export default function AdminOrdersPage() {
   const [selectedOrder, setSelectedOrder] =
     useState<Order | null>(null);
 
+  const [selectedOrderIds, setSelectedOrderIds] =
+    useState<string[]>([]);
+
   useEffect(() => {
     let authGeneration = 0;
     let unsubscribeOrders: (() => void) | undefined;
@@ -404,6 +523,7 @@ export default function AdminOrdersPage() {
       setAuthorized(false);
       setOrders([]);
       setSelectedOrder(null);
+      setSelectedOrderIds([]);
       setLoading(true);
       setError("");
 
@@ -725,6 +845,204 @@ export default function AdminOrdersPage() {
       filter,
       search,
     ]);
+
+  const selectedOrders = useMemo(
+    () => orders.filter((order) => selectedOrderIds.includes(order.id)),
+    [orders, selectedOrderIds]
+  );
+
+  const allVisibleSelected =
+    filteredOrders.length > 0 &&
+    filteredOrders.every((order) => selectedOrderIds.includes(order.id));
+
+  function toggleOrderSelection(orderId: string) {
+    setSelectedOrderIds((current) =>
+      current.includes(orderId)
+        ? current.filter((id) => id !== orderId)
+        : [...current, orderId]
+    );
+  }
+
+  function toggleSelectAllVisible() {
+    const visibleIds = filteredOrders.map((order) => order.id);
+
+    setSelectedOrderIds((current) => {
+      if (visibleIds.every((id) => current.includes(id))) {
+        return current.filter((id) => !visibleIds.includes(id));
+      }
+
+      return Array.from(new Set([...current, ...visibleIds]));
+    });
+  }
+
+  function printSelectedShippingLabels() {
+    if (selectedOrders.length === 0) {
+      window.alert("Pehle kam se kam ek order select karein.");
+      return;
+    }
+
+    const printWindow = window.open("", "_blank", "width=600,height=800");
+
+    if (!printWindow) {
+      window.alert(
+        "Bulk labels print karne ke liye browser mein pop-ups allow karein."
+      );
+      return;
+    }
+
+    const labels = selectedOrders
+      .map((order, index) => buildBulkShippingLabel(order, index))
+      .join("");
+
+    const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="${window.location.origin}/">
+<title>ANJIVO Bulk Shipping Labels</title>
+<style>
+  @page { size: 4in 6in; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    color: #111;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .label {
+    width: 4in;
+    height: 6in;
+    padding: .22in;
+    overflow: hidden;
+    background: #fff;
+    border: 1px solid #111;
+    page-break-after: always;
+    break-after: page;
+  }
+  .label:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .logo {
+    display: block;
+    width: 145px;
+    max-height: 48px;
+    object-fit: contain;
+    object-position: left center;
+  }
+  .website {
+    margin-top: 4px;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .order-type {
+    flex: 0 0 auto;
+    border: 2px solid #111;
+    padding: 7px 10px;
+    font-size: 15px;
+    font-weight: 900;
+  }
+  .section {
+    margin-top: 13px;
+    padding-top: 10px;
+    border-top: 2px solid #111;
+  }
+  .heading {
+    margin-bottom: 7px;
+    font-size: 10px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .customer-name {
+    margin-bottom: 7px;
+    font-size: 19px;
+    line-height: 1.15;
+    font-weight: 900;
+    overflow-wrap: anywhere;
+  }
+  .address {
+    font-size: 12px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 11px;
+  }
+  td {
+    padding: 7px 3px;
+    border-bottom: 1px solid #aaa;
+    vertical-align: top;
+  }
+  .product { overflow-wrap: anywhere; }
+  .product strong {
+    display: block;
+    font-size: 11px;
+    line-height: 1.3;
+  }
+  .product small {
+    display: block;
+    margin-top: 4px;
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .qty {
+    width: 42px;
+    text-align: right;
+    font-size: 12px;
+    font-weight: 900;
+  }
+  .footer {
+    display: flex;
+    justify-content: center;
+    margin-top: 16px;
+    padding-top: 9px;
+    border-top: 1px dashed #555;
+    font-size: 10px;
+    font-weight: 800;
+  }
+  @media screen {
+    body { padding: 12px; background: #eee; }
+    .label {
+      margin: 0 auto 12px;
+      box-shadow: 0 2px 10px #bbb;
+    }
+  }
+</style>
+</head>
+<body>
+${labels}
+<script>
+  window.onload = () => {
+    const images = Array.from(document.images);
+    Promise.all(images.map((image) => {
+      if (image.complete) return Promise.resolve();
+      return new Promise((resolve) => {
+        image.onload = resolve;
+        image.onerror = resolve;
+      });
+    })).then(() => setTimeout(() => window.print(), 300));
+  };
+</script>
+</body>
+</html>`;
+
+    printWindow.document.open();
+    printWindow.document.write(html);
+    printWindow.document.close();
+  }
 
   const counts =
     useMemo(
@@ -1053,9 +1371,50 @@ export default function AdminOrdersPage() {
 
         </div>
 
+        {/* BULK SHIPPING LABEL TOOLBAR */}
+
+        <div className="mt-6 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex cursor-pointer items-center gap-2 text-sm font-bold text-gray-700">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={toggleSelectAllVisible}
+                disabled={filteredOrders.length === 0}
+                className="h-4 w-4 rounded border-gray-300 accent-black"
+              />
+              Select all visible ({filteredOrders.length})
+            </label>
+
+            <span className="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-black text-gray-700">
+              {selectedOrders.length} selected
+            </span>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedOrderIds([])}
+              disabled={selectedOrderIds.length === 0}
+              className="rounded-xl border border-gray-200 px-4 py-2.5 text-xs font-black text-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Clear Selection
+            </button>
+
+            <button
+              type="button"
+              onClick={printSelectedShippingLabels}
+              disabled={selectedOrders.length === 0}
+              className="rounded-xl bg-indigo-600 px-5 py-2.5 text-xs font-black text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              🏷️ Generate Shipping Labels ({selectedOrders.length})
+            </button>
+          </div>
+        </div>
+
         {/* ORDERS */}
 
-        <div className="mt-6 overflow-hidden rounded-3xl border border-gray-200 bg-white">
+        <div className="mt-4 overflow-hidden rounded-3xl border border-gray-200 bg-white">
 
           {filteredOrders.length ===
           0 ? (
@@ -1083,6 +1442,8 @@ export default function AdminOrdersPage() {
                   <OrderRow
                     key={order.id}
                     order={order}
+                    selected={selectedOrderIds.includes(order.id)}
+                    onToggleSelect={() => toggleOrderSelection(order.id)}
                     processing={
                       processing ===
                       order.id
@@ -1195,12 +1556,16 @@ function OrderCount({
 
 function OrderRow({
   order,
+  selected,
+  onToggleSelect,
   processing,
   onView,
   onCancel,
   onStatusChange,
 }: {
   order: Order;
+  selected: boolean;
+  onToggleSelect: () => void;
   processing: boolean;
   onView: () => void;
   onCancel: () => void;
@@ -1209,11 +1574,18 @@ function OrderRow({
   ) => void;
 }) {
   return (
-    <div className="p-5 sm:p-6">
+    <div className={`p-5 sm:p-6 ${selected ? "bg-indigo-50/50" : ""}`}>
 
       <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
-
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-4">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            aria-label={`Select order ${order.id}`}
+            className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 accent-indigo-600"
+          />
+          <div className="min-w-0">
 
           <div className="flex flex-wrap items-center gap-2">
 
@@ -1281,7 +1653,7 @@ function OrderRow({
             {order.customerEmail ||
               "No email"}
           </p>
-
+          </div>
         </div>
 
         <div className="flex flex-col gap-3 xl:items-end">
