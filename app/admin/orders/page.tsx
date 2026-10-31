@@ -63,6 +63,8 @@ type Order = {
   customerName: string;
   customerEmail: string;
   customerPhone: string;
+  customerType?: string;
+  orderSource?: string;
 
   items: OrderItem[];
 
@@ -336,6 +338,8 @@ function mapOrder(
     customerPhone:
       stringValue(data.customerPhone ?? data.phone) ||
       stringValue(addressObject.phone),
+    customerType: stringValue(data.customerType),
+    orderSource: stringValue(data.orderSource),
     items,
     subtotal,
     shipping,
@@ -882,19 +886,22 @@ export default function AdminOrdersPage() {
 
           </div>
 
-          <div className="rounded-2xl border border-gray-200 bg-white px-5 py-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              href="/admin/orders/create"
+              className="rounded-xl bg-black px-5 py-3 text-sm font-black text-white shadow-sm transition hover:bg-gray-800"
+            >
+              + Create Manual Order
+            </Link>
 
-            <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
-              Total Order Value
-            </p>
-
-            <p className="mt-1 text-xl font-black">
-              ₹
-              {totalOrderValue.toLocaleString(
-                "en-IN"
-              )}
-            </p>
-
+            <div className="rounded-2xl border border-gray-200 bg-white px-5 py-4">
+              <p className="text-[10px] font-black uppercase tracking-wide text-gray-400">
+                Total Order Value
+              </p>
+              <p className="mt-1 text-xl font-black">
+                ₹{totalOrderValue.toLocaleString("en-IN")}
+              </p>
+            </div>
           </div>
 
         </div>
@@ -1230,9 +1237,12 @@ function OrderRow({
 
             <InfoBadge>
               👤{" "}
-              {order.customerName ||
-                "Guest"}
+              {order.customerName || "Guest"}
             </InfoBadge>
+
+            {(order.customerType === "GUEST" || order.orderSource === "ADMIN") && (
+              <InfoBadge>GUEST · ADMIN CREATED</InfoBadge>
+            )}
 
             {order.customerPhone && (
               <InfoBadge>
