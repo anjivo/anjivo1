@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 
 import { auth } from "@/lib/firebase";
-import { clearCart, getCart, groupCartBySeller, getCartItemPieceQuantity, getCartItemTotal } from "@/lib/cart";
+import { getCart, groupCartBySeller, getCartItemPieceQuantity, getCartItemTotal } from "@/lib/cart";
 import type { ShippingAddress } from "@/lib/orders";
 import type { Cart } from "@/lib/cart";
 
@@ -17,19 +17,6 @@ type SavedAddress = ShippingAddress & {
   isDefault: boolean;
   createdAt?: string | null;
   updatedAt?: string | null;
-};
-
-type CashfreeCheckout = {
-  checkout: (options: {
-    paymentSessionId: string;
-    redirectTarget: "_modal";
-  }) => Promise<unknown>;
-};
-
-type CashfreeWindow = Window & {
-  Cashfree?: (options: { mode: "sandbox" | "production" }) =>
-    | CashfreeCheckout
-    | Promise<CashfreeCheckout>;
 };
 
 type FormErrors = {
@@ -154,7 +141,8 @@ export default function CheckoutPage() {
 
   const subtotal = cart?.subtotal ?? 0;
   const shippingCharge = 0;
-  const discount = paymentMethod === "ONLINE" && subtotal >= 1000 ? 20 : 0;
+  // Online payment is not active yet; COD has no prepaid discount.
+  const discount = 0;
   const total = Math.max(0, subtotal + shippingCharge - discount);
 
   function updateAddress(
@@ -359,6 +347,12 @@ export default function CheckoutPage() {
 
     if (!validateAddress()) return;
 
+    // Defense in depth: this checkout currently accepts COD only.
+    if (paymentMethod !== "COD") {
+      setError("Online payment is coming soon. Please select Cash on Delivery.");
+      return;
+    }
+
     try {
       setPlacingOrder(true);
       setError("");
@@ -453,96 +447,13 @@ export default function CheckoutPage() {
         selectedVariantValue: item.selectedVariantValue,
       }));
 
-      let paymentIntentId: string | undefined;
-
-      if (paymentMethod === "ONLINE") {
-        // Create a server-priced Cashfree payment session.
-        const createPaymentResponse = await fetch(
-          "/api/payment/cashfree/create-order",
-          {
-            method: "POST",
-            headers: authHeaders,
-            body: JSON.stringify({
-              items: orderItems,
-              shippingAddress: address,
-            }),
-            cache: "no-store",
-          }
-        );
-        const createPaymentResult = await createPaymentResponse.json();
-
-        if (!createPaymentResponse.ok || !createPaymentResult.success) {
-          throw new Error(
-            createPaymentResult.message || "Unable to start online payment."
-          );
-        }
-
-        const orderId = String(createPaymentResult.orderId || "");
-        const paymentSessionId = String(createPaymentResult.paymentSessionId || "");
-        if (!orderId || !paymentSessionId) {
-          throw new Error("Cashfree did not return a valid payment session.");
-        }
-        paymentIntentId = orderId;
-
-        // Load Cashfree's browser SDK only when the customer chooses online payment.
-        const sdkUrl = "https://sdk.cashfree.com/js/v3/cashfree.js";
-        if (!(window as CashfreeWindow).Cashfree) {
-          await new Promise<void>((resolve, reject) => {
-            const existing = document.querySelector<HTMLScriptElement>(`script[src="${sdkUrl}"]`);
-            if (existing) {
-              existing.addEventListener("load", () => resolve(), { once: true });
-              existing.addEventListener("error", () => reject(new Error("Unable to load Cashfree checkout.")), { once: true });
-              if ((window as CashfreeWindow).Cashfree) resolve();
-              return;
-            }
-            const script = document.createElement("script");
-            script.src = sdkUrl;
-            script.async = true;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error("Unable to load Cashfree checkout."));
-            document.head.appendChild(script);
-          });
-        }
-
-        const cashfreeFactory = (window as CashfreeWindow).Cashfree;
-        if (!cashfreeFactory) {
-          throw new Error("Cashfree checkout could not be initialized. Please try again.");
-        }
-
-        const mode = createPaymentResult.paymentMode === "PRODUCTION"
-          ? "production"
-          : "sandbox";
-        const cashfree = await cashfreeFactory({ mode });
-        await cashfree.checkout({
-          paymentSessionId,
-          redirectTarget: "_modal",
-        });
-
-        // Never trust the browser's checkout result alone. Verify directly with our server.
-        const verifyResponse = await fetch("/api/payment/cashfree/verify", {
-          method: "POST",
-          headers: authHeaders,
-          body: JSON.stringify({ orderId }),
-          cache: "no-store",
-        });
-        const verifyResult = await verifyResponse.json();
-
-        if (!verifyResponse.ok || !verifyResult.success || verifyResult.verified !== true) {
-          throw new Error(
-            verifyResult.message || verifyResult.error ||
-              "Payment has not been confirmed. If money was deducted, please contact support before trying again."
-          );
-        }
-      }
-
-      // Create the final order. Online orders require the verified payment intent.
+      // COD is the only enabled payment method for the current launch.
       const orderResponse = await fetch("/api/orders/create", {
         method: "POST",
         headers: authHeaders,
         body: JSON.stringify({
           shippingAddress: address,
-          paymentMethod,
-          ...(paymentMethod === "ONLINE" ? { paymentIntentId } : {}),
+          paymentMethod: "COD",
           items: orderItems,
         }),
         cache: "no-store",
@@ -554,14 +465,6 @@ export default function CheckoutPage() {
       }
       if (!orderResult.orderId) {
         throw new Error("Order was created but order ID was not returned.");
-      }
-
-      // Clear the saved cart only after the server confirms that the order exists.
-      try {
-        await clearCart(userId);
-      } catch (cartError) {
-        // The order is already created; do not prevent the success redirect.
-        console.error("Order placed, but cart cleanup failed:", cartError);
       }
 
       // Clear the in-memory checkout cart before navigating to the success page.
@@ -831,29 +734,29 @@ export default function CheckoutPage() {
 
                 <button
                   type="button"
-                  onClick={() => setPaymentMethod("ONLINE")}
-                  disabled={placingOrder}
-                  aria-pressed={paymentMethod === "ONLINE"}
-                  className={`rounded-2xl border-2 p-4 text-left transition ${paymentMethod === "ONLINE" ? "border-slate-900 bg-slate-50" : "border-slate-200 hover:border-slate-400"}`}
+                  disabled
+                  aria-disabled="true"
+                  className="cursor-not-allowed rounded-2xl border-2 border-slate-200 bg-slate-50 p-4 text-left opacity-75"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-600 text-white"><svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h3"/></svg></span>
-                    <span>
-                      <span className="block font-bold text-slate-900">Online Payment</span>
-                      <span className="mt-1 block text-xs text-slate-500">UPI, cards and supported methods</span>
+                    <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-300 text-slate-700">
+                      <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="2">
+                        <rect x="3" y="5" width="18" height="14" rx="2" />
+                        <path d="M3 10h18M7 15h3" />
+                      </svg>
                     </span>
-                    <span className={`ml-auto h-4 w-4 rounded-full border-2 ${paymentMethod === "ONLINE" ? "border-slate-900 bg-slate-900 ring-2 ring-slate-900 ring-offset-2" : "border-slate-300"}`} />
+                    <span>
+                      <span className="block font-bold text-slate-700">Online Payment</span>
+                      <span className="mt-1 block text-xs text-slate-500">UPI, cards and other methods</span>
+                      <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">
+                        Coming Soon
+                      </span>
+                    </span>
+                    <span className="ml-auto text-xs font-semibold text-slate-400">Unavailable</span>
                   </div>
                 </button>
               </div>
 
-              {paymentMethod === "ONLINE" && (
-                <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-                  {subtotal >= 1000
-                    ? "₹20 instant prepaid discount applied. ₹20 reward credit may be added after delivery, subject to the reward rules."
-                    : "Pay online securely through Cashfree. Eligible orders of ₹1,000 or more get ₹20 instant discount."}
-                </div>
-              )}
             </section>
 
             {/* Sellers */}
@@ -1156,8 +1059,8 @@ export default function CheckoutPage() {
                       </p>
                     </div>
 
-                    <span className={`rounded-full px-3 py-1 text-xs font-bold ${paymentMethod === "ONLINE" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-700"}`}>
-                      {paymentMethod === "ONLINE" ? "PREPAID" : "COD"}
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-700">
+                      COD
                     </span>
                   </div>
                 </div>
@@ -1178,10 +1081,8 @@ export default function CheckoutPage() {
                 className="mt-7 w-full rounded-2xl bg-slate-900 px-5 py-4 text-base font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {placingOrder
-                  ? paymentMethod === "ONLINE" ? "Processing Payment..." : "Placing Order..."
-                  : paymentMethod === "ONLINE"
-                    ? `Pay Securely • ₹${total.toLocaleString("en-IN")}`
-                    : `Place COD Order • ₹${total.toLocaleString("en-IN")}`}
+                  ? "Placing Order..."
+                  : `Place COD Order • ₹${total.toLocaleString("en-IN")}`}
               </button>
 
               <div className="mt-4 rounded-2xl bg-slate-50 p-4 text-xs leading-5 text-slate-500">
