@@ -4,8 +4,9 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
+import { doc, onSnapshot } from "firebase/firestore";
 
-import { auth } from "@/lib/firebase";
+import { auth, db } from "@/lib/firebase";
 import { getCategories } from "@/lib/categories";
 import type { Category } from "@/types/category";
 import LocationSelector from "@/components/LocationSelector";
@@ -13,6 +14,7 @@ export default function Header() {
   const [search, setSearch] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
   const [user, setUser] = useState(auth.currentUser);
+  const [cartCount, setCartCount] = useState(0);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [hoveredCategoryId, setHoveredCategoryId] = useState<string | null>(null);
@@ -29,11 +31,71 @@ export default function Header() {
   }
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-    });
+    let unsubscribeCart: (() => void) | undefined;
 
-    return () => unsubscribe();
+    const unsubscribeAuth = onAuthStateChanged(
+      auth,
+      (currentUser) => {
+        setUser(currentUser);
+
+        // Stop listening to the previous user's cart before switching accounts.
+        if (unsubscribeCart) {
+          unsubscribeCart();
+          unsubscribeCart = undefined;
+        }
+
+        if (!currentUser) {
+          setCartCount(0);
+          return;
+        }
+
+        // Cart documents are stored at carts/{userId}.
+        unsubscribeCart = onSnapshot(
+          doc(db, "carts", currentUser.uid),
+          (snapshot) => {
+            const data = snapshot.exists()
+              ? snapshot.data()
+              : null;
+
+            const items = Array.isArray(data?.items)
+              ? data.items
+              : [];
+
+            const totalQuantity = items.reduce(
+              (total: number, item: unknown) => {
+                if (!item || typeof item !== "object") {
+                  return total;
+                }
+
+                const quantity = Number(
+                  (item as { quantity?: unknown }).quantity ?? 0
+                );
+
+                return total + (
+                  Number.isFinite(quantity) && quantity > 0
+                    ? Math.floor(quantity)
+                    : 0
+                );
+              },
+              0
+            );
+
+            setCartCount(totalQuantity);
+          },
+          (error) => {
+            console.error("Header cart listener error:", error);
+            setCartCount(0);
+          }
+        );
+      }
+    );
+
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeCart) {
+        unsubscribeCart();
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -331,9 +393,11 @@ export default function Header() {
               Cart
             </span>
 
-            {/* Cart count will be connected to Firebase later */}
-            <span className="absolute -right-1.5 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[10px] font-black text-black shadow-md ring-1 ring-gray-200">
-              0
+            <span
+              aria-label={`${cartCount} items in cart`}
+              className="absolute -right-1.5 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full bg-white px-1 text-[10px] font-black text-black shadow-md ring-1 ring-gray-200"
+            >
+              {cartCount > 99 ? "99+" : cartCount}
             </span>
           </Link>
 
