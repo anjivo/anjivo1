@@ -1,8 +1,10 @@
-
 "use client";
 
 import Link from "next/link";
 import { useState } from "react";
+
+const WHATSAPP_NUMBER = "919219495647";
+const SUPPORT_EMAIL = "supportinfo@anjivo.online";
 
 export default function ContactPage() {
   const [subject, setSubject] = useState("Order / Delivery");
@@ -21,21 +23,28 @@ export default function ContactPage() {
       message.trim(),
     ].join("\n");
 
-    const whatsappNumber =
-      process.env.NEXT_PUBLIC_WHATSAPP_SUPPORT_NUMBER?.replace(/\D/g, "");
+    const whatsappUrl = `https://wa.me/${WHATSAPP_NUMBER}?text=${encodeURIComponent(
+      text
+    )}`;
 
-    if (!whatsappNumber) {
-      window.alert(
-        "WhatsApp support number configured nahi hai. Please ANJIVO support team se available contact details ke through contact karein."
-      );
-      return;
-    }
+    window.open(whatsappUrl, "_blank", "noopener,noreferrer");
+  }
 
-    window.open(
-      `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(text)}`,
-      "_blank",
-      "noopener,noreferrer"
-    );
+  function handleEmailSubmit() {
+    const emailSubject = `ANJIVO Support - ${subject}`;
+
+    const emailBody = [
+      "ANJIVO Customer Support Request",
+      `Subject: ${subject}`,
+      `Order ID: ${orderId.trim() || "Not provided"}`,
+      "",
+      "Message:",
+      message.trim(),
+    ].join("\n");
+
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+      emailSubject
+    )}&body=${encodeURIComponent(emailBody)}`;
   }
 
   return (
@@ -52,8 +61,37 @@ export default function ContactPage() {
 
           <p className="mt-4 leading-7 text-gray-600">
             Order, payment, delivery, returns ya account se related problem
-            hai? Apni query ki details bhejein.
+            hai? Apni query ki details bhejein. Hamari support team aapki
+            help karegi.
           </p>
+
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            <a
+              href={`https://wa.me/${WHATSAPP_NUMBER}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rounded-xl border border-green-200 bg-green-50 p-4 transition hover:bg-green-100"
+            >
+              <p className="font-semibold text-gray-900">
+                WhatsApp Support
+              </p>
+              <p className="mt-1 text-sm text-gray-700">
+                +91 9219495647
+              </p>
+            </a>
+
+            <a
+              href={`mailto:${SUPPORT_EMAIL}`}
+              className="rounded-xl border border-blue-200 bg-blue-50 p-4 transition hover:bg-blue-100"
+            >
+              <p className="font-semibold text-gray-900">
+                Email Support
+              </p>
+              <p className="mt-1 break-all text-sm text-gray-700">
+                {SUPPORT_EMAIL}
+              </p>
+            </a>
+          </div>
         </header>
 
         <div className="mt-6 grid gap-6 md:grid-cols-2">
@@ -115,8 +153,8 @@ export default function ContactPage() {
             </h2>
 
             <p className="mt-2 text-sm leading-6 text-gray-600">
-              Submit karne par WhatsApp khulega, jahan aap message review
-              karke khud send kar sakte hain.
+              Apni query submit karne ke liye WhatsApp ya Email select karein.
+              Message bhejne se pehle aap use review kar sakte hain.
             </p>
 
             <form onSubmit={handleSubmit} className="mt-5 space-y-4">
@@ -181,6 +219,7 @@ export default function ContactPage() {
                   placeholder="Apni problem detail mein batayein..."
                   className="w-full rounded-lg border border-gray-300 px-3 py-3"
                 />
+
                 <p className="mt-1 text-right text-xs text-gray-500">
                   {message.length}/2000
                 </p>
@@ -188,18 +227,44 @@ export default function ContactPage() {
 
               <button
                 type="submit"
-                className="w-full rounded-lg bg-black px-5 py-3 font-semibold text-white hover:bg-gray-800"
+                className="w-full rounded-lg bg-green-600 px-5 py-3 font-semibold text-white transition hover:bg-green-700"
               >
                 Continue to WhatsApp
+              </button>
+
+              <button
+                type="button"
+                onClick={handleEmailSubmit}
+                disabled={message.trim().length < 10}
+                className="w-full rounded-lg border border-gray-300 bg-white px-5 py-3 font-semibold text-gray-800 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Send via Email
               </button>
             </form>
           </section>
         </div>
 
-        <p className="mt-6 text-center text-sm text-gray-500">
-          Please apna password, OTP ya payment PIN support message mein share
-          na karein.
-        </p>
+        <footer className="mt-8 rounded-xl border bg-white p-5 text-center">
+          <p className="text-sm text-gray-600">
+            ANJIVO Customer Support
+          </p>
+
+          <p className="mt-2 text-sm font-medium text-gray-900">
+            WhatsApp: +91 9219495647
+          </p>
+
+          <a
+            href={`mailto:${SUPPORT_EMAIL}`}
+            className="mt-1 inline-block text-sm text-blue-600 hover:underline"
+          >
+            {SUPPORT_EMAIL}
+          </a>
+
+          <p className="mt-4 text-xs text-gray-500">
+            Please apna password, OTP ya payment PIN support message mein
+            share na karein.
+          </p>
+        </footer>
       </div>
     </main>
   );
