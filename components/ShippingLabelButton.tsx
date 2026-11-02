@@ -80,7 +80,6 @@ function makeQrCode(text: string): string {
     bcid: "qrcode",
     text,
     scale: 4,
-    eclevel: "M",
   });
   return canvas.toDataURL("image/png");
 }
