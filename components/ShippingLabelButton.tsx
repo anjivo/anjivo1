@@ -70,7 +70,6 @@ function makeBarcode(text: string): string {
     includetext: true,
     textxalign: "center",
     textsize: 10,
-    padding: 2,
   });
   return canvas.toDataURL("image/png");
 }
@@ -81,7 +80,6 @@ function makeQrCode(text: string): string {
     bcid: "qrcode",
     text,
     scale: 4,
-    padding: 1,
     eclevel: "M",
   });
   return canvas.toDataURL("image/png");
