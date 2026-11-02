@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
+    "bwip-js": "^4.11.4",
     "cashfree-pg": "^6.0.6",
     "firebase": "^12.2.1",
     "firebase-admin": "^13.5.0",
