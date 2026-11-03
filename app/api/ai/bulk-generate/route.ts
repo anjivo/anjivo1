@@ -9,6 +9,7 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 /* =========================================================
    ANJIVO AI BULK LISTING GENERATOR
@@ -400,7 +401,7 @@ export async function POST(request: NextRequest) {
        * Verify token signature, Firebase project and expiry.
        * The frontend should send a fresh Firebase ID token.
        */
-      decodedToken = await adminAuth.verifyIdToken(idToken);
+      decodedToken = await adminAuth.verifyIdToken(idToken, true);
     } catch (error) {
       // Keep detailed error information in server logs only.
       console.error(
