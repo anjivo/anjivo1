@@ -795,7 +795,11 @@ export async function POST(request: NextRequest) {
         ? error.message
         : "";
 
-    if (message.includes("OPENAI_API_KEY is missing")) {
+    if (
+      message.includes("OPENAI_API_KEY is missing") ||
+      message.includes("GEMINI_API_KEY is missing") ||
+      message.includes("No AI provider is configured")
+    ) {
       return errorResponse(
         "AI service is not configured. Please contact the administrator.",
         503,
