@@ -144,6 +144,36 @@ function safeNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+const RETURN_WINDOW_MS = 72 * 60 * 60 * 1000;
+
+function getDateMillis(value: unknown): number | null {
+  if (!value) return null;
+
+  let date: Date | null = null;
+
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "string" || typeof value === "number") {
+    date = new Date(value);
+  } else if (
+    typeof value === "object" &&
+    value !== null &&
+    "toDate" in value &&
+    typeof (value as { toDate?: unknown }).toDate === "function"
+  ) {
+    date = (value as { toDate: () => Date }).toDate();
+  } else if (
+    typeof value === "object" &&
+    value !== null &&
+    "seconds" in value
+  ) {
+    const seconds = Number((value as { seconds?: unknown }).seconds);
+    if (Number.isFinite(seconds)) date = new Date(seconds * 1000);
+  }
+
+  return date && Number.isFinite(date.getTime()) ? date.getTime() : null;
+}
+
 function formatCurrency(value: unknown): string {
   return safeNumber(value).toLocaleString("en-IN", {
     maximumFractionDigits: 2,
@@ -535,6 +565,29 @@ export default function OrderDetailsPage() {
     orderData.fulfillmentStatus || order.status
   );
 
+  // Keep the customer-facing 72-hour window aligned with the server API.
+  // For a multi-seller order, use the latest saved seller delivery timestamp,
+  // matching the current API's order-level eligibility calculation.
+  const sellerDeliveredAtMillis = Object.values(orderData.sellerFulfillment || {})
+    .map((shipment) => getDateMillis(shipment.deliveredAt))
+    .filter((value): value is number => value !== null);
+
+  const deliveredAtMillis =
+    getDateMillis(orderData.deliveredAt) ??
+    (sellerDeliveredAtMillis.length > 0
+      ? Math.max(...sellerDeliveredAtMillis)
+      : null);
+
+  const returnDeadlineMillis =
+    deliveredAtMillis === null
+      ? null
+      : deliveredAtMillis + RETURN_WINDOW_MS;
+
+  const returnWindowOpen =
+    currentStatus === "delivered" &&
+    returnDeadlineMillis !== null &&
+    Date.now() <= returnDeadlineMillis;
+
   const trackingStatuses = trackingSteps();
   const currentStepIndex = trackingStatuses.findIndex(
     (step) => step.key === currentStatus
@@ -787,7 +840,7 @@ export default function OrderDetailsPage() {
                                 <span> · Refund: {existingReturns[item.productId].refundStatus.replace(/_/g, " ")}</span>
                               )}
                             </div>
-                          ) : (
+                          ) : returnWindowOpen ? (
                             <button
                               type="button"
                               onClick={() => {
@@ -800,9 +853,17 @@ export default function OrderDetailsPage() {
                             >
                               {returnProductId === item.productId ? "Close Return Form" : "Request Return"}
                             </button>
+                          ) : (
+                            <p className="rounded-xl bg-gray-50 p-3 text-xs leading-5 text-gray-600">
+                              {deliveredAtMillis === null
+                                ? "Return eligibility cannot be confirmed because the delivery timestamp is missing. Please contact ANJIVO support."
+                                : "The 72-hour return window has expired."}
+                            </p>
                           )}
 
-                          {returnProductId === item.productId && !existingReturns[item.productId] && (
+                          {returnProductId === item.productId &&
+                            !existingReturns[item.productId] &&
+                            returnWindowOpen && (
                             <div className="mt-3 rounded-2xl border border-gray-200 bg-gray-50 p-4">
                               <h3 className="text-sm font-black">Request return for {item.name}</h3>
                               <label className="mt-3 block text-xs font-bold text-gray-700">
@@ -855,7 +916,9 @@ export default function OrderDetailsPage() {
                                 {returnSubmitting ? "Submitting..." : "Submit Return Request"}
                               </button>
                               <p className="mt-2 text-[10px] leading-5 text-gray-500">
-                                Return request is available after delivery. Refund is not issued automatically when you submit this request.
+                                Submit your return request within 3 days (72 hours) of delivery.
+                                Submitting a request does not mean it is approved. Refund is processed
+                                only after return review and quality check.
                               </p>
                             </div>
                           )}
