@@ -1,3 +1,4 @@
+
 import { NextRequest, NextResponse } from "next/server";
 import { FieldValue, type DocumentData } from "firebase-admin/firestore";
 import { adminAuth, adminDb } from "@/lib/firebase-admin";
@@ -105,6 +106,67 @@ function toIso(value: unknown): string | null {
   return null;
 }
 
+function toMillis(value: unknown): number | null {
+  if (
+    value &&
+    typeof value === "object" &&
+    "toMillis" in value &&
+    typeof (value as { toMillis?: unknown }).toMillis === "function"
+  ) {
+    const result = (value as { toMillis: () => number }).toMillis();
+    return Number.isFinite(result) ? result : null;
+  }
+
+  if (
+    value &&
+    typeof value === "object" &&
+    "toDate" in value &&
+    typeof (value as { toDate?: unknown }).toDate === "function"
+  ) {
+    const result = (value as { toDate: () => Date }).toDate().getTime();
+    return Number.isFinite(result) ? result : null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isFinite(value.getTime()) ? value.getTime() : null;
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    const result = new Date(value).getTime();
+    return Number.isFinite(result) ? result : null;
+  }
+
+  return null;
+}
+
+const RETURN_WINDOW_MS = 3 * 24 * 60 * 60 * 1000;
+
+function deliveredAtMillis(order: DocumentData): number | null {
+  const direct = toMillis(order.deliveredAt);
+
+  if (direct !== null) return direct;
+
+  const fulfillment = order.sellerFulfillment;
+
+  if (fulfillment && typeof fulfillment === "object") {
+    const dates = Object.values(
+      fulfillment as Record<string, unknown>,
+    )
+      .map((entry) =>
+        entry && typeof entry === "object"
+          ? toMillis(
+              (entry as Record<string, unknown>).deliveredAt,
+            )
+          : null,
+      )
+      .filter((value): value is number => value !== null);
+
+    if (dates.length) return Math.max(...dates);
+  }
+
+  return null;
+}
+
 const allowedReasons = new Set([
   "damaged",
   "wrong_item",
@@ -147,6 +209,7 @@ export async function GET(request: NextRequest) {
     }
 
     const order = orderSnapshot.data() ?? {};
+
     const ownerId = String(
       order.customerId ?? order.userId ?? "",
     );
@@ -184,6 +247,13 @@ export async function GET(request: NextRequest) {
         ),
         refundStatus: String(item.refundStatus ?? "pending"),
         createdAt: toIso(item.createdAt),
+        deliveredAt: toIso(item.deliveredAt),
+        returnDeadlineAt: toIso(item.returnDeadlineAt),
+        refundAmount: Number(item.refundAmount ?? 0),
+        reason: String(item.reason ?? ""),
+        quantity: Number(item.quantity ?? 0),
+        productName: String(item.productName ?? "Product"),
+        images: Array.isArray(item.images) ? item.images : [],
       }));
 
     return NextResponse.json({
@@ -293,6 +363,27 @@ export async function POST(request: NextRequest) {
           };
         }
 
+        const deliveredAt = deliveredAtMillis(order);
+
+        if (deliveredAt === null) {
+          return {
+            ok: false as const,
+            status: 409,
+            error: "Delivery timestamp is missing for this order. Please contact ANJIVO support to verify eligibility.",
+          };
+        }
+
+        const returnDeadlineAt =
+          deliveredAt + RETURN_WINDOW_MS;
+
+        if (Date.now() > returnDeadlineAt) {
+          return {
+            ok: false as const,
+            status: 409,
+            error: "The 72-hour return window has expired. Return requests must be submitted within 72 hours of delivery.",
+          };
+        }
+
         const items: Record<string, unknown>[] =
           Array.isArray(order.items)
             ? order.items.filter(
@@ -339,20 +430,46 @@ export async function POST(request: NextRequest) {
             .where("orderId", "==", orderId),
         );
 
-        const duplicate = existingSnapshot.docs.some((doc) => {
-          const data = doc.data();
+        const activeReturnStatuses = new Set([
+          "requested",
+          "approved",
+          "pickup_pending",
+          "picked_up",
+          "received",
+          "qc_pending",
+          "qc_passed",
+          "refund_pending",
+          "refund_initiated",
+          "disputed",
+          "completed",
+          "qc_failed",
+        ]);
 
-          return (
-            String(data.customerId ?? "") === auth.uid &&
-            String(data.productId ?? "") === productId
-          );
-        });
+        const alreadyRequestedQuantity =
+          existingSnapshot.docs.reduce((total, doc) => {
+            const data = doc.data();
 
-        if (duplicate) {
+            const sameProduct =
+              String(data.customerId ?? "") === auth.uid &&
+              String(data.productId ?? "") === productId;
+
+            const status = normalizeStatus(
+              data.returnStatus ?? data.status,
+            );
+
+            return sameProduct && activeReturnStatuses.has(status)
+              ? total + Math.max(0, Number(data.quantity ?? 0))
+              : total;
+          }, 0);
+
+        if (
+          alreadyRequestedQuantity + quantity >
+          orderedQuantity
+        ) {
           return {
             ok: false as const,
             status: 409,
-            error: "A return request already exists for this product.",
+            error: `Only ${Math.max(0, orderedQuantity - alreadyRequestedQuantity)} item(s) remain eligible for return.`,
           };
         }
 
@@ -394,33 +511,47 @@ export async function POST(request: NextRequest) {
           orderId,
           productId,
           customerId: auth.uid,
+
           customerName: String(
             shippingAddress.fullName ??
               shippingAddress.name ??
               order.customerName ??
               "",
           ),
+
           customerEmail: String(order.customerEmail ?? ""),
+
           customerPhone: String(
             shippingAddress.phone ??
               order.customerPhone ??
               "",
           ),
+
           sellerId: String(item.sellerId ?? ""),
           sellerName: String(item.sellerName ?? ""),
+
           productName: String(
             item.name ?? item.productName ?? "Product",
           ),
+
           quantity,
           amount,
+
+          deliveredAt: new Date(deliveredAt),
+          returnDeadlineAt: new Date(returnDeadlineAt),
+          returnWindowDays: 3,
+
           reason,
           description,
+
           returnStatus: "requested",
           refundStatus: "pending",
           refundAmount: 0,
+
           images: [],
           qcStatus: "pending",
           dispute: false,
+
           createdAt: now,
           updatedAt: now,
         };
@@ -435,6 +566,9 @@ export async function POST(request: NextRequest) {
             productId,
             returnStatus: "requested",
             refundStatus: "pending",
+            returnDeadlineAt: new Date(
+              returnDeadlineAt,
+            ).toISOString(),
           },
         };
       },
