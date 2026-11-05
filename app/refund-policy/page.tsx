@@ -12,73 +12,93 @@ const sections = [
   {
     title: "1. Scope of This Policy",
     paragraphs: [
-      "This policy describes the general process for order cancellations, return requests, replacements and refunds for purchases made through ANJIVO.",
-      "Eligibility may depend on the product category, product condition, order status, applicable seller terms and consumer protection laws.",
+      "This policy explains how customers can request order cancellation, returns, replacements and refunds for eligible purchases made through ANJIVO.",
+      "Return requests are reviewed against the order details, product condition, reason for return and the applicable consumer protection laws. Submitting a request does not guarantee approval.",
     ],
   },
   {
     title: "2. Order Cancellation",
     paragraphs: [
-      "Customers may request cancellation through the available account or support options. Whether cancellation is possible depends on the order's fulfilment status and applicable rules.",
-      "Orders that have already been dispatched or delivered may need to be handled through the return process instead.",
+      "You may request cancellation from your account or by contacting ANJIVO support. Cancellation depends on the current order and fulfilment status.",
+      "If an order has already been dispatched, cancellation may no longer be possible. After delivery, eligible issues should be submitted through the return process.",
     ],
   },
   {
-    title: "3. Return Eligibility",
+    title: "3. Return Window — 3 Days (72 Hours)",
     paragraphs: [
-      "If a product is damaged, defective, incorrect or materially different from its description, customers should submit a return or resolution request with relevant details and supporting photographs where appropriate.",
-      "For change-of-mind returns, eligibility, timelines and product-condition requirements must follow the applicable product terms and published return rules.",
-      "Products that cannot legally or reasonably be returned for hygiene, safety, personalisation or other legitimate reasons may have specific restrictions. Any applicable restriction should be communicated clearly before purchase.",
+      "A return request must be submitted within 72 hours (3 days) from the recorded delivery date and time of the order.",
+      "The return option is available only for an order marked as delivered and while the 72-hour return window is open. Requests submitted after this period may not be accepted, except where a different period or remedy is required by applicable law or specifically communicated for the product.",
+      "If the delivery timestamp is not visible in your account or the return option is unavailable, contact ANJIVO support promptly and share your order number.",
     ],
   },
   {
-    title: "4. How to Request a Return",
+    title: "4. Eligible Return Reasons",
     paragraphs: [
-      "Open your account and locate the relevant order if return functionality is available. Select the relevant item, explain the reason and provide the requested supporting information.",
-      "If the account does not offer a return option, contact ANJIVO support with your order number and a description of the issue.",
-      "Submitting a request does not automatically mean it has been approved. We may need to review the request and confirm the next steps.",
+      "You may submit a return request for an eligible item for reasons such as damaged item, wrong item received, missing item, quality issue, size issue or item not as described. An 'Other' option may also be available so you can explain the issue.",
+      "Please select the correct item and quantity, describe the issue clearly and upload relevant photographs where requested. For a missing-item claim, explain which item or quantity was missing.",
+      "Product-specific exclusions or special conditions, if applicable, should be disclosed on the product page or before purchase. Nothing in this policy removes rights available under applicable law.",
     ],
   },
   {
-    title: "5. Product Condition and Inspection",
+    title: "5. How to Submit a Return Request",
     paragraphs: [
-      "Where inspection is reasonably required, the product may need to be made available for verification or collection.",
-      "Customers should retain the product, accessories, packaging and invoice where reasonably possible until the request is resolved. This does not remove any rights available under applicable law.",
+      "Sign in to your ANJIVO account and open My Orders. Select the delivered order, choose the item and quantity you want to return, select a reason and provide the requested description and supporting images.",
+      "Review the details before submitting. You can view the request status from the relevant order or return details where that feature is available.",
+      "If you cannot submit a request through your account, contact ANJIVO support within the 72-hour return window with your order number, item details and a description of the issue.",
     ],
   },
   {
-    title: "6. Refund Processing",
+    title: "6. Return Review, Approval and Pickup",
     paragraphs: [
-      "Approved refunds will be processed using the original payment method where feasible, or another lawful and agreed method where appropriate.",
-      "The time taken for a refund to appear may depend on the payment provider, bank and transaction method. Any confirmed processing timeline should be communicated to the customer.",
+      "After submission, ANJIVO will review the request and may ask for additional information or photographs. The request can be approved, rejected or referred for further review based on the available information and applicable rules.",
+      "If approved, the customer will be informed of the next return or pickup steps. Keep the product ready with its accessories, tags, invoice and original packaging where reasonably possible.",
+      "A return request is not considered completed merely because it has been submitted or approved. The item may need to be collected and received before inspection and refund review.",
     ],
   },
   {
-    title: "7. Cash on Delivery Orders",
+    title: "7. Product Inspection and Quality Check (QC)",
     paragraphs: [
-      "For eligible Cash on Delivery orders, the customer may be asked to provide verified bank or other permitted refund details if a refund is approved.",
-      "Customers should share refund information only through an official and secure support channel. ANJIVO will not require a customer to disclose an account password or OTP to issue a refund.",
+      "After the returned item is received, it may undergo a quality check to verify the reported issue, item identity, quantity and condition.",
+      "The QC result is considered before refund approval. If the item or claim does not meet the applicable return conditions, the request may be rejected or handled through another appropriate resolution. The customer will be informed of the outcome.",
+      "Customers should not send a product to an address that has not been confirmed by ANJIVO support or through the official return instructions.",
     ],
   },
   {
-    title: "8. Replacements and Exchanges",
+    title: "8. Refund Approval and Processing",
     paragraphs: [
-      "Where a replacement or exchange is offered, it depends on product availability and the resolution agreed for the particular order.",
-      "If a replacement is unavailable, the customer may be offered another appropriate resolution in accordance with applicable law and the circumstances of the purchase.",
+      "A refund is considered only after the return has been reviewed, the returned item has been received where required, the quality check has been completed and the refund has been approved.",
+      "For eligible online prepaid orders, ANJIVO may initiate the refund through Cashfree to the original payment method, subject to payment-provider support. The refund is not complete until the payment provider confirms the transaction.",
+      "The time for the credited amount to appear in your account depends on the payment provider, bank and original payment method. ANJIVO will share available refund or transaction information when it is received.",
+      "A return request, pickup, item receipt or internal approval alone does not mean that the refund has been credited.",
     ],
   },
   {
-    title: "9. Delivery Charges",
+    title: "9. Cash on Delivery (COD) Orders",
     paragraphs: [
-      "The treatment of delivery charges, return shipping and any other fees depends on the reason for the return, the displayed order terms and applicable consumer law.",
-      "Charges should not be withheld where doing so would violate applicable law or a binding customer entitlement.",
+      "Cashfree online payment refunds do not apply to orders paid in cash on delivery. If a COD return is eligible and approved, ANJIVO support may contact you to arrange a permitted refund method, such as a verified bank transfer.",
+      "You may be asked to provide the minimum details needed to process the approved refund through an official support channel. Never share your UPI PIN, card PIN, banking password or OTP with anyone claiming to process a refund.",
     ],
   },
   {
-    title: "10. Request Status and Disputes",
+    title: "10. Replacements, Exchanges and Delivery Charges",
     paragraphs: [
-      "Customers should retain their order number and any support correspondence. If a request is delayed or the proposed resolution is disputed, contact ANJIVO support for review.",
-      "Nothing in this policy limits statutory consumer rights or access to remedies available under applicable law.",
+      "A replacement or exchange may be offered where appropriate and subject to product availability and the resolution agreed for the order. If a replacement is unavailable, an eligible refund or another lawful resolution may be considered.",
+      "The treatment of original delivery charges, return pickup charges and other fees depends on the reason for return, the order terms and applicable consumer law. Any applicable charge or deduction will be communicated as required.",
+    ],
+  },
+  {
+    title: "11. Return Status, Rejection and Disputes",
+    paragraphs: [
+      "The return process may include these stages: request submitted, review/approval, pickup, item received, quality check, refund approval, refund initiation and provider confirmation.",
+      "If your request is rejected, delayed or the QC result is disputed, contact ANJIVO support with your order number and return request details so the matter can be reviewed.",
+      "Please retain the order number, return request information, photographs and support correspondence until the matter is resolved.",
+    ],
+  },
+  {
+    title: "12. Customer Rights and Support",
+    paragraphs: [
+      "This policy is intended to explain ANJIVO's process and does not limit any statutory rights or remedies available to customers under applicable Indian law.",
+      "For help with a return or refund, use the Contact Support page and keep your order number ready.",
     ],
   },
 ];
@@ -114,7 +134,7 @@ export default function RefundPolicyPage() {
           </p>
 
           <p className="mt-4 text-xs text-gray-400">
-            Effective date: 28 October 2026
+            Effective date: 5 November 2026
           </p>
         </header>
 
@@ -141,10 +161,10 @@ export default function RefundPolicyPage() {
           <article className="min-w-0 rounded-2xl border border-gray-200 bg-white p-5 sm:p-8">
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
               <p className="text-sm leading-6 text-amber-900">
-                Return eligibility and processing times depend on the
-                applicable product terms, order circumstances and applicable
-                law. Please check the product and order details before
-                submitting a request.
+                Important: Submit your return request within 72 hours (3 days)
+                from the recorded delivery date and time. Returns are subject
+                to review, pickup where required, product receipt and quality
+                check before refund approval.
               </p>
             </div>
 
